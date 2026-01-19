@@ -5,15 +5,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies with retry logic and proper cleanup
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     git \
     wget \
     curl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    make \
+    libc6-dev \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Increase pip resiliency for large packages
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -21,7 +26,7 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
 # Copy application code
 COPY . .

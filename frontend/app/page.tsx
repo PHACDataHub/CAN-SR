@@ -12,7 +12,7 @@ export default function HomePage() {
 
     if (isLoggedIn) {
       // If logged in, redirect to portal
-      router.push('/portal')
+      router.push('/can-sr')
     } else {
       // If not logged in, redirect to login
       router.push('/login')

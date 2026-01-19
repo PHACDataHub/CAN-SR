@@ -35,7 +35,7 @@ aiofiles>=24.1.0
 # Agent framework dependencies
 langgraph
 langchain
-langchain-core==0.3.81
+langchain-core
 langchain-google-genai
 google-genai
 google-generativeai
