@@ -1,0 +1,464 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Smooth page transitions - exclude Radix UI components */
+*:not([data-radix-select-content]):not([data-radix-select-item]):not(
+    [data-radix-select-trigger]
+  ):not([data-radix-dialog-content]):not([data-radix-dialog-overlay]):not(
+    [data-radix-tooltip-content]
+  ):not([data-radix-popover-content]) {
+  transition-property:
+    color, background-color, border-color, text-decoration-color, fill, stroke,
+    opacity, box-shadow, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
+}
+
+/* Smooth page navigation */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Enhanced backdrop blur support */
+.backdrop-blur-sm {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Custom gradient backgrounds */
+.bg-gradient-elegant {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+/* Smooth hover effects */
+.hover-lift {
+  transition:
+    transform 0.2s ease-in-out,
+    box-shadow 0.2s ease-in-out;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 25px -5px rgba(0, 0, 0, 0.1),
+    0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-inter);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0.09 0 0);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.09 0 0);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.09 0 0);
+
+  --primary: oklch(0.35 0.18 240); /* Canada blue */
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.09 0 0);
+
+  --muted: oklch(0.95 0 0);
+  --muted-foreground: oklch(0.45 0 0);
+
+  --accent: oklch(0.65 0.15 0); /* Canada red */
+  --accent-foreground: oklch(1 0 0);
+
+  --destructive: oklch(0.57 0.24 27);
+
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.35 0.18 240);
+
+  --sidebar: oklch(0.98 0 0);
+  --sidebar-foreground: oklch(0.09 0 0);
+  --sidebar-primary: oklch(0.35 0.18 240);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.95 0 0);
+  --sidebar-accent-foreground: oklch(0.09 0 0);
+  --sidebar-border: oklch(0.9 0 0);
+  --sidebar-ring: oklch(0.35 0.18 240);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans), system-ui, sans-serif;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading), system-ui, sans-serif;
+    @apply font-medium tracking-tight;
+  }
+}
+
+/* Emoji font optimization to prevent rendering issues */
+.emoji-text {
+  font-family:
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  font-variant-emoji: emoji;
+}
+
+.font-smoothing-fix {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.canada-logo {
+  @apply bg-accent font-bold text-white;
+}
+
+.footer {
+  @apply w-full bg-[#26374a] py-8 text-white;
+  margin-top: auto;
+}
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c1c1c1 #f1f1f1;
+}
+
+/* Sign out button styling */
+.sign-out-btn {
+  @apply flex items-center gap-2 rounded-md border border-gray-200 bg-white px-4 py-2 text-gray-700 transition-colors hover:border-red-200 hover:bg-gray-50 hover:text-red-600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Chat interface styling */
+.prose img {
+  @apply rounded-md border border-gray-200;
+  max-width: 100%;
+  height: auto;
+}
+
+.prose pre {
+  @apply overflow-x-auto rounded-md border border-gray-200 bg-gray-50 p-4;
+}
+
+.prose code {
+  @apply rounded bg-gray-50 px-1 py-0.5 text-sm;
+}
+
+.prose a {
+  @apply text-blue-600 underline hover:text-blue-800;
+}
+
+/* Fix blurry text in chat interface */
+.text-rendering-fix {
+  text-rendering: optimizeLegibility;
+}
+
+/* Override any pink/magenta colors in select components */
+[data-radix-select-item][data-highlighted] {
+  background-color: rgb(249 250 251) !important; /* gray-50 */
+  color: rgb(17 24 39) !important; /* gray-900 */
+}
+
+[data-radix-select-item][data-state='checked'] {
+  background-color: white !important;
+  color: rgb(17 24 39) !important; /* gray-900 */
+}
+
+[data-radix-select-item][data-state='checked'][data-highlighted] {
+  background-color: white !important;
+  color: rgb(17 24 39) !important; /* gray-900 */
+}
+
+/* Prevent pink/magenta hover states on buttons */
+button[data-slot='button']:hover:not([class*='primary']):not(
+    [class*='destructive']
+  ) {
+  background-color: rgb(243 244 246) !important; /* gray-100 */
+  color: rgb(55 65 81) !important; /* gray-700 */
+}
+
+/* Ensure X/close buttons never have pink styling */
+button:has(svg[data-lucide='x']):hover,
+[data-slot='dialog-close']:hover {
+  background-color: rgb(243 244 246) !important; /* gray-100 */
+  color: rgb(55 65 81) !important; /* gray-700 */
+}
+
+/* Government of Canada colors */
+.goc-blue {
+  color: #26374a;
+}
+
+.goc-red {
+  color: #b51700;
+}
+
+/* Fix for Safari text rendering */
+@media not all and (min-resolution: 0.001dpcm) {
+  @supports (-webkit-appearance: none) {
+    * {
+      letter-spacing: -0.01em;
+    }
+  }
+}
+
+/* Custom scrollbar for uploaded files list */
+.uploaded-files-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.uploaded-files-list::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 8px;
+}
+
+.uploaded-files-list::-webkit-scrollbar-thumb {
+  background-color: #e5e7eb; /* gray-200 */
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.uploaded-files-list::-webkit-scrollbar-thumb:hover {
+  background-color: #d1d5db; /* gray-300 */
+}
+
+/* Firefox scrollbar for uploaded files list */
+.uploaded-files-list {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.hide-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+/* Custom elegant scrollbar for system prompt */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.3);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.5);
+}
+
+.custom-scrollbar:focus::-webkit-scrollbar-thumb {
+  background: rgba(59, 130, 246, 0.4);
+}
+
+/* Simple fade-in animation for welcome message */
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-in-out;
+  animation-fill-mode: both;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fancy typing cursor animation */
+.typing-cursor {
+  display: inline-block;
+  width: 3px;
+  height: 1.1em;
+  background-color: currentColor;
+  margin-left: 3px;
+  animation: cursorBlink 1.2s infinite;
+  vertical-align: text-top;
+  transform: translateY(0.1em);
+  border-radius: 1px;
+}
+
+@keyframes cursorBlink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Landing page animations */
+.animate-bounce {
+  animation: bounce 2s infinite;
+}
+
+@keyframes bounce {
+  0%,
+  20%,
+  53%,
+  80%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  40%,
+  43% {
+    transform: translate3d(0, -8px, 0);
+  }
+  70% {
+    transform: translate3d(0, -4px, 0);
+  }
+  90% {
+    transform: translate3d(0, -2px, 0);
+  }
+}
+
+/* Line clamp utility */
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Custom scrollbar for source-hover content */
+.source-hover-content {
+  scrollbar-width: thin;
+  scrollbar-color: #c1c1c1 #f1f1f1;
+  overflow-y: auto;
+}
+
+.source-hover-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.source-hover-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 6px;
+}
+
+.source-hover-content::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 6px;
+}
+
+.source-hover-content::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* KaTeX math styling improvements */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5rem 0;
+  margin: 1rem 0 !important;
+}
+
+.katex {
+  font-size: 1.1em;
+}
+
+/* Ensure inline math doesn't break layout */
+.katex-inline {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Hide scrollbar for horizontal scrolling containers */
+.scrollbar-hide {
+  -ms-overflow-style: none; /* Internet Explorer 10+ */
+  scrollbar-width: none; /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}

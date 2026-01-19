@@ -1,0 +1,117 @@
+services:
+  # =============================================================================
+  # CAN-SR BACKEND API
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: can-sr-api
+    ports:
+      - "8000:8000"
+    environment:
+      - GROBID_SERVICE_URL=http://grobid-service:8070
+      - MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
+      - POSTGRES_URI=postgres://admin:password@cit-pgdb-service:5432/postgres-cits
+      - TORCH_CUDA_ARCH_LIST=7.5
+      - TRANSFORMERS_VERBOSITY=error
+      - TOKENIZERS_PARALLELISM=false
+      # MAXIMUM T4 GPU OPTIMIZATION FOR DOCLING
+      - EMBEDDING_BATCH_SIZE=1024
+      - BATCH_PROCESSING_MAX_CONCURRENT=20
+      - BATCH_PROCESSING_MAX_WAIT_TIME=20.0
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
+      # ENHANCED DOCLING GPU ACCELERATION
+      - DOCLING_FORCE_GPU=true
+      - DOCLING_GPU_DEVICE_ID=0
+      - DOCLING_MIXED_PRECISION=true
+      - DOCLING_GPU_THREADS=12
+      - DOCLING_CONVERSION_THREADS=8
+      - DOCLING_CPU_THREADS=20
+      - DOCLING_ENABLE_PERFORMANCE_LOGGING=true
+      
+    env_file:
+      - .env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - grobid-service
+      - cit-pgdb-service
+      - sr-mongodb-service
+    volumes:
+      - ./api:/app/api
+      - ./uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =============================================================================
+  # GROBID SERVICE - PDF Parsing for Full-Text Extraction
+  # =============================================================================
+  grobid-service:
+    image: grobid/grobid:0.8.2
+    container_name: grobid-service
+    ports:
+      - "8070:8070"
+      - "8081:8081"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8070/api/isalive"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # =============================================================================
+  # MONGODB - Systematic Review Database
+  # =============================================================================
+  sr-mongodb-service:
+    image: mongodb/mongodb-community-server
+    container_name: sr-mongodb-service
+    ports:
+      - "27017:27017"
+    volumes:
+      - type: bind
+        source: ./volumes/mongodb-sr
+        target: /data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # =============================================================================
+  # POSTGRESQL - Citations Database
+  # =============================================================================
+  cit-pgdb-service:
+    image: postgres
+    container_name: cit-pgdb-service
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=postgres-cits
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./volumes/postgres-cits:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d postgres-cits -h localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+networks:
+  default:
+    driver: bridge

@@ -1,0 +1,44 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- main
+
+pool: 
+  name: spib-sdaid-grepexp
+  demands:
+  - WorkFolder -equals /mnt/storage/sdc/customerworkfolder
+ 
+
+
+steps:
+- script: |
+    
+    # Make sure the new working dir is setup
+    sudo mkdir -p /mnt/storage/sdc/dockerwrkdir/
+
+    # Stop the docker daemon
+    sudo /etc/init.d/docker stop
+
+    # Move the daemon.json to move the data-root to the new location
+    sudo mv $(Build.SourcesDirectory)/daemon.json /etc/docker/daemon.json
+    sudo rsync -aP /var/lib/docker/ /mnt/storage/sdc/dockerwrkdir/
+
+    # Restart Docker daemon
+    sudo /etc/init.d/docker start
+
+    # Output Docker Info to confirm changes were picked up
+    docker info
+- task: Docker@2
+  inputs:
+    containerRegistry: 'grepexp_registry'
+    repository: 'grepexp'
+    command: 'buildAndPush'
+    Dockerfile: 'backend/Dockerfile'
+    tags: |
+      $(Build.BuildId)
+      latest
+  env:
+    DOCKER_TMPDIR: /mnt/storage/sdc/dockertmp
