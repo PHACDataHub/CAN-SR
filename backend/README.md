@@ -1,144 +1,380 @@
-# Government of Canada Science GPT Backend
+# CAN-SR Backend
 
-A production-ready FastAPI backend with **dual MilvusDB architecture** for the Government of Canada Science GPT application.
+FastAPI backend for the Canadian Systematic Review (CAN-SR) Platform - an AI-powered systematic review platform for the Government of Canada.
 
-## Architecture Overview
+## Overview
 
-### **Dual MilvusDB Design**
-- **Base Knowledge DB**: Shared government documents (port 19530)
-- **User Knowledge DB**: User-specific documents (port 19531)
-- **Microservices**: BGE-M3 embeddings, reranker, Milvus services
-- **GPU Acceleration**: NVIDIA T4 support with CUDA 12.8
+CAN-SR Backend provides a production-ready REST API for managing systematic reviews with AI-assisted screening and data extraction capabilities.
 
 ### **Key Features**
-- **Azure OpenAI Integration** - Multiple models (gpt-4o, gpt-4o-mini, gpt-3.5-turbo, gpt-4.1-mini)
-- **Hybrid Search** - Dense + sparse vectors with configurable weights
-- **Advanced Chunking** - Docling-based with hierarchical/hybrid methods
+- **Systematic Review Management** - Create and manage review projects
+- **Citation Processing** - Import and manage citations from multiple databases
+- **AI-Powered Screening** - Automated L1 (title/abstract) and L2 (full-text) screening
+- **Data Extraction** - AI-assisted parameter extraction from studies
+- **Database Integration** - Search across PubMed, Scopus, Europe PMC
+- **PDF Processing** - Full-text extraction using GROBID
+- **Azure OpenAI Integration** - GPT-4o, GPT-4o-mini, GPT-3.5-turbo for AI features
 - **JWT Authentication** - Secure user authentication
 - **Azure Blob Storage** - Scalable document storage
-- **Production Ready** - Docker containerized deployment
+
+## Architecture
+
+### **Tech Stack**
+- **API Framework**: FastAPI with Python
+- **Databases**: 
+  - MongoDB (port 27017) - Systematic review metadata
+  - PostgreSQL (port 5432) - Citation storage and screening data
+- **Document Processing**: GROBID (port 8070) - PDF parsing and full-text extraction
+- **AI Services**: Azure OpenAI (cloud-based, no GPU required)
+- **Storage**: Azure Blob Storage
+- **Authentication**: JWT-based auth
+
+### **Design Philosophy**
+- **CPU-Only Deployment**: No GPU requirements - all AI via Azure OpenAI
+- **Microservices**: Containerized services via Docker Compose
+- **Async Processing**: FastAPI async/await patterns for performance
+- **Production Ready**: Health checks, logging, error handling
 
 ## Quick Start
 
 ### Prerequisites
 - Docker & Docker Compose
-- NVIDIA GPU with CUDA support
 - Azure OpenAI Service account
 - Azure Blob Storage account
+- Python 3.11+ (for local development)
 
 ### 1. Configure Environment
-Create `.env` file:
+Create `.env` file in the `backend/` directory:
 ```bash
 # Azure OpenAI (Required)
 AZURE_OPENAI_API_KEY=your-azure-openai-api-key
-AZURE_OPENAI_ENDPOINT=https://your-resource.cognitiveservices.azure.com
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
 # Azure Storage (Required)
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=your-account;AccountKey=your-key;EndpointSuffix=core.windows.net
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 
-# Security (Required)
+# Databases (Docker defaults - change for production)
+MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
+POSTGRES_URI=postgres://admin:password@cit-pgdb-service:5432/postgres-cits
+
+# GROBID Service
+GROBID_SERVICE_URL=http://grobid-service:8070
+
+# Databricks (for database search - optional)
+DATABRICKS_INSTANCE=your-instance
+DATABRICKS_TOKEN=your-token
+
+# Security
 SECRET_KEY=your-very-secure-secret-key-here
 ```
 
-### 2. Deploy with Docker
+### 2. Deploy with Docker Compose
 ```bash
-# Build and start all services
+# Quick start (uses existing images)
 ./deploy.sh
 
-# Or with specific options
-./deploy.sh --build --reset_milvus
+# Build from scratch
+./deploy.sh --build
+
+# Development mode
+./deploy.sh --dev
+
+# Reset databases (WARNING: deletes all data)
+./deploy.sh --reset-db
+```
+
+### 3. Verify Deployment
+```bash
+# Check API health
+curl http://localhost:8000/health
+
+# Check GROBID service
+curl http://localhost:8070/api/isalive
+
+# Check service status
+docker compose ps
 ```
 
 ## Service Endpoints
 
-- **API Server**: http://localhost:8000
+When running with Docker Compose:
+
+- **Main API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
-- **BGE-M3 Embeddings**: http://localhost:8001
-- **Reranker Service**: http://localhost:8002
-- **Base Milvus Service**: http://localhost:8003
-- **User Milvus Service**: http://localhost:8004
-
-## Test Your Setup
-
-```bash
-# Test API health
-curl http://localhost:8000/health
-
-# Test embeddings service
-curl http://localhost:8001/health
-
-# Test reranker service
-curl http://localhost:8002/health
-```
-
-## Administration Scripts
-
-```bash
-# Initialize/add base knowledge documents
-python manual_init_base.py
-```
+- **GROBID Service**: http://localhost:8070
+- **MongoDB**: localhost:27017
+- **PostgreSQL**: localhost:5432
 
 ## Docker Services
 
 The system includes these containerized services:
 
-**Core Services:**
-- **API Container** (8000) - Main FastAPI application
-- **BGE-M3 Service** (8001) - GPU-accelerated embeddings
-- **Reranker Service** (8002) - GPU-accelerated reranking
+### **Core Services**
+- **can-sr-api** (port 8000) - Main FastAPI application
+- **grobid-service** (port 8070) - PDF parsing and full-text extraction
+- **sr-mongodb-service** (port 27017) - Systematic review database
+- **cit-pgdb-service** (port 5432) - Citations database
 
-**Dual MilvusDB Architecture:**
-- **Base Milvus** (19530) - Shared government knowledge
-- **User Milvus** (19531) - User-specific documents
-- **Base Milvus Service** (8003) - Base knowledge API
-- **User Milvus Service** (8004) - User knowledge API
+## API Structure
 
-**Storage:**
-- **MinIO Base** (9000/9001) - Base knowledge storage
-- **MinIO User** (9002/9003) - User knowledge storage
+```
+backend/
+├── api/
+│   ├── auth/              # Authentication & user management
+│   ├── sr/                # Systematic review CRUD operations
+│   ├── citations/         # Citation import and management
+│   ├── screen/            # L1/L2 screening AI agents
+│   ├── extract/           # Data extraction AI agents
+│   ├── database_search/   # PubMed, Scopus, Europe PMC integration
+│   ├── files/             # File upload and Azure Blob integration
+│   ├── core/              # Configuration and utilities
+│   └── router.py          # Main API router
+├── main.py                # FastAPI application entry point
+├── docker-compose.yml     # Service orchestration
+├── Dockerfile             # API container definition
+├── deploy.sh              # Deployment script
+└── requirements.txt       # Python dependencies
+```
 
-## Important Notes
+## Development
 
-1. **GPU Requirements**: NVIDIA T4 with CUDA 12.8 support
-2. **Environment Variables**: Configure `.env` file with Azure credentials
-3. **Base Knowledge**: Initialize once with `python manual_init_base.py`
-4. **Docker Deployment**: Use `./deploy.sh` for production deployment
+### Local Development (without Docker)
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Start external services via Docker
+docker compose up -d grobid-service sr-mongodb-service cit-pgdb-service
+
+# Run API locally with hot reload
+uvicorn main:app --reload --port 8000
+```
+
+### Running Tests
+```bash
+# Run tests (when test suite is implemented)
+pytest
+
+# With coverage
+pytest --cov=api
+```
+
+## Deployment Options
+
+### Using the Deploy Script
+
+The `deploy.sh` script provides several options:
+
+```bash
+# Standard deployment
+./deploy.sh
+
+# Rebuild all images
+./deploy.sh --build
+
+# Update Python dependencies
+./deploy.sh --update-deps
+
+# Reset all databases (deletes data!)
+./deploy.sh --reset-db
+
+# Development mode with auto-reload
+./deploy.sh --dev
+
+# Combination
+./deploy.sh --build --reset-db
+```
+
+### Manual Docker Compose
+
+```bash
+# Start all services
+docker compose up -d
+
+# Start specific service
+docker compose up -d api
+
+# Stop all services
+docker compose down
+
+# View logs
+docker compose logs -f api
+docker compose logs -f grobid-service
+
+# Restart service
+docker compose restart api
+```
+
+## Environment Variables Reference
+
+### Required Variables
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | `abc123...` |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com` |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-4o` |
+| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob Storage connection | `DefaultEndpointsProtocol=https;...` |
+| `SECRET_KEY` | JWT token signing key | `your-secure-secret-key` |
+
+### Optional Variables
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MONGODB_URI` | MongoDB connection string | `mongodb://sr-mongodb-service:27017/mongodb-sr` |
+| `POSTGRES_URI` | PostgreSQL connection string | `postgres://admin:password@cit-pgdb-service:5432/postgres-cits` |
+| `GROBID_SERVICE_URL` | GROBID service URL | `http://grobid-service:8070` |
+| `DATABRICKS_INSTANCE` | Databricks workspace URL | - |
+| `DATABRICKS_TOKEN` | Databricks access token | - |
+
+## AI Features
+
+### Azure OpenAI Models
+CAN-SR uses Azure OpenAI for all AI capabilities:
+
+- **GPT-4o**: High-quality screening and extraction
+- **GPT-4o-mini**: Fast, cost-effective screening
+- **GPT-3.5-turbo**: Quick processing for simple tasks
+
+### AI Agents
+- **L1 Screening Agent**: Title/abstract screening
+- **L2 Screening Agent**: Full-text screening
+- **Extraction Agent**: Parameter extraction from studies
+- **Database Search Agent**: Query optimization for scientific databases
 
 ## Troubleshooting
 
-**Common Issues:**
-- **GPU not detected**: Ensure NVIDIA Docker runtime is installed
-- **Azure connection**: Verify your `.env` file has correct credentials
-- **Port conflicts**: Check if ports 8000-8004, 19530-19531 are available
-- **Memory issues**: Ensure sufficient GPU memory for BGE-M3 and reranker
+### Common Issues
 
-**Deployment Commands:**
+#### **Services won't start**
 ```bash
-# Full rebuild with reset
-./deploy.sh --build --reset_milvus
+# Check Docker is running
+docker info
 
-# Development mode
-./deploy.sh --dev
+# Check for port conflicts
+sudo lsof -i :8000  # API port
+sudo lsof -i :8070  # GROBID port
+sudo lsof -i :27017 # MongoDB port
+sudo lsof -i :5432  # PostgreSQL port
 
-# Update dependencies
-./deploy.sh --update_deps
-
-# CPU-only mode (no GPU)
-./deploy.sh --no_gpu
+# View service logs
+docker compose logs -f
 ```
 
-**Get Help:**
+#### **Azure connection errors**
 ```bash
-# Check all service health
+# Verify .env file exists and has correct values
+cat .env | grep AZURE
+
+# Test Azure OpenAI connection
+curl -X POST "${AZURE_OPENAI_ENDPOINT}/openai/deployments/${AZURE_OPENAI_DEPLOYMENT_NAME}/chat/completions?api-version=2024-02-15-preview" \
+  -H "api-key: ${AZURE_OPENAI_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"test"}],"max_tokens":10}'
+```
+
+#### **Database connection issues**
+```bash
+# Check MongoDB is running
+docker compose logs sr-mongodb-service
+
+# Check PostgreSQL is running
+docker compose logs cit-pgdb-service
+
+# Reset databases (WARNING: deletes all data)
+./deploy.sh --reset-db
+```
+
+#### **GROBID service issues**
+```bash
+# Check GROBID health
+curl http://localhost:8070/api/isalive
+
+# Restart GROBID
+docker compose restart grobid-service
+
+# View GROBID logs
+docker compose logs -f grobid-service
+```
+
+### Useful Commands
+
+```bash
+# View all container logs
+docker compose logs -f
+
+# Check service health
+docker compose ps
+
+# Restart all services
+docker compose restart
+
+# Rebuild and restart a specific service
+docker compose up -d --build api
+
+# Clean everything (including volumes)
+docker compose down -v
+sudo rm -rf volumes/
+
+# Monitor resource usage
+docker stats
+```
+
+### Health Checks
+
+```bash
+# API health
 curl http://localhost:8000/health
-curl http://localhost:8001/health
-curl http://localhost:8002/health
 
-# View logs
-docker-compose logs -f api
-docker-compose logs -f bgem3-service
-docker-compose logs -f reranker-service
-docker-compose logs -f grobid-service
+# GROBID health
+curl http://localhost:8070/api/isalive
+
+# MongoDB connection
+mongosh mongodb://localhost:27017/mongodb-sr
+
+# PostgreSQL connection
+psql postgres://admin:password@localhost:5432/postgres-cits
 ```
+
+## Production Deployment
+
+For production deployment on Azure VM with HTTPS:
+1. See the main `DEPLOY.md` in the repository root
+2. Use the deployment scripts in `../deployment/`
+3. Configure Nginx reverse proxy (see `../deployment/can-sr.conf`)
+
+### Update Scripts
+```bash
+# Update backend in production
+cd ../deployment
+./update-backend.sh
+
+# Update all services
+./update-all.sh
+```
+
+## API Documentation
+
+When the API is running, interactive documentation is available at:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## Contributing
+
+1. Follow the project structure in `api/`
+2. Add new routes to `api/router.py`
+3. Use async/await patterns for database and external API calls
+4. Add proper error handling and logging
+5. Update this README when adding new services or features
+
+## Support
+
+For deployment help and troubleshooting:
+- Review `../DEPLOY.md` for production deployment
+- Check API documentation at `/docs` endpoint
+- Review logs with `docker compose logs -f`
+- See `../AGENTS_ROADMAP.md` for planned AI features
+
+## License
+
+See LICENSE file in repository root for details.

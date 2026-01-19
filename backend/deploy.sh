@@ -1,46 +1,10 @@
 #!/bin/bash
 
-# Government of Canada Science GPT - Production Deployment Script
-# Deploys the system with dual MilvusDB architecture for optimal performance and scalability
+# CAN-SR - Production Deployment Script
+# Deploys the systematic review platform with essential services
+# Note: CAN-SR uses Azure OpenAI for AI features (no local GPU required)
 
 set -e
-
-# Environment Setup Function
-setup_environment() {
-    echo -e "${BLUE}🔧 Setting up environment for NVIDIA T4 GPU...${NC}"
-
-    # Set environment variables for current session
-    export TORCH_CUDA_ARCH_LIST="7.5"
-    export TRANSFORMERS_VERBOSITY=error
-    export TOKENIZERS_PARALLELISM=false
-
-    # Add to conda environment if sciencegpt exists
-    if command -v conda >/dev/null 2>&1 && conda env list | grep -q "sciencegpt"; then
-        echo -e "${BLUE}📦 Configuring conda environment 'sciencegpt'...${NC}"
-        conda env config vars set TORCH_CUDA_ARCH_LIST="7.5" -n sciencegpt 2>/dev/null || true
-        conda env config vars set TRANSFORMERS_VERBOSITY=error -n sciencegpt 2>/dev/null || true
-        conda env config vars set TOKENIZERS_PARALLELISM=false -n sciencegpt 2>/dev/null || true
-        echo -e "${GREEN}✅ Conda environment configured${NC}"
-    fi
-
-    # Add to shell profile if not already present
-    if [ ! -f ~/.bashrc ] || ! grep -q "TORCH_CUDA_ARCH_LIST" ~/.bashrc; then
-        echo -e "${BLUE}🔧 Adding permanent environment variables to ~/.bashrc...${NC}"
-        echo "" >> ~/.bashrc
-        echo "# NVIDIA T4 GPU optimization for Government Science GPT" >> ~/.bashrc
-        echo 'export TORCH_CUDA_ARCH_LIST="7.5"' >> ~/.bashrc
-        echo 'export TRANSFORMERS_VERBOSITY=error' >> ~/.bashrc
-        echo 'export TOKENIZERS_PARALLELISM=false' >> ~/.bashrc
-        echo -e "${GREEN}✅ Environment variables added to ~/.bashrc${NC}"
-    fi
-
-    echo -e "${GREEN}✅ Environment setup complete${NC}"
-}
-
-# Set CUDA architecture for NVIDIA T4 GPU (compute capability 7.5)
-export TORCH_CUDA_ARCH_LIST="7.5"
-export TRANSFORMERS_VERBOSITY=error
-export TOKENIZERS_PARALLELISM=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -52,10 +16,8 @@ NC='\033[0m' # No Color
 # Default values
 BUILD=false
 UPDATE_DEPS=false
-RESET_MILVUS=false
-GPU=true
+RESET_DB=false
 DEV=false
-SETUP_ENV=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -68,41 +30,31 @@ while [[ $# -gt 0 ]]; do
             UPDATE_DEPS=true
             shift
             ;;
-        --reset-milvus)
-            RESET_MILVUS=true
-            shift
-            ;;
-        --no-gpu)
-            GPU=false
+        --reset-db)
+            RESET_DB=true
             shift
             ;;
         --dev)
             DEV=true
             shift
             ;;
-        --setup-env)
-            SETUP_ENV=true
-            shift
-            ;;
         -h|--help)
-            echo "Government of Canada Science GPT - Production Deployment"
+            echo "CAN-SR - Production Deployment"
             echo ""
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --build         Rebuild Docker images"
             echo "  --update-deps   Update Python dependencies"
-            echo "  --reset-milvus  Reset Milvus databases (WARNING: deletes all data)"
-            echo "  --no-gpu        Use CPU-only mode"
+            echo "  --reset-db      Reset databases (WARNING: deletes all data)"
             echo "  --dev           Development mode with hot reload"
-            echo "  --setup-env     Setup permanent environment variables for T4 GPU"
             echo "  -h, --help      Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0                    # Start with existing images"
             echo "  $0 --build           # Rebuild and start"
-            echo "  $0 --reset-milvus    # Reset databases and start fresh"
-            echo "  $0 --no-gpu          # Use CPU-only mode"
+            echo "  $0 --reset-db        # Reset databases and start fresh"
+            echo "  $0 --dev             # Development mode"
             exit 0
             ;;
         *)
@@ -113,20 +65,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo -e "${BLUE}🏛️  Government of Canada Science GPT - Dual MilvusDB Architecture${NC}"
-echo -e "${BLUE}================================================================${NC}"
-
-# Setup environment if requested
-if [ "$SETUP_ENV" = true ]; then
-    setup_environment
-    echo ""
-    echo -e "${GREEN}🎯 Environment setup complete!${NC}"
-    echo -e "${YELLOW}📝 To activate immediately:${NC}"
-    echo -e "   source ~/.bashrc"
-    echo -e "   conda deactivate && conda activate sciencegpt"
-    echo ""
-    exit 0
-fi
+echo -e "${BLUE}🏛️  CAN-SR - Systematic Review Platform${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}💡 Uses Azure OpenAI for AI features (CPU-only)${NC}"
+echo ""
 
 # Check if Docker is running
 if ! docker info > /dev/null 2>&1; then
@@ -134,22 +76,13 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-# Check for NVIDIA Docker runtime if GPU is enabled
-if [ "$GPU" = true ]; then
-    if ! docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi > /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  GPU support not available. Falling back to CPU mode.${NC}"
-        GPU=false
-    else
-        echo -e "${GREEN}✅ GPU support detected${NC}"
-    fi
-fi
 
-# Reset Milvus databases if requested
-if [ "$RESET_MILVUS" = true ]; then
-    echo -e "${YELLOW}🗑️  Resetting Milvus databases...${NC}"
+# Reset databases if requested
+if [ "$RESET_DB" = true ]; then
+    echo -e "${YELLOW}🗑️  Resetting databases...${NC}"
     docker compose down -v
-    sudo rm -rf volumes/milvus-base volumes/milvus-user volumes/etcd-base volumes/etcd-user volumes/minio-base volumes/minio-user 2>/dev/null || true
-    echo -e "${GREEN}✅ Milvus databases reset${NC}"
+    sudo rm -rf volumes/mongodb-sr volumes/postgres-cits 2>/dev/null || true
+    echo -e "${GREEN}✅ Databases reset${NC}"
 fi
 
 # Build images if requested
@@ -161,61 +94,25 @@ fi
 
 # Create necessary directories
 echo -e "${BLUE}📁 Creating volume directories...${NC}"
-mkdir -p volumes/{milvus-base,milvus-user,etcd-base,etcd-user,minio-base,minio-user}
+mkdir -p volumes/{mongodb-sr,postgres-cits}
 
-# Set GPU profile
-if [ "$GPU" = true ]; then
-    export COMPOSE_PROFILES="gpu"
-    echo -e "${GREEN}🚀 Starting services with GPU acceleration...${NC}"
-else
-    export COMPOSE_PROFILES="cpu"
-    echo -e "${YELLOW}🚀 Starting services in CPU mode...${NC}"
-fi
+echo -e "${GREEN}🚀 Starting services...${NC}"
 
-# Start services in the correct order
-echo -e "${BLUE}🏗️  Starting dual MilvusDB architecture...${NC}"
+# Start services
+echo -e "${BLUE}🏗️  Starting CAN-SR services...${NC}"
 
-# Start base knowledge infrastructure
-echo -e "${BLUE}📊 Starting base knowledge database...${NC}"
-docker compose up -d milvus-base-etcd milvus-base-minio
-sleep 5
-docker compose up -d milvus-base-standalone
-sleep 10
-
-# Start user knowledge infrastructure  
-echo -e "${BLUE}👥 Starting user knowledge database...${NC}"
-docker compose up -d milvus-user-etcd milvus-user-minio
-sleep 5
-docker compose up -d milvus-user-standalone
-sleep 10
-
-# Start Milvus services
-echo -e "${BLUE}🔧 Starting Milvus services...${NC}"
-docker compose up -d milvus-base-service milvus-user-service
-sleep 5
-
-# Start Database services
-echo -e "${BLUE}🔧 Starting Database services...${NC}"
+# Start database services first
+echo -e "${BLUE}🗄️  Starting databases...${NC}"
 docker compose up -d sr-mongodb-service cit-pgdb-service
-sleep 5
+sleep 10
 
-# Start AI services
-echo -e "${BLUE}🤖 Starting AI services...${NC}"
-if [ "$GPU" = true ]; then
-    # docker build --no-cache grobid-service
-    docker compose up -d bgem3-service reranker-service grobid-service
-else
-    echo -e "${YELLOW}⚠️  CPU-only mode not implemented. Using GPU services.${NC}"
-    docker compose up -d bgem3-service reranker-service grobid-service
-fi
+# Start GROBID service
+echo -e "${BLUE}📄 Starting GROBID (PDF parsing)...${NC}"
+docker compose up -d grobid-service
 sleep 10
 
 # Start main API
 echo -e "${BLUE}🌐 Starting main API...${NC}"
-# if [ "$BUILD" = true ]; then
-#     docker compose build --no-cache api
-# fi
-
 if [ "$DEV" = true ]; then
     docker compose up -d api
 else
@@ -223,12 +120,12 @@ else
 fi
 
 # Wait for services to be healthy
-echo -e "${BLUE}🏥 Checking service health...${NC}"
+echo -e "${BLUE}� Checking service health...${NC}"
 sleep 15
 
 # Check service status
 echo -e "${BLUE}📊 Service Status:${NC}"
-services=("milvus-base-standalone" "milvus-user-standalone" "milvus-base-service" "milvus-user-service" "bgem3-service" "reranker-service" "grobid-service" "sr-mongodb-service" "cit-pgdb-service" "government-sciencegpt-api")
+services=("can-sr-api" "grobid-service" "sr-mongodb-service" "cit-pgdb-service")
 
 for service in "${services[@]}"; do
     if docker ps --format "table {{.Names}}" | grep -q "$service"; then
@@ -239,32 +136,32 @@ for service in "${services[@]}"; do
 done
 
 echo ""
-echo -e "${GREEN}🎉 Deployment complete!${NC}"
+echo -e "${GREEN}� Deployment complete!${NC}"
 echo ""
-echo -e "${BLUE}📋 Service URLs:${NC}"
+echo -e "${BLUE}� Service URLs:${NC}"
 echo -e "  🌐 Main API:              http://localhost:8000"
-echo -e "  🧠 BGE-M3 Embeddings:    http://localhost:8001"
-echo -e "  🔄 Reranker:              http://localhost:8002"
-echo -e "  📊 Base Milvus Service:   http://localhost:8003"
-echo -e "  👥 User Milvus Service:   http://localhost:8004"
-echo -e "  🗄️  Base Milvus DB:        http://localhost:19530"
-echo -e "  🗄️  User Milvus DB:        http://localhost:19531"
-echo -e "  📁 Base MinIO:            http://localhost:9000"
-echo -e "  📁 User MinIO:            http://localhost:9002"
+echo -e "  📚 API Documentation:     http://localhost:8000/docs"
+echo -e "  🏥 Health Check:          http://localhost:8000/health"
+echo -e "  📄 GROBID Service:        http://localhost:8070"
+echo -e "  🗄️  MongoDB:               localhost:27017"
+echo -e "  🗄️  PostgreSQL:            localhost:5432"
 echo ""
-echo -e "${BLUE}🏛️  Architecture Benefits:${NC}"
-echo -e "  ✅ Improved scalability and concurrency"
-echo -e "  ✅ Better isolation between base and user knowledge"
-echo -e "  ✅ Independent scaling of knowledge bases"
-echo -e "  ✅ Enhanced security and fault tolerance"
+echo -e "${BLUE}🔬 CAN-SR Features:${NC}"
+echo -e "  ✅ Systematic review management"
+echo -e "  ✅ AI-powered screening (L1 & L2)"
+echo -e "  ✅ Automated data extraction"
+echo -e "  ✅ Database search integration"
+echo -e "  ✅ Citation management"
 echo ""
-echo -e "${YELLOW}📝 Next Steps:${NC}"
+echo -e "${YELLOW}� Next Steps:${NC}"
 echo -e "  1. Test the API: curl http://localhost:8000/health"
-echo -e "  2. Upload documents via the frontend"
-echo -e "  3. Monitor logs: docker compose logs -f api"
+echo -e "  2. Access API docs: http://localhost:8000/docs"
+echo -e "  3. Start the frontend (see README.md)"
+echo -e "  4. Monitor logs: docker compose logs -f api"
 echo ""
 
 if [ "$DEV" = false ]; then
-    echo -e "${BLUE}🔍 To view logs: docker compose logs -f${NC}"
+    echo -e "${BLUE}� To view logs: docker compose logs -f${NC}"
     echo -e "${BLUE}🛑 To stop: docker compose down${NC}"
+    echo -e "${BLUE}� To restart: docker compose restart${NC}"
 fi

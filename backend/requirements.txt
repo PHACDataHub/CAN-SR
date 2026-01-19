@@ -29,10 +29,6 @@ langchain-text-splitters
 beautifulsoup4
 grobid-client-python
 
-# Vector database
-pymilvus==2.5.11
-pymilvus.model==0.3.2
-
 # Additional utilities
 aiofiles>=24.1.0
 
@@ -45,4 +41,3 @@ google-genai
 google-generativeai
 wikipedia-api>=0.8.1
 wikipedia==1.4.0
-
