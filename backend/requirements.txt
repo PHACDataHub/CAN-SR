@@ -1,18 +1,17 @@
-dill>=0.4.0
+# Core FastAPI dependencies
 fastapi>=0.104.1
 uvicorn>=0.23.2
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
+email-validator>=2.0.0
 python-multipart==0.0.18
+python-dotenv>=1.0.1
+httpx
+
+# Security
 python-jose[cryptography]>=3.4.0
 passlib==1.7.4
-httpx
-email-validator==2.0.0
-python-dotenv>=1.0.1
 bcrypt==4.0.1
-
-# Development tools
-black>=23.0.0
 
 # Azure Services
 azure-storage-blob==12.25.1
@@ -23,21 +22,17 @@ openai
 motor
 psycopg2-binary
 
-# Document processing
-docling
-langchain-text-splitters
+# Data processing
+pandas
 beautifulsoup4
+
+# Document processing
 grobid-client-python
 
-# Additional utilities
-aiofiles>=24.1.0
+# Network
+requests
 
 # Agent framework dependencies
-langgraph
 langchain
 langchain-core
 langchain-google-genai
-google-genai
-google-generativeai
-wikipedia-api>=0.8.1
-wikipedia==1.4.0

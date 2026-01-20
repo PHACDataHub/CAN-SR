@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 
 from .auth.router import router as auth_router
-from .files.router import router as files_router
 from .agents.router import agents_router
 from .sr.router import router as sr_router
 from .citations.router import router as citation_router
@@ -13,9 +12,6 @@ api_router = APIRouter()
 
 # Authentication API
 api_router.include_router(auth_router, prefix="/auth", tags=["Authentication"])
-
-# File management API
-api_router.include_router(files_router, prefix="/files", tags=["Files"])
 
 # Agents API (for future CAN-SR agent implementations)
 api_router.include_router(agents_router, prefix="/agents", tags=["AI Agents"])
