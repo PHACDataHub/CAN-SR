@@ -1,3 +1,3 @@
 """
-Agents API module for Science-GPT
+Agents API module for CAN-SR
 """

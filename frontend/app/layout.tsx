@@ -10,8 +10,8 @@ const inter = Inter({
 })
 
 export const metadata = {
-  title: 'Science-GPT',
-  description: 'An AI assistant for Health Canada',
+  title: 'CAN-SR',
+  description: 'An AI assistant for Systematic Reviews',
 }
 
 export default function RootLayout({

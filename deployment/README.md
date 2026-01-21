@@ -1,6 +1,6 @@
 # 🚀 Deployment Directory
 
-This directory contains all deployment-related files and scripts for Science-GPT-v2.
+This directory contains all deployment-related files and scripts for CAN-SR.
 
 ## 📁 Directory Contents
 
