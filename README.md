@@ -70,6 +70,70 @@ npm run dev
 - **Parameter Extraction**: Automatically extract study parameters from full-text articles
 - **Human Validation**: All AI decisions can be reviewed and validated by researchers
 
+## CAN-SR Functionality Overview
+
+### Purpose and Value Proposition
+
+CAN-SR is designed to accelerate and standardize the systematic review process for Government of Canada research teams and policy analysts. By integrating AI-powered automation with human oversight, the platform reduces the time required to conduct systematic reviews from months to weeks, while maintaining scientific rigor and transparency.
+
+**Key Benefits:**
+- **Efficiency**: Reduce manual screening time by up to 70% through AI-assisted citation screening
+- **Consistency**: Apply standardized inclusion/exclusion criteria across large citation databases
+- **Transparency**: Maintain full audit trails of all screening decisions and AI recommendations
+- **Quality**: Ensure human validation of all AI-generated decisions before finalization
+- **Scalability**: Handle systematic reviews with thousands of citations efficiently
+
+### Detailed Functionality
+
+#### 1. Systematic Review Management
+- **Multi-Project Support**: Create and manage multiple systematic review projects simultaneously
+- **Team Collaboration**: Support for multiple reviewers working on the same project
+- **Configuration Control**: Define custom inclusion/exclusion criteria specific to each review
+- **Progress Tracking**: Real-time visibility into screening progress and completion status
+
+#### 2. Citation Management
+- **Database Integration**: Direct import from major scientific databases (PubMed, Scopus, Europe PMC)
+- **Bulk Upload**: Support for importing thousands of citations from CSV formats
+- **Deduplication**: Automatic identification and handling of duplicate citations
+
+#### 3. AI-Assisted Screening Workflow
+- **Level 1 (Title/Abstract) Screening**: 
+  - AI analyzes citations based on configured criteria
+  - Provides inclusion/exclusion recommendations with reasoning
+  - Flags uncertain cases for human review
+  - Learns from reviewer feedback to improve accuracy
+  
+- **Level 2 (Full-Text) Screening**:
+  - Automated PDF processing and text extraction via GROBID + Document Intelligence (soon)
+  - Deep analysis of full-text articles against detailed criteria
+  - Identification of relevant evidence against detailed criteria
+
+#### 4. Data Extraction
+- **Automated Parameter Extraction**: AI extracts key data points from included studies:
+  - Deep analysis of full-text articles against list of desired parameters for extraction
+  - Identification of relevant evidence against detailed criteria
+  - Agentic workflow to complete extractions and needed analysis 
+  
+- **Customizable Templates**: Define custom extraction templates for specific review types
+- **Validation Workflow**: All extracted data is presented to reviewers for validation and correction
+- **Export Capabilities**: Export extracted data to CSV, Excel, or JSON for further analysis
+
+#### 5. Quality Assurance
+- **Human-in-the-Loop**: All AI recommendations require human approval or rejection
+- **Audit Logs**: Complete history of all actions, decisions, and modifications (soon)
+
+#### 6. Compliance and Governance
+- **Data Sovereignty**: All data stored within Government of Canada infrastructure accessible through VPN (HAIL - Azure Canada regions)
+- **Access Control**: Role-based authentication and authorization system using GoC authentication (Soon)
+- **Reproducibility**: Complete documentation of AI models, parameters, and decision logic used
+
+### Limitations and Considerations
+
+- **AI as Assistance, Not Replacement**: AI provides recommendations but does not replace expert judgment
+- **Quality Dependency**: Output quality depends on the clarity of inclusion/exclusion criteria
+- **Manual Validation Required**: All AI decisions must be validated by qualified researchers
+- **Language Support**: Currently optimized for English-language publications
+
 ## Updating Deployment
 
 After making code changes to your live deployment:
