@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     DESCRIPTION: str = os.getenv(
         "DESCRIPTION", "AI-powered systematic review platform for Government of Canada"
     )
+    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED")
 
     # CORS
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")

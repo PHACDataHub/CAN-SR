@@ -45,7 +45,7 @@ cors_origins = (
     if isinstance(settings.CORS_ORIGINS, str)
     else [settings.CORS_ORIGINS]
 )
-app.add_middleware(SessionMiddleware, secret_key="some-random-string", same_site="lax", https_only=False)
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY, same_site="lax", https_only=settings.IS_DEPLOYED)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
