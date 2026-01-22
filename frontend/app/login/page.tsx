@@ -153,14 +153,25 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+            <div className='flex gap-3'>
+              <Button
+                type="submit"
+                className="flex-1 w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
+                disabled={isLoading}
+              >
+                {isLoading ? 'Signing in...' : 'Sign in'}
+              </Button>
 
-            <Button
-              type="submit"
-              className="w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
-              disabled={isLoading}
-            >
-              {isLoading ? 'Signing in...' : 'Sign in'}
-            </Button>
+              <Button
+                className="flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
+                onClick={() => { window.location.href = 'http://localhost:8000/api/auth/microsoft-sso' }}
+              >
+                <div className='flex items-center gap-1'>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><title>MS-SymbolLockup</title><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
+                  <p>Sign in with Microsoft</p>
+                </div>
+              </Button>
+            </div>
           </form>
 
           <div className="mt-8 text-center">

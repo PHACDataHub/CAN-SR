@@ -3,6 +3,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from starlette.middleware.sessions import SessionMiddleware
 
 # Load environment variables from .env file
 env_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -44,6 +45,7 @@ cors_origins = (
     if isinstance(settings.CORS_ORIGINS, str)
     else [settings.CORS_ORIGINS]
 )
+app.add_middleware(SessionMiddleware, secret_key="some-random-string", same_site="lax", https_only=False)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
