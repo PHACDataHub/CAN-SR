@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
+import { API_ENDPOINTS } from '@/lib/config'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -164,7 +165,7 @@ export default function LoginPage() {
 
               <Button
                 className="flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
-                onClick={() => { window.location.href = 'http://localhost:8000/api/auth/microsoft-sso' }}
+                onClick={() => { window.location.href = API_ENDPOINTS.AUTH.MICROSOFT_SSO}}
               >
                 <div className='flex items-center gap-1'>
                   <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><title>MS-SymbolLockup</title><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
