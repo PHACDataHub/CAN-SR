@@ -137,6 +137,7 @@ class Settings(BaseSettings):
     # OAuth
     OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID")
     OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET")
+    REDIRECT_URI: str = os.getenv("REDIRECT_URI")
 
     class Config:
         case_sensitive = True
