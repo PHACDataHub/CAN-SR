@@ -11,11 +11,12 @@ Routers should call load_sr_and_check(...) to avoid duplicating this logic.
 """
 from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 
 async def load_sr_and_check(
     sr_id: str,
     current_user: Dict[str, Any],
-    ensure_db_available,
+    db_conn_str: str,
     srdb_service,
     require_screening: bool = True,
     require_visible: bool = True,
@@ -25,8 +26,8 @@ async def load_sr_and_check(
 
     Args:
       sr_id: SR id string
-      current_user: current user dict (must contain "id")
-      ensure_db_available: callable to validate Mongo availability (srdb_service.ensure_db_available)
+      current_user: current user dict (must contain "id" and "email")
+      db_conn_str: PostgreSQL connection string
       srdb_service: SR DB service instance (must implement get_systematic_review and user_has_sr_permission)
       require_screening: if True, also ensure the SR has a configured screening_db and return its connection string
       require_visible: if True, require the SR 'visible' flag to be True; set False for endpoints like hard-delete
@@ -37,13 +38,13 @@ async def load_sr_and_check(
     Raises HTTPException with appropriate status codes on failure so routers can just propagate.
     """
     # ensure DB helper present and call it
-    if ensure_db_available is None:
+    if not db_conn_str:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Server misconfiguration: manage.router / MongoDB not available",
+            detail="Server misconfiguration: PostgreSQL connection not available",
         )
     try:
-        ensure_db_available()
+        await run_in_threadpool(srdb_service.ensure_db_available, db_conn_str)
     except HTTPException:
         raise
     except Exception as e:
@@ -51,7 +52,7 @@ async def load_sr_and_check(
 
     # fetch SR
     try:
-        sr = await srdb_service.get_systematic_review(sr_id)
+        sr = await run_in_threadpool(srdb_service.get_systematic_review, db_conn_str, sr_id, not require_visible)
     except HTTPException:
         raise
     except Exception as e:
@@ -66,7 +67,7 @@ async def load_sr_and_check(
     # permission check (user must be member or owner)
     user_id = current_user.get("email")
     try:
-        has_perm = await srdb_service.user_has_sr_permission(sr_id, user_id)
+        has_perm = await run_in_threadpool(srdb_service.user_has_sr_permission, db_conn_str, sr_id, user_id)
     except HTTPException:
         raise
     except Exception as e:

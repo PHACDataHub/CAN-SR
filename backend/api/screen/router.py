@@ -8,10 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..services.sr_db_service import srdb_service
-
-_ensure_db_available = srdb_service.ensure_db_available
-_collection = srdb_service._get_collection()
-
+from ..core.config import settings
 from ..core.security import get_current_active_user
 from ..services.azure_openai_client import azure_openai_client
 
@@ -82,8 +79,9 @@ async def classify_citation(
     The 'selected' field in the returned JSON is validated against the provided `options`.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -223,8 +221,9 @@ async def human_classify_citation(
     The column name is prefixed with 'human_' to distinguish from automated classifications.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:

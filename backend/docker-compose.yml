@@ -11,14 +11,12 @@ services:
       - "8000:8000"
     environment:
       - GROBID_SERVICE_URL=http://grobid-service:8070
-      - MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
-      - POSTGRES_URI=postgres://admin:password@cit-pgdb-service:5432/postgres-cits
+      - POSTGRES_URI=postgres://admin:password@pgdb-service:5432/postgres
     env_file:
       - .env
     depends_on:
       - grobid-service
-      - cit-pgdb-service
-      - sr-mongodb-service
+      - pgdb-service
     volumes:
       - ./api:/app/api
       - ./uploads:/app/uploads
@@ -46,42 +44,22 @@ services:
       start_period: 30s
 
   # =============================================================================
-  # MONGODB - Systematic Review Database
+  # POSTGRESQL - Database (Citations & Systematic Reviews)
   # =============================================================================
-  sr-mongodb-service:
-    image: mongodb/mongodb-community-server
-    container_name: sr-mongodb-service
-    ports:
-      - "27017:27017"
-    volumes:
-      - type: bind
-        source: ./volumes/mongodb-sr
-        target: /data/db
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
-
-  # =============================================================================
-  # POSTGRESQL - Citations Database
-  # =============================================================================
-  cit-pgdb-service:
+  pgdb-service:
     image: postgres
-    container_name: cit-pgdb-service
+    container_name: pgdb-service
     restart: unless-stopped
     environment:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=postgres-cits
+      - POSTGRES_DB=postgres
     ports:
       - "5432:5432"
     volumes:
-      - ./volumes/postgres-cits:/var/lib/postgresql
+      - ./volumes/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d postgres-cits -h localhost"]
+      test: ["CMD-SHELL", "pg_isready -U admin -d postgres -h localhost"]
       interval: 30s
       timeout: 10s
       retries: 5

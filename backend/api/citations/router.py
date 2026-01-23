@@ -34,9 +34,6 @@ import psycopg2.extras
 
 from ..services.sr_db_service import srdb_service
 
-_ensure_db_available = srdb_service.ensure_db_available
-_collection = srdb_service._get_collection()
-
 from ..core.security import get_current_active_user
 from ..core.config import settings
 from ..services.cit_db_service import cits_dp_service, snake_case, parse_dsn
@@ -91,8 +88,9 @@ async def upload_screening_csv(
     - The SR must exist and the user must be a member of the SR (or owner).
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, _ = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service, require_screening=False)
+        sr, screening, _ = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -158,7 +156,13 @@ async def upload_screening_csv(
             }
         }
 
-        await _collection.update_one({"_id": sr_id}, {"$set": screening_info})
+        # Update SR document with screening DB info using PostgreSQL
+        await run_in_threadpool(
+            srdb_service.update_screening_db_info,
+            settings.POSTGRES_URI,
+            sr_id,
+            screening_info["screening_db"]
+        )
     except Exception as e:
         # DB succeeded but saving metadata failed - surface warning but allow API to succeed with caution
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database created ({db_name}) but failed to update Systematic Review entry: {e}")
@@ -185,8 +189,9 @@ async def list_citation_ids(
 
     Returns a simple list of integers (the 'id' primary key from the citations table).
     """
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -221,8 +226,9 @@ async def get_citation_by_id(
     Returns: a JSON object representing the citation row (keys are DB column names).
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -271,8 +277,9 @@ async def build_combined_citation(
     the format "<ColumnName>: <value>  \\n" for each included column, in the order provided.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -323,8 +330,9 @@ async def upload_citation_fulltext(
       to the storage path (container/blob).
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -423,8 +431,9 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     - POSTGRES_ADMIN_DSN or DATABASE_URL must be configured in settings.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -527,7 +536,11 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
 
     # 4) remove screening_db metadata from SR document
     try:
-        await _collection.update_one({"_id": sr_id}, {"$unset": {"screening_db": ""}})
+        await run_in_threadpool(
+            srdb_service.clear_screening_db_info,
+            settings.POSTGRES_URI,
+            sr_id
+        )
     except Exception:
         # non-fatal, but report it
         pass
@@ -561,9 +574,10 @@ async def export_citations_csv(
       Content-Disposition.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
         sr, screening, db_conn = await load_sr_and_check(
-            sr_id, current_user, _ensure_db_available, srdb_service
+            sr_id, current_user, db_conn_str, srdb_service
         )
     except HTTPException:
         raise

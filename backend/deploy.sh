@@ -81,7 +81,7 @@ fi
 if [ "$RESET_DB" = true ]; then
     echo -e "${YELLOW}🗑️  Resetting databases...${NC}"
     docker compose down -v
-    sudo rm -rf volumes/mongodb-sr volumes/postgres-cits 2>/dev/null || true
+    sudo rm -rf volumes/postgres-cits 2>/dev/null || true
     echo -e "${GREEN}✅ Databases reset${NC}"
 fi
 
@@ -94,7 +94,7 @@ fi
 
 # Create necessary directories
 echo -e "${BLUE}📁 Creating volume directories...${NC}"
-mkdir -p volumes/{mongodb-sr,postgres-cits}
+mkdir -p volumes/{postgres-cits}
 
 echo -e "${GREEN}🚀 Starting services...${NC}"
 
@@ -103,20 +103,20 @@ echo -e "${BLUE}🏗️  Starting CAN-SR services...${NC}"
 
 # Start database services first
 echo -e "${BLUE}🗄️  Starting databases...${NC}"
-docker compose up -d sr-mongodb-service cit-pgdb-service
+docker compose up -d pgdb-service --remove-orphans
 sleep 10
 
 # Start GROBID service
 echo -e "${BLUE}📄 Starting GROBID (PDF parsing)...${NC}"
-docker compose up -d grobid-service
+docker compose up -d grobid-service --remove-orphans
 sleep 10
 
 # Start main API
 echo -e "${BLUE}🌐 Starting main API...${NC}"
 if [ "$DEV" = true ]; then
-    docker compose up -d api
+    docker compose up -d api --remove-orphans
 else
-    docker compose up -d api
+    docker compose up -d api --remove-orphans
 fi
 
 # Wait for services to be healthy
@@ -125,7 +125,7 @@ sleep 15
 
 # Check service status
 echo -e "${BLUE}📊 Service Status:${NC}"
-services=("can-sr-api" "grobid-service" "sr-mongodb-service" "cit-pgdb-service")
+services=("can-sr-api" "grobid-service" "pgdb-service")
 
 for service in "${services[@]}"; do
     if docker ps --format "table {{.Names}}" | grep -q "$service"; then
@@ -143,7 +143,6 @@ echo -e "  🌐 Main API:              http://localhost:8000"
 echo -e "  📚 API Documentation:     http://localhost:8000/docs"
 echo -e "  🏥 Health Check:          http://localhost:8000/health"
 echo -e "  📄 GROBID Service:        http://localhost:8070"
-echo -e "  🗄️  MongoDB:               localhost:27017"
 echo -e "  🗄️  PostgreSQL:            localhost:5432"
 echo ""
 echo -e "${BLUE}🔬 CAN-SR Features:${NC}"
