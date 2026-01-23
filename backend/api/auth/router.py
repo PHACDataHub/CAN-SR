@@ -116,7 +116,11 @@ async def microsoft_authorize(request: StarletteRequest):
                 f"?access_token={access_token}&token_type=Bearer"
         )
     except Exception:
-        raise {"error": "error during Microsoft OAuth callback"}
+        # Fallback for any unexpected errors during the OAuth callback
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error during Microsoft OAuth callback",
+        )
 
 @router.post("/register", response_model=UserRead)
 async def register_user(register_data: RegisterRequest) -> Any:
