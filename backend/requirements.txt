@@ -36,3 +36,6 @@ requests
 langchain
 langchain-core
 langchain-google-genai
+
+# OAuth
+Authlib==1.6.6
