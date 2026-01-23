@@ -19,7 +19,6 @@ azure-identity==1.23.0
 openai
 
 # Databases
-motor
 psycopg2-binary
 
 # Data processing

@@ -119,11 +119,7 @@ class Settings(BaseSettings):
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     # Database and external system environment variables
-    MONGODB_URI: str = os.getenv("MONGODB_URI")
-    MONGODB_DB: str = os.getenv("MONGODB_DB", "mongodb-sr")
-    MONGODB_SYSTEMATIC_REVIEW_COLLECTION: str = os.getenv("MONGODB_SR_COLLECTION", "systematic_reviews")
-
-    # Postgres admin DSN used to create screening databases
+    # Postgres DSN used for systematic reviews and screening databases
     POSTGRES_URI: str = os.getenv("POSTGRES_URI")
 
     # Databricks settings

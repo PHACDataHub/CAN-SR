@@ -11,10 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..services.sr_db_service import srdb_service
-
-_ensure_db_available = srdb_service.ensure_db_available
-_collection = srdb_service._get_collection()
-
+from ..core.config import settings
 from ..core.security import get_current_active_user
 from ..services.azure_openai_client import azure_openai_client
 
@@ -86,8 +83,9 @@ async def extract_parameter_endpoint(
     derived from the parameter name (prefixed with 'llm_param_').
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -256,8 +254,9 @@ async def human_extract_parameter(
     and does not call any LLM.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -344,8 +343,9 @@ async def extract_fulltext_from_storage(
     under column "fulltext", and return the generated fulltext_str.
     """
 
+    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, _ensure_db_available, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
         raise
     except Exception as e:

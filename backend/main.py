@@ -24,15 +24,19 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     """Startup event - initialize CAN-SR systematic review database"""
+    from fastapi.concurrency import run_in_threadpool
+    
     print("🚀 Starting CAN-SR Backend...", flush=True)
     print("📚 Initializing systematic review database...", flush=True)
-    # Ensure systematic review collection exists when Mongo is configured.
-    # srdb_service.ensure_collection_exists uses motor (async) and is safe to call here.
+    # Ensure systematic review table exists in PostgreSQL
     try:
-        await srdb_service.ensure_collection_exists()
-        print("✓ Systematic review collection initialized", flush=True)
+        if settings.POSTGRES_URI:
+            await run_in_threadpool(srdb_service.ensure_table_exists, settings.POSTGRES_URI)
+            print("✓ Systematic review table initialized", flush=True)
+        else:
+            print("⚠️ POSTGRES_URI not configured - skipping SR table initialization", flush=True)
     except Exception as e:
-        print(f"⚠️ Failed to ensure SR collection exists: {e}", flush=True)
+        print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)
 
     
