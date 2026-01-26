@@ -111,8 +111,7 @@ async def microsoft_authorize(request: StarletteRequest):
         )
 
         return RedirectResponse(
-            url=f"http://localhost:3000/sso-login"
-                f"?access_token={access_token}&token_type=Bearer"
+            url=f"{settings.SSO_LOGIN_URL}?access_token={access_token}&token_type=Bearer"
         )
     except Exception:
         # Fallback for any unexpected errors during the OAuth callback
