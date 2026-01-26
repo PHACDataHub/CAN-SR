@@ -96,7 +96,7 @@ async def authenticate_user(email: str, password: str, sso: bool = False) -> Opt
             return None
         return user
 
-    return await user_db_service.authenticate_user(email, password)
+    return await user_db_service.authenticate_user(email, password, sso=sso)
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:

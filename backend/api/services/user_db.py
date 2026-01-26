@@ -156,7 +156,7 @@ class UserDatabaseService:
             return None
 
     async def authenticate_user(
-        self, email: str, password: str
+        self, email: str, password: str, sso: bool
     ) -> Optional[Dict[str, Any]]:
         """Authenticate a user"""
         try:
@@ -164,7 +164,7 @@ class UserDatabaseService:
             if not user:
                 return None
 
-            if not self._verify_password(password, user["hashed_password"]):
+            if not sso and not self._verify_password(password, user["hashed_password"]):
                 return None
 
             # Update last login
