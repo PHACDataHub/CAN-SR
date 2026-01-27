@@ -23,6 +23,7 @@ export const API_ENDPOINTS = {
   // Authentication
   AUTH: {
     LOGIN: `${BACKEND_URL}/api/auth/login`,
+    MICROSOFT_SSO: `${BACKEND_URL}/api/auth/microsoft-sso`,
     REGISTER: `${BACKEND_URL}/api/auth/register`,
     LOGOUT: `${BACKEND_URL}/api/auth/logout`,
     ME: `${BACKEND_URL}/api/auth/me`,

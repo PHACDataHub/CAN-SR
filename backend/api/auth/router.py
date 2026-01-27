@@ -3,6 +3,9 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from starlette.requests import Request as StarletteRequest
+from authlib.integrations.starlette_client import OAuth
+from fastapi.responses import RedirectResponse
 
 from ..models.auth import (
     Token,
@@ -26,6 +29,15 @@ from ..services.storage import storage_service
 
 router = APIRouter()
 
+# Authlib OAuth client for Microsoft
+oauth = OAuth()
+oauth.register(
+    name="microsoft",
+    client_id=settings.OAUTH_CLIENT_ID,
+    client_secret=settings.OAUTH_CLIENT_SECRET,
+    server_metadata_url=f"https://login.microsoftonline.com/42fd9015-de4d-4223-a368-baeacab48927/v2.0/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid profile email"},
+)
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
@@ -71,6 +83,42 @@ async def login(login_data: LoginRequest) -> Any:
 
     return {"access_token": access_token, "token_type": "Bearer"}
 
+@router.get("/microsoft-sso")
+async def login_microsoft_sso(request: StarletteRequest):
+    """
+    Start Microsoft OAuth2 flow by redirecting the user to Microsoft login.
+    """
+    return await oauth.microsoft.authorize_redirect(request, settings.REDIRECT_URI)
+
+@router.get("/sso-authorize")
+async def microsoft_authorize(request: StarletteRequest):
+    """
+    OAuth2 callback handler (stub): exchanges code for tokens and returns user info.
+    """
+    try:
+        token = await oauth.microsoft.authorize_access_token(request)
+        userinfo = token.get("userinfo")
+
+        user = await authenticate_user(userinfo.get("email"), "", sso=True)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["id"]}, expires_delta=access_token_expires
+        )
+
+        return RedirectResponse(
+            url=f"{settings.SSO_LOGIN_URL}?access_token={access_token}&token_type=Bearer"
+        )
+    except Exception:
+        # Fallback for any unexpected errors during the OAuth callback
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error during Microsoft OAuth callback",
+        )
 
 @router.post("/register", response_model=UserRead)
 async def register_user(register_data: RegisterRequest) -> Any:

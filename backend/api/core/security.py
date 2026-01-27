@@ -86,7 +86,7 @@ async def update_user(user_id: str, user_in: UserUpdate) -> Optional[UserRead]:
     return UserRead.model_validate(updated_user_data)
 
 
-async def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any]]:
+async def authenticate_user(email: str, password: str, sso: bool = False) -> Optional[Dict[str, Any]]:
     """Authenticate a user"""
     if not user_db_service:
         user = await get_user_by_email(email)
@@ -96,7 +96,7 @@ async def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any
             return None
         return user
 
-    return await user_db_service.authenticate_user(email, password)
+    return await user_db_service.authenticate_user(email, password, sso=sso)
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     DESCRIPTION: str = os.getenv(
         "DESCRIPTION", "AI-powered systematic review platform for Government of Canada"
     )
+    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED")
 
     # CORS
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
@@ -128,6 +129,12 @@ class Settings(BaseSettings):
     JOB_ID_EUROPEPMC: str = os.getenv("JOB_ID_EUROPEPMC")
     JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED")
     JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS")
+
+    # OAuth
+    OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID")
+    OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET")
+    REDIRECT_URI: str = os.getenv("REDIRECT_URI")
+    SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL")
 
     class Config:
         case_sensitive = True
