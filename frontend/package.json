@@ -34,7 +34,7 @@
     "framer-motion": "^12.18.1",
     "katex": "^0.16.22",
     "lucide-react": "^0.515.0",
-    "next": "^15.2.6",
+    "next": "^16.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.5.2",
