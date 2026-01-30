@@ -32,7 +32,7 @@ ENV NODE_ENV=production
 ENV PORT=$PORT
 
 RUN addgroup --gid 1001 nodejs
-RUN adduser --uid 1001 nextjs
+RUN adduser --uid 1001 --ingroup nodejs --disabled-password --gecos "" nextjs
 RUN mkdir .next
 RUN chown nextjs:nodejs .next
 
