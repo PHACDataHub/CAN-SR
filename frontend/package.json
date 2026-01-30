@@ -13,6 +13,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^1.3.22",
     "@ai-sdk/react": "^1.2.12",
+    "@formatjs/intl-localematcher": "^0.8.0",
     "@radix-ui/react-alert-dialog": "^1.1.14",
     "@radix-ui/react-avatar": "^1.1.10",
     "@radix-ui/react-checkbox": "^1.3.2",
@@ -34,6 +35,7 @@
     "framer-motion": "^12.18.1",
     "katex": "^0.16.22",
     "lucide-react": "^0.515.0",
+    "negotiator": "^1.0.0",
     "next": "^15.2.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -50,6 +52,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@types/negotiator": "^0.6.4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
