@@ -16,7 +16,7 @@ RUN npm ci
 FROM base AS build
 
 # Public build-time environment variables
-ARG NEXT_PUBLIC_BACKEND_URL="https://grep-exp-can-sr-api-dv.phac-aspc.gc.ca"
+ARG NEXT_PUBLIC_BACKEND_URL="https://was-sdse-spib-hail-api-dt.azurewebsites.net"
 
 ENV NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
 
