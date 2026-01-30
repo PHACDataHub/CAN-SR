@@ -2,6 +2,7 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   /* config options here */
+  output: 'standalone',
   eslint: {
     // Disable ESLint during builds for production deployment
     ignoreDuringBuilds: true,
