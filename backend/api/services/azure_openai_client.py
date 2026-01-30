@@ -1,9 +1,31 @@
 """Azure OpenAI client service for chat completions"""
 
+import time
 from typing import Dict, List, Any, Optional
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
 from ..core.config import settings
+
+# Token cache TTL in seconds (9 minutes)
+TOKEN_CACHE_TTL = 9 * 60
+
+
+class CachedTokenProvider:
+    """Simple in-memory token cache wrapper"""
+
+    def __init__(self, token_provider):
+        self._token_provider = token_provider
+        self._cached_token: Optional[str] = None
+        self._token_expiry: float = 0
+
+    def __call__(self) -> str:
+        """Return cached token or fetch a new one if expired"""
+        current_time = time.time()
+        if self._cached_token is None or current_time >= self._token_expiry:
+            self._cached_token = self._token_provider()
+            self._token_expiry = current_time + TOKEN_CACHE_TTL
+        return self._cached_token
 
 
 class AzureOpenAIClient:
@@ -12,24 +34,28 @@ class AzureOpenAIClient:
     def __init__(self):
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
+        # Create token provider for Azure OpenAI using DefaultAzureCredential
+        # Wrapped with caching to avoid fetching a new token on every request
+        self._credential = DefaultAzureCredential()
+        self._token_provider = CachedTokenProvider(
+            get_bearer_token_provider(
+                self._credential, "https://cognitiveservices.azure.com/.default"
+            )
+        )
+
         self.model_configs = {
             "gpt-4o": {
-                "api_key": settings.AZURE_OPENAI_API_KEY,
                 "endpoint": settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
                 "api_version": settings.AZURE_OPENAI_API_VERSION,
             },
             "gpt-4o-mini": {
-                "api_key": settings.AZURE_OPENAI_GPT4O_MINI_API_KEY
-                or settings.AZURE_OPENAI_API_KEY,
                 "endpoint": settings.AZURE_OPENAI_GPT4O_MINI_ENDPOINT
                 or settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_GPT4O_MINI_DEPLOYMENT,
                 "api_version": settings.AZURE_OPENAI_GPT4O_MINI_API_VERSION,
             },
             "gpt-4.1-mini": {
-                "api_key": settings.AZURE_OPENAI_GPT41_MINI_API_KEY
-                or settings.AZURE_OPENAI_API_KEY,
                 "endpoint": settings.AZURE_OPENAI_GPT41_MINI_ENDPOINT
                 or settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_GPT41_MINI_DEPLOYMENT,
@@ -49,13 +75,13 @@ class AzureOpenAIClient:
         """Get official Azure OpenAI client instance"""
         if model not in self._official_clients:
             config = self._get_model_config(model)
-            if not config.get("api_key"):
+            if not config.get("endpoint"):
                 raise ValueError(
-                    f"Azure OpenAI API key not configured for model {model}"
+                    f"Azure OpenAI endpoint not configured for model {model}"
                 )
 
             self._official_clients[model] = AzureOpenAI(
-                api_key=config["api_key"],
+                azure_ad_token_provider=self._token_provider,
                 azure_endpoint=config["endpoint"],
                 api_version=config["api_version"],
             )
@@ -303,7 +329,7 @@ Guidelines:
         return [
             model
             for model, config in self.model_configs.items()
-            if config.get("api_key") and config.get("endpoint")
+            if config.get("endpoint")
         ]
 
     def is_configured(self) -> bool:

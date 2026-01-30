@@ -13,10 +13,24 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
+from api.services.postgres_auth import pgsql_entra_auth_configured
+
+from .config import settings
+
+
+def _is_postgres_configured(db_conn_str: Optional[str] = None) -> bool:
+    """
+    Check if PostgreSQL is configured via Entra ID env vars or connection string.
+    """
+    has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
+    has_uri_config = db_conn_str or settings.POSTGRES_URI
+    return bool(has_entra_config or has_uri_config)
+
+
 async def load_sr_and_check(
     sr_id: str,
     current_user: Dict[str, Any],
-    db_conn_str: str,
+    db_conn_str: Optional[str],
     srdb_service,
     require_screening: bool = True,
     require_visible: bool = True,
@@ -27,7 +41,7 @@ async def load_sr_and_check(
     Args:
       sr_id: SR id string
       current_user: current user dict (must contain "id" and "email")
-      db_conn_str: PostgreSQL connection string
+      db_conn_str: PostgreSQL connection string (can be None if using Entra ID auth)
       srdb_service: SR DB service instance (must implement get_systematic_review and user_has_sr_permission)
       require_screening: if True, also ensure the SR has a configured screening_db and return its connection string
       require_visible: if True, require the SR 'visible' flag to be True; set False for endpoints like hard-delete
@@ -38,10 +52,10 @@ async def load_sr_and_check(
     Raises HTTPException with appropriate status codes on failure so routers can just propagate.
     """
     # ensure DB helper present and call it
-    if not db_conn_str:
+    if not _is_postgres_configured(db_conn_str):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Server misconfiguration: PostgreSQL connection not available",
+            detail="Server misconfiguration: PostgreSQL connection not available. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.",
         )
     try:
         await run_in_threadpool(srdb_service.ensure_db_available, db_conn_str)
@@ -82,7 +96,7 @@ async def load_sr_and_check(
         if not screening:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
         db_conn = screening.get("connection_string")
-        if not db_conn:
+        if not db_conn and not pgsql_entra_auth_configured():
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Screening DB connection info missing")
 
     return sr, screening, db_conn

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     # Storage settings
     STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure")
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv(
+        "AZURE_STORAGE_ACCOUNT_NAME"
+    )
     AZURE_STORAGE_CONNECTION_STRING: Optional[str] = os.getenv(
         "AZURE_STORAGE_CONNECTION_STRING"
     )
@@ -120,8 +123,14 @@ class Settings(BaseSettings):
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     # Database and external system environment variables
-    # Postgres DSN used for systematic reviews and screening databases
-    POSTGRES_URI: str = os.getenv("POSTGRES_URI")
+    # Postgres settings for Entra ID authentication
+    POSTGRES_HOST: Optional[str] = os.getenv("POSTGRES_HOST")
+    POSTGRES_DATABASE: Optional[str] = os.getenv("POSTGRES_DATABASE")
+    POSTGRES_USER: Optional[str] = os.getenv("POSTGRES_USER")  # Entra ID user (e.g., user@tenant.onmicrosoft.com)
+    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_SSL_MODE: str = os.getenv("POSTGRES_SSL_MODE", "require")
+    # Legacy: Postgres DSN used for systematic reviews and screening databases (fallback)
+    POSTGRES_URI: Optional[str] = os.getenv("POSTGRES_URI")
 
     # Databricks settings
     DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE")

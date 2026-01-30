@@ -31,6 +31,8 @@ import yaml
 import psycopg2
 import psycopg2.extras
 
+from api.services.postgres_auth import pgsql_entra_auth_configured
+
 
 from ..services.sr_db_service import srdb_service
 
@@ -40,6 +42,34 @@ from ..services.cit_db_service import cits_dp_service, snake_case, parse_dsn
 from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
+
+
+def _get_db_conn_str() -> Optional[str]:
+    """
+    Get database connection string for PostgreSQL.
+    
+    If POSTGRES_URI is set, returns it directly (local development).
+    If Entra ID env variables are configured (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER),
+    returns None to signal that connect_postgres() should use Entra ID authentication.
+    """
+    if settings.POSTGRES_URI:
+        return settings.POSTGRES_URI
+    
+    # If Entra ID config is available, return None to let connect_postgres use token auth
+    if settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER:
+        return None
+    
+    # No configuration available - return None, let downstream handle the error
+    return None
+
+
+def _is_postgres_configured() -> bool:
+    """
+    Check if PostgreSQL is configured via Entra ID env vars or connection string.
+    """
+    has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
+    has_uri_config = settings.POSTGRES_URI
+    return bool(has_entra_config or has_uri_config)
 
 
 class UploadResult(BaseModel):
@@ -88,7 +118,7 @@ async def upload_screening_csv(
     - The SR must exist and the user must be a member of the SR (or owner).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, _ = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
     except HTTPException:
@@ -96,13 +126,13 @@ async def upload_screening_csv(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
-    # Check admin DSN (use centralized settings)
-    admin_dsn = settings.POSTGRES_URI
-    if not admin_dsn:
+    # Check admin DSN (use centralized settings) - need either Entra ID config or POSTGRES_URI
+    if not _is_postgres_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Postgres admin DSN not configured. Set POSTGRES_ADMIN_DSN or DATABASE_URL in configuration/environment.",
+            detail="Postgres not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.",
         )
+    admin_dsn = _get_db_conn_str()
 
     # Read CSV content
     include_columns = None
@@ -132,20 +162,22 @@ async def upload_screening_csv(
 
     # Save DB connection metadata into SR Mongo doc
     try:
-        parsed = _parse_dsn(admin_dsn)
-        # construct a connection string for the new DB (do not alter credentials - reuse admin DSN but point to DB)
-        if "://" in admin_dsn:
-            import urllib.parse as up
+        db_conn = None
+        if not pgsql_entra_auth_configured():
+            parsed = _parse_dsn(admin_dsn)
+            # construct a connection string for the new DB (do not alter credentials - reuse admin DSN but point to DB)
+            if "://" in admin_dsn:
+                import urllib.parse as up
 
-            p = up.urlparse(admin_dsn)
-            new_path = "/" + db_name
-            new_p = p._replace(path=new_path)
-            db_conn = up.urlunparse(new_p)
-        else:
-            if "dbname=" in admin_dsn:
-                db_conn = re.sub(r"dbname=[^ ]+", f"dbname={db_name}", admin_dsn)
+                p = up.urlparse(admin_dsn)
+                new_path = "/" + db_name
+                new_p = p._replace(path=new_path)
+                db_conn = up.urlunparse(new_p)
             else:
-                db_conn = f"{admin_dsn} dbname={db_name}"
+                if "dbname=" in admin_dsn:
+                    db_conn = re.sub(r"dbname=[^ ]+", f"dbname={db_name}", admin_dsn)
+                else:
+                    db_conn = f"{admin_dsn} dbname={db_name}"
 
         screening_info = {
             "screening_db": {
@@ -159,7 +191,7 @@ async def upload_screening_csv(
         # Update SR document with screening DB info using PostgreSQL
         await run_in_threadpool(
             srdb_service.update_screening_db_info,
-            settings.POSTGRES_URI,
+            _get_db_conn_str(),
             sr_id,
             screening_info["screening_db"]
         )
@@ -189,7 +221,7 @@ async def list_citation_ids(
 
     Returns a simple list of integers (the 'id' primary key from the citations table).
     """
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -226,7 +258,7 @@ async def get_citation_by_id(
     Returns: a JSON object representing the citation row (keys are DB column names).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -277,7 +309,7 @@ async def build_combined_citation(
     the format "<ColumnName>: <value>  \\n" for each included column, in the order provided.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -330,7 +362,7 @@ async def upload_citation_fulltext(
       to the storage path (container/blob).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -431,7 +463,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     - POSTGRES_ADMIN_DSN or DATABASE_URL must be configured in settings.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -447,12 +479,13 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
         return {"status": "no_screening_db", "message": "No screening DB configured for this SR", "deleted_db": False, "deleted_files": 0}
 
     db_conn = screening.get("connection_string")
-    if not db_conn:
+    if not db_conn and not pgsql_entra_auth_configured():
         return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_db": False, "deleted_files": 0}
 
-    admin_dsn = settings.POSTGRES_ADMIN_DSN or settings.DATABASE_URL
-    if not admin_dsn:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Postgres admin DSN not configured. Set POSTGRES_ADMIN_DSN or DATABASE_URL in configuration/environment.")
+    # Check if Postgres is configured for admin operations
+    if not _is_postgres_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Postgres not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.")
+    admin_dsn = _get_db_conn_str()
 
     # 1) collect fulltext URLs from the screening DB
     try:
@@ -538,7 +571,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     try:
         await run_in_threadpool(
             srdb_service.clear_screening_db_info,
-            settings.POSTGRES_URI,
+            _get_db_conn_str(),
             sr_id
         )
     except Exception:
@@ -574,7 +607,7 @@ async def export_citations_csv(
       Content-Disposition.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(
             sr_id, current_user, db_conn_str, srdb_service

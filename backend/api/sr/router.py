@@ -29,8 +29,26 @@ from ..core.cit_utils import load_sr_and_check
 router = APIRouter()
 
 # Helper to get database connection string
-def _get_db_conn_str() -> str:
-    return settings.POSTGRES_URI
+def _get_db_conn_str() -> Optional[str]:
+    """
+    Get database connection string for PostgreSQL.
+    
+    If POSTGRES_URI is set, returns it directly (local development).
+    If Entra ID env variables are configured (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER),
+    returns None to signal that connect_postgres() should use Entra ID authentication.
+    """
+    if settings.POSTGRES_URI:
+        return settings.POSTGRES_URI
+    
+    # If Entra ID config is available, return None to let connect_postgres use token auth
+    if settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER:
+        return None
+    
+    # No configuration available
+    raise ValueError(
+        "PostgreSQL not configured. Set POSTGRES_URI for local development, "
+        "or POSTGRES_HOST, POSTGRES_DATABASE, and POSTGRES_USER for Entra ID authentication."
+    )
 
 class SystematicReviewCreate(BaseModel):
     name: str

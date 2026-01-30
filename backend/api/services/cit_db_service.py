@@ -26,14 +26,7 @@ try:
 except Exception:
     settings = None
 
-
-def _ensure_psycopg2():
-    try:
-        import psycopg2
-        import psycopg2.extras  # noqa: F401
-        return psycopg2
-    except Exception:
-        raise RuntimeError("psycopg2 is not installed on the server environment")
+from .postgres_auth import _ensure_psycopg2, connect_postgres
 
 
 # -----------------------
@@ -122,14 +115,13 @@ class CitsDPService:
     def _ensure_psycopg2(self):
         return _ensure_psycopg2()
 
-    def _connect(self, db_conn_str: str):
+    def _connect(self, db_conn_str: Optional[str] = None):
         """
-        Connect and return a psycopg2 connection. Raises RuntimeError if psycopg2 missing.
+        Connect and return a psycopg2 connection using Entra ID auth (preferred) or connection string.
+        Raises RuntimeError if psycopg2 missing.
         Caller is responsible for closing the connection.
         """
-        psycopg2 = self._ensure_psycopg2()
-        conn = psycopg2.connect(db_conn_str)
-        return conn
+        return connect_postgres(db_conn_str)
 
     # -----------------------
     # Generic column ops
@@ -284,7 +276,7 @@ class CitsDPService:
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(db_conn_str)
+            conn = connect_postgres(db_conn_str)
             try:
                 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             except Exception:
@@ -329,7 +321,7 @@ class CitsDPService:
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(db_conn_str)
+            conn = connect_postgres(db_conn_str)
             cur = conn.cursor()
             if filter_step is not None:
 
@@ -386,7 +378,7 @@ class CitsDPService:
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(db_conn_str)
+            conn = connect_postgres(db_conn_str)
             cur = conn.cursor()
             cur.execute('SELECT fulltext_url FROM "citations" WHERE fulltext_url IS NOT NULL')
             rows = cur.fetchall()
@@ -446,7 +438,7 @@ class CitsDPService:
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(db_conn_str)
+            conn = connect_postgres(db_conn_str)
             try:
                 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             except Exception:
@@ -502,7 +494,7 @@ class CitsDPService:
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(admin_dsn)
+            conn = connect_postgres(admin_dsn)
             conn.autocommit = True
             cur = conn.cursor()
             try:
@@ -551,16 +543,20 @@ class CitsDPService:
           - fulltext_md5 TEXT
           - created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
         """
-        if not admin_dsn:
+        # Check if Entra ID config is available
+        has_entra_config = settings and settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
+        
+        if not admin_dsn and not has_entra_config:
             # try falling back to settings if available
-            admin_dsn = (settings.POSTGRES_ADMIN_DSN if settings else None) or (settings.DATABASE_URL if settings else None)
-        if not admin_dsn:
-            raise RuntimeError("Postgres admin DSN not configured")
+            admin_dsn = (settings.POSTGRES_ADMIN_DSN if settings else None) or (settings.DATABASE_URL if settings else None) or (settings.POSTGRES_URI if settings else None)
+        
+        if not admin_dsn and not has_entra_config:
+            raise RuntimeError("Postgres not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.")
 
         psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = psycopg2.connect(admin_dsn)
+            conn = connect_postgres(admin_dsn)
             conn.autocommit = True
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
@@ -573,7 +569,7 @@ class CitsDPService:
 
             # connect to created DB
             db_dsn = _construct_db_dsn_from_admin(admin_dsn, db_name)
-            conn = psycopg2.connect(db_dsn)
+            conn = connect_postgres(db_dsn)
             cur = conn.cursor()
 
             # Create table
