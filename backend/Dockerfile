@@ -39,13 +39,13 @@ RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
 USER appuser
 
 COPY sshd_config /etc/ssh/
-COPY entrypoint.sh /entrypoint.sh
+# COPY entrypoint.sh /entrypoint.sh
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends dialog \
     && apt-get install -y --no-install-recommends openssh-server \
     && echo "root:Docker!" | chpasswd \
-    && chmod u+x /entrypoint.sh
+    && chmod u+x ./entrypoint.sh
 
 USER root
 
