@@ -23,4 +23,5 @@ dmypy.json
 .DS_Store
 deploy.sh
 *.sh
+!entrypoint.sh
 *.pem 
