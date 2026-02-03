@@ -9,8 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
 import { API_ENDPOINTS } from '@/lib/config'
+import { getDictionary } from '../dictionaries'
 
-export default function LoginPage() {
+export default async function LoginPage({
+  params,
+}: {
+  params: Promise<{ lang: 'en' | 'fr' }>
+}) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -68,6 +73,11 @@ export default function LoginPage() {
     }
   }
 
+  // Get language dictionary
+  const { lang } = await params;
+  const dict = await getDictionary(lang)
+  console.log(dict.login.formTitle)
+
   return (
     <div className="flex min-h-screen overflow-hidden">
       {/* Left side - Health Canada Image (reduced overlay opacity) */}
@@ -87,7 +97,7 @@ export default function LoginPage() {
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-3xl font-bold text-gray-900">
-              Access the Government of Canada AI Assistant Portal
+              { dict.login.formTitle }
             </h2>
           </div>
 
