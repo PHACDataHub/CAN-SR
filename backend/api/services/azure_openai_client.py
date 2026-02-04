@@ -13,20 +13,6 @@ class AzureOpenAIClient:
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
         self.model_configs = {
-            "gpt-4o": {
-                "api_key": settings.AZURE_OPENAI_API_KEY,
-                "endpoint": settings.AZURE_OPENAI_ENDPOINT,
-                "deployment": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-                "api_version": settings.AZURE_OPENAI_API_VERSION,
-            },
-            "gpt-4o-mini": {
-                "api_key": settings.AZURE_OPENAI_GPT4O_MINI_API_KEY
-                or settings.AZURE_OPENAI_API_KEY,
-                "endpoint": settings.AZURE_OPENAI_GPT4O_MINI_ENDPOINT
-                or settings.AZURE_OPENAI_ENDPOINT,
-                "deployment": settings.AZURE_OPENAI_GPT4O_MINI_DEPLOYMENT,
-                "api_version": settings.AZURE_OPENAI_GPT4O_MINI_API_VERSION,
-            },
             "gpt-4.1-mini": {
                 "api_key": settings.AZURE_OPENAI_GPT41_MINI_API_KEY
                 or settings.AZURE_OPENAI_API_KEY,
@@ -34,6 +20,14 @@ class AzureOpenAIClient:
                 or settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_GPT41_MINI_DEPLOYMENT,
                 "api_version": settings.AZURE_OPENAI_GPT41_MINI_API_VERSION,
+            },
+            "gpt-5-mini": {
+                "api_key": settings.AZURE_OPENAI_GPT5_MINI_API_KEY
+                or settings.AZURE_OPENAI_API_KEY,
+                "endpoint": settings.AZURE_OPENAI_GPT5_MINI_ENDPOINT
+                or settings.AZURE_OPENAI_ENDPOINT,
+                "deployment": settings.AZURE_OPENAI_GPT5_MINI_DEPLOYMENT,
+                "api_version": settings.AZURE_OPENAI_GPT5_MINI_API_VERSION,
             },
         }
 
@@ -43,7 +37,7 @@ class AzureOpenAIClient:
         """Get configuration for a specific model"""
         if model in self.model_configs:
             return self.model_configs[model]
-        return self.model_configs["gpt-4o"]
+        return self.model_configs["gpt-5-mini"]
 
     def _get_official_client(self, model: str) -> AzureOpenAI:
         """Get official Azure OpenAI client instance"""

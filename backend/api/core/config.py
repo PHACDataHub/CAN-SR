@@ -104,8 +104,22 @@ class Settings(BaseSettings):
         "AZURE_OPENAI_GPT41_MINI_API_VERSION", "2025-01-01-preview"
     )
 
+    # GPT-5-mini configuration
+    AZURE_OPENAI_GPT5_MINI_API_KEY: Optional[str] = os.getenv(
+        "AZURE_OPENAI_GPT5_MINI_API_KEY"
+    )
+    AZURE_OPENAI_GPT5_MINI_ENDPOINT: Optional[str] = os.getenv(
+        "AZURE_OPENAI_GPT5_MINI_ENDPOINT"
+    )
+    AZURE_OPENAI_GPT5_MINI_DEPLOYMENT: str = os.getenv(
+        "AZURE_OPENAI_GPT5_MINI_DEPLOYMENT", "gpt-5-mini"
+    )
+    AZURE_OPENAI_GPT5_MINI_API_VERSION: str = os.getenv(
+        "AZURE_OPENAI_GPT5_MINI_API_VERSION", "2025-08-07"
+    )
+
     # Default model to use
-    DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-4o")
+    DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-5-mini")
 
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
