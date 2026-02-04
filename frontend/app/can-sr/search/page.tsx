@@ -18,7 +18,7 @@ export default function Search() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
-  const [selectedModel, setSelectedModel] = useState('gpt-4o')
+  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const databases = ['Pubmed', 'Scopus', 'EuropePMC']
   const [selectedDatabase, setSelectedDatabase] = useState('')
   const [searchStrings, setSearchString] = useState<Record<string, string>>({})

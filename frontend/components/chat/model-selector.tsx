@@ -28,21 +28,16 @@ interface ModelSelectorProps {
 
 // Azure OpenAI model configurations with descriptions
 const MODEL_INFO: Record<string, ModelInfo> = {
-  'gpt-4o': {
-    id: 'gpt-4o',
-    name: 'GPT-4o',
-    description: 'Great for most tasks',
+  'gpt-5-mini': {
+    id: 'gpt-5-mini',
+    name: 'GPT-5 mini',
+    description: 'Newer mini model, fastest at advanced reasoning',
     recommended: true,
-  },
-  'gpt-4o-mini': {
-    id: 'gpt-4o-mini',
-    name: 'GPT-4o mini',
-    description: 'Faster for everyday tasks',
   },
   'gpt-4.1-mini': {
     id: 'gpt-4.1-mini',
     name: 'GPT-4.1 mini',
-    description: 'Latest mini model, fastest at advanced reasoning',
+    description: 'Older mini model, fastest at advanced reasoning'
   },
 }
 
@@ -51,8 +46,7 @@ export function ModelSelector({
   onModelChange,
 }: ModelSelectorProps) {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([
-    MODEL_INFO['gpt-4o'],
-    MODEL_INFO['gpt-4o-mini'],
+    MODEL_INFO['gpt-5-mini'],
     MODEL_INFO['gpt-4.1-mini'],
   ])
 
@@ -96,7 +90,7 @@ export function ModelSelector({
   useEffect(() => {
     const modelIds = availableModels.map((m) => m.id)
     if (modelIds.length > 0 && !modelIds.includes(selectedModel)) {
-      const defaultModel = modelIds.includes('gpt-4o') ? 'gpt-4o' : modelIds[0]
+      const defaultModel = modelIds.includes('gpt-5-mini') ? 'gpt-5-mini' : modelIds[0]
       onModelChange(defaultModel)
     }
   }, [availableModels, selectedModel, onModelChange])
