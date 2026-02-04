@@ -2,10 +2,11 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { useDictionary } from '../DictionaryProvider'
 
 export default function LoginPage() {
-
   const router = useRouter()
+  const dict = useDictionary()
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -31,7 +32,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen overflow-hidden">
-      Logging in...
+      {dict.common.loggingIn}
     </div>
   )
 }

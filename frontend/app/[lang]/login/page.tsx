@@ -9,19 +9,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
 import { API_ENDPOINTS } from '@/lib/config'
-import { getDictionary } from '../dictionaries'
+import { useDictionary } from '../DictionaryProvider'
 
-export default async function LoginPage({
-  params,
-}: {
-  params: Promise<{ lang: 'en' | 'fr' }>
-}) {
+export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
+  const dict = useDictionary()
 
   // Check if user is already logged in
   useEffect(() => {
@@ -73,11 +70,6 @@ export default async function LoginPage({
     }
   }
 
-  // Get language dictionary
-  const { lang } = await params;
-  const dict = await getDictionary(lang)
-  console.log(dict.login.formTitle)
-
   return (
     <div className="flex min-h-screen overflow-hidden">
       {/* Left side - Health Canada Image (reduced overlay opacity) */}
@@ -113,13 +105,13 @@ export default async function LoginPage({
                 htmlFor="email"
                 className="text-sm font-medium text-gray-700"
               >
-                Email Address
+                {dict.common.email}
               </Label>
               <Input
                 id="email"
                 type="email"
                 className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                placeholder="your.email@canada.ca"
+                placeholder={dict.login.emailPlaceholder}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -132,13 +124,13 @@ export default async function LoginPage({
                   htmlFor="password"
                   className="text-sm font-medium text-gray-700"
                 >
-                  Password
+                  {dict.common.password}
                 </Label>
                 <Link
                   href="#"
                   className="text-sm font-medium text-blue-600 transition-colors hover:text-blue-800"
                 >
-                  Forgot password?
+                  {dict.common.forgotPassword}
                 </Link>
               </div>
               <div className="relative">
@@ -146,7 +138,7 @@ export default async function LoginPage({
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 pr-10 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                  placeholder="••••••••"
+                  placeholder={dict.login.passwordPlaceholder}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -170,7 +162,7 @@ export default async function LoginPage({
                 className="flex-1 w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
                 disabled={isLoading}
               >
-                {isLoading ? 'Signing in...' : 'Sign in'}
+                {isLoading ? dict.login.signingIn : dict.common.signIn}
               </Button>
 
               <Button
@@ -180,7 +172,7 @@ export default async function LoginPage({
               >
                 <div className='flex items-center gap-1'>
                   <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><title>MS-SymbolLockup</title><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
-                  <p>Sign in with Microsoft</p>
+                  <p>{dict.common.signInWith}</p>
                 </div>
               </Button>
             </div>
@@ -188,20 +180,19 @@ export default async function LoginPage({
 
           <div className="mt-8 text-center">
             <p className="text-sm text-gray-600">
-              Don&apos;t have an account?{' '}
+              {dict.login.noAccount}{' '}
               <Link
                 href="/register"
                 className="font-medium text-blue-600 transition-colors hover:text-blue-800"
               >
-                Register here
+                {dict.login.registerHere}
               </Link>
             </p>
           </div>
 
           <div className="mt-10 text-center text-xs text-gray-500">
             <p>
-              © {new Date().getFullYear()} Government of Canada. All rights
-              reserved.
+              © {new Date().getFullYear()} {dict.common.copyright}
             </p>
           </div>
         </div>

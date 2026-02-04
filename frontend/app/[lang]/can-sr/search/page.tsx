@@ -5,6 +5,7 @@ import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
 import React, { useEffect, useState } from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '../../DictionaryProvider'
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
@@ -18,6 +19,7 @@ export default function Search() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
+  const dict = useDictionary()
   const [selectedModel, setSelectedModel] = useState('gpt-4o')
   const databases = ['Pubmed', 'Scopus', 'EuropePMC']
   const [selectedDatabase, setSelectedDatabase] = useState('')
@@ -59,7 +61,7 @@ export default function Search() {
       <GCHeader />
 
       <SRHeader
-        title="Search"
+        title={dict.search.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId)}`}
         right={
           <ModelSelector
@@ -71,10 +73,10 @@ export default function Search() {
       <main className="mx-auto max-w-4xl px-6 py-10">
         <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="text-xl font-semibold text-gray-900">
-            Select Database
+            {dict.search.selectDatabase}
           </h3>
           <p className="mt-2 text-sm text-gray-600">
-            Select a database and enter a search string
+            {dict.search.selectDatabaseDesc}
           </p>
 
           <form
@@ -99,7 +101,7 @@ export default function Search() {
 
                 <input
                   type="text"
-                  placeholder="enter search string"
+                  placeholder={dict.search.enterSearchString}
                   onChange={(e) => handleTextChange(database, e.target.value)}
                   className="flex-1 rounded-md border px-2 py-1 text-sm"
                 />
@@ -110,7 +112,7 @@ export default function Search() {
               disabled={!selectedDatabase}
               className="w-[80px] rounded-md bg-emerald-600 px-1 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
             >
-              Begin Search
+              {dict.search.beginSearch}
             </button>
           </form>
         </div>

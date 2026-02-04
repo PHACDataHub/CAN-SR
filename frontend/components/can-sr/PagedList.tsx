@@ -4,6 +4,7 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { Bot, Check } from 'lucide-react'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 type CitationInfo = {
   citationIds: number[]
@@ -60,6 +61,7 @@ export default function PagedList({
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
   const [showClassify, setShowClassify] = useState<Record<number, boolean>>({})
   const router = useRouter()
+  const dict = useDictionary()
 
   useEffect(() => {
     const fetchCitations = async () => {
@@ -196,7 +198,7 @@ export default function PagedList({
         [id]: true,
       }))
     } else {
-      alert('Please upload a valid PDF file.')
+      alert(dict.common.invalidPDF)
     }
   }
 
@@ -212,7 +214,7 @@ export default function PagedList({
               <p className="text-xs text-gray-600"> Citation #{data.id} </p>
               <p className="text-semibold text">{data.title}</p>
               <p className="line-clamp-5 overflow-hidden text-sm text-ellipsis text-gray-800">
-                Abstract: {data.abstract}
+                {dict.common.abstract}: {data.abstract}
               </p>
             </div>
             <div className="flex flex-col items-center justify-center space-y-3">
@@ -226,14 +228,14 @@ export default function PagedList({
                 }
                 className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
               >
-                View
+                {dict.common.view}
               </button>
               {screeningStep != 'l1' ? (
                 <button
                   className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
                   onClick={() => onChooseFile(data.id)}
                 >
-                  Upload
+                  {dict.common.upload}
                 </button>
               ) : (
                 <></>
@@ -258,7 +260,7 @@ export default function PagedList({
                   }}
                   className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
                 >
-                  Classify
+                  {dict.common.classify}
                 </button>
               ) : (
                 <></>
@@ -279,7 +281,7 @@ export default function PagedList({
       <div className="flex flex-col items-center space-y-3">
         <div className="flex flex-row items-center space-x-2">
           <label htmlFor="pageInput" className="text-gray-700">
-            Citations per page
+            {dict.common.citationsPerPage}
           </label>
           <input
             name="pageInput"
@@ -297,17 +299,17 @@ export default function PagedList({
             disabled={page === 1}
             onClick={() => setpage(page - 1)}
           >
-            Prev
+            {dict.common.prev}
           </button>
           <p className="text-gray-700">
-            Page {page} of {lastPage}{' '}
+            {dict.common.pageOf.replace('{page}', String(page)).replace('{total}', String(lastPage))}
           </p>
           <button
             className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-300 disabled:opacity-50"
             disabled={page === lastPage}
             onClick={() => setpage(page + 1)}
           >
-            Next
+            {dict.common.next}
           </button>
         </div>
       </div>

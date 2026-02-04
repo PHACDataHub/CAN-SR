@@ -7,9 +7,11 @@ import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-b
 import { Settings, Download } from 'lucide-react'
 import React from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 export function GCHeader() {
   const router = useRouter()
+  const dict = useDictionary()
 
   return (
     <header className="relative z-20 w-full py-4 bg-white shadow-sm">
@@ -24,8 +26,8 @@ export function GCHeader() {
               className="rounded-sm object-cover shadow-sm"
             />
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Government of Canada</h1>
-              <p className="text-sm font-medium text-gray-600">AI Assistant Portal</p>
+              <h1 className="text-xl font-semibold text-gray-900">{dict.common.governmentOfCanada}</h1>
+              <p className="text-sm font-medium text-gray-600">{dict.common.aiAssistantPortal}</p>
             </div>
           </div>
 
@@ -38,7 +40,7 @@ export function GCHeader() {
             }}
             className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
           >
-            Sign out
+            {dict.common.signOut}
           </InteractiveHoverButton>
         </div>
       </div>
@@ -65,10 +67,12 @@ export function SRHeader({
   showExport = false,
   showBack = true,
   backHref = '/can-sr',
-  backLabel = 'Back to Review',
+  backLabel,
   right,
 }: SRHeaderProps) {
   const router = useRouter()
+  const dict = useDictionary()
+  const resolvedBackLabel = backLabel || dict.cansr.backToReview
 
   const handleExport = async () => {
     try {
@@ -129,7 +133,7 @@ export function SRHeader({
               className="flex items-center space-x-3"
             >
               <BackButton />
-              <span className="text-sm font-medium text-gray-900">{backLabel}</span>
+              <span className="text-sm font-medium text-gray-900">{resolvedBackLabel}</span>
             </div>
           ) : (
             <div />
@@ -151,7 +155,7 @@ export function SRHeader({
                 className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
               >
                 <Settings className="h-4 w-4 text-gray-600" />
-                <span>Settings</span>
+                <span>{dict.common.settings}</span>
               </button>
             ) : null}
 
@@ -164,7 +168,7 @@ export function SRHeader({
                 className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
               >
                 <Download className="h-4 w-4 text-gray-600" />
-                <span>Export</span>
+                <span>{dict.common.export}</span>
               </button>
             ) : null}
 

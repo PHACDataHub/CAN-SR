@@ -7,6 +7,7 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
+import { useDictionary } from '../../DictionaryProvider'
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
@@ -20,6 +21,7 @@ export default function CanSrSetupPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
+  const dict = useDictionary()
 
   const [manageOpen, setManageOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
@@ -227,7 +229,7 @@ export default function CanSrSetupPage() {
       <GCHeader />
 
       <SRHeader 
-        title="Import & Setup" 
+        title={dict.setup.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={
           <div className="flex items-center">
@@ -237,22 +239,21 @@ export default function CanSrSetupPage() {
               className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
             >
               <Settings className="h-4 w-4 text-gray-600" />
-              <span>Manage Users</span>
+              <span>{dict.cansr.manageUsers}</span>
             </button>
           </div>
         }
       />
 
       <main className="mx-auto max-w-4xl px-6 py-10">
-        <h3 className="text-xl font-semibold text-gray-900">Import references and define criteria</h3>
+        <h3 className="text-xl font-semibold text-gray-900">{dict.setup.pageTitle}</h3>
         <p className="mt-2 text-sm text-gray-600">
-          Upload citation files (CSV) to create a screening database. Preview the first rows below before uploading.
-          Edit and save the screening criteria YAML used to configure columns for screening.
+          {dict.setup.pageDesc}
         </p>
 
         <div className="mt-6 space-y-6">
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-            <label className="block text-sm font-medium text-gray-700">Upload citations (CSV)</label>
+            <label className="block text-sm font-medium text-gray-700">{dict.setup.uploadCitations}</label>
             <div className="mt-3 flex items-center gap-3">
               <input
                 ref={fileInputRef}
@@ -265,7 +266,7 @@ export default function CanSrSetupPage() {
                 onClick={onChooseFile}
                 className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
               >
-                Choose file
+                {dict.setup.chooseFile}
               </button>
 
               <div className="ml-auto flex items-center space-x-2">
@@ -276,15 +277,15 @@ export default function CanSrSetupPage() {
                     !file || uploading ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
-                  {uploading ? 'Uploading...' : 'Upload CSV'}
+                  {uploading ? dict.setup.uploading : dict.setup.uploadCSV}
                 </button>
               </div>
             </div>
 
             {file ? (
-              <div className="mt-3 text-sm text-gray-600">Selected file: {file.name}</div>
+              <div className="mt-3 text-sm text-gray-600">{dict.setup.selectedFile} {file.name}</div>
             ) : (
-              <div className="mt-3 text-sm text-gray-500">No file selected</div>
+              <div className="mt-3 text-sm text-gray-500">{dict.setup.noFileSelected}</div>
             )}
 
             {uploadError ? <div className="mt-3 text-sm text-red-600">{uploadError}</div> : null}
@@ -300,8 +301,8 @@ export default function CanSrSetupPage() {
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <label className="text-sm font-medium text-gray-700">Criteria configuration (YAML)</label>
-                <p className="mt-1 text-xs text-gray-500">Edit the YAML used to determine L1 include columns and criteria.</p>
+                <label className="text-sm font-medium text-gray-700">{dict.setup.criteriaConfig}</label>
+                <p className="mt-1 text-xs text-gray-500">{dict.setup.criteriaConfigDesc}</p>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -317,14 +318,14 @@ export default function CanSrSetupPage() {
                   onClick={reloadLastSave}
                   className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
                 >
-                  Reload last save
+                  {dict.setup.reloadLastSave}
                 </button>
 
                 <button
                   onClick={() => yamlInputRef.current?.click()}
                   className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  Upload YAML
+                  {dict.setup.uploadYAML}
                 </button>
               </div>
             </div>
@@ -363,7 +364,7 @@ export default function CanSrSetupPage() {
                   }}
                   className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  Download YAML
+                  {dict.setup.downloadYAML}
                 </button>
 
                 <button
@@ -371,7 +372,7 @@ export default function CanSrSetupPage() {
                   disabled={yamlSaving}
                   className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                 >
-                  {yamlSaving ? 'Saving...' : 'Save criteria'}
+                  {yamlSaving ? dict.setup.saving : dict.setup.saveCriteria}
                 </button>
               </div>
             </div>

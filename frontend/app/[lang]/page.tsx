@@ -2,9 +2,11 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { useDictionary } from './DictionaryProvider'
 
 export default function HomePage() {
   const router = useRouter()
+  const dict = useDictionary()
 
   useEffect(() => {
     // Check if user is logged in
@@ -24,7 +26,7 @@ export default function HomePage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="text-center">
         <div className="mx-auto h-12 w-12 animate-spin rounded-full border-t-2 border-b-2 border-blue-600"></div>
-        <p className="mt-4 text-gray-600">Redirecting...</p>
+        <p className="mt-4 text-gray-600">{dict.common.redirecting}</p>
       </div>
     </div>
   )
