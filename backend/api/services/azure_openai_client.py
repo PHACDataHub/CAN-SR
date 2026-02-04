@@ -126,17 +126,20 @@ class AzureOpenAIClient:
 
         try:
             client = self._get_official_client(model)
+            request_kwargs = {
+                "model": deployment,
+                "messages": messages,
+                "top_p": top_p,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
+                "stream": stream,
+            }
+            
+            if model != "gpt-5-mini":
+                request_kwargs["max_tokens"] = max_tokens
+                request_kwargs["temperature"] = temperature
 
-            response = client.chat.completions.create(
-                model=deployment,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                stream=stream,
-            )
+            response = client.chat.completions.create(**request_kwargs)
 
             if stream:
                 return response
