@@ -67,32 +67,6 @@ class Settings(BaseSettings):
         "AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"
     )
 
-    # GPT-3.5-turbo configuration
-    AZURE_OPENAI_GPT35_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_GPT35_API_KEY")
-    AZURE_OPENAI_GPT35_ENDPOINT: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT35_ENDPOINT"
-    )
-    AZURE_OPENAI_GPT35_DEPLOYMENT: str = os.getenv(
-        "AZURE_OPENAI_GPT35_DEPLOYMENT", "gpt-35-turbo"
-    )
-    AZURE_OPENAI_GPT35_API_VERSION: str = os.getenv(
-        "AZURE_OPENAI_GPT35_API_VERSION", "2023-03-15-preview"
-    )
-
-    # GPT-4o-mini configuration
-    AZURE_OPENAI_GPT4O_MINI_API_KEY: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT4O_MINI_API_KEY"
-    )
-    AZURE_OPENAI_GPT4O_MINI_ENDPOINT: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT4O_MINI_ENDPOINT"
-    )
-    AZURE_OPENAI_GPT4O_MINI_DEPLOYMENT: str = os.getenv(
-        "AZURE_OPENAI_GPT4O_MINI_DEPLOYMENT", "gpt-4o-mini"
-    )
-    AZURE_OPENAI_GPT4O_MINI_API_VERSION: str = os.getenv(
-        "AZURE_OPENAI_GPT4O_MINI_API_VERSION", "2025-01-01-preview"
-    )
-
     # GPT-4.1-mini configuration
     AZURE_OPENAI_GPT41_MINI_API_KEY: Optional[str] = os.getenv(
         "AZURE_OPENAI_GPT41_MINI_API_KEY"
