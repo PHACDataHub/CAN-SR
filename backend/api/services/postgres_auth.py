@@ -39,6 +39,7 @@ def get_postgres_token() -> str:
     credential = DefaultAzureCredential()
     current_epoch_time = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     if not _current_pgsql_token or current_epoch_time >= _pgsql_token_expiration:
+        print("GETTING FRESH PGSQL TOKEN")
         token = credential.get_token(POSTGRES_SCOPE)
         _current_pgsql_token = token.token
         _pgsql_token_expiration = token.expires_on - 60  # Refresh 1 minute before expiry
