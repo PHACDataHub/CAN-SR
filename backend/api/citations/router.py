@@ -1,17 +1,16 @@
-"""
-Screening router - handles upload of citation CSVs for title/abstract (L1) screening.
+"""Screening citations router.
+
+This router handles upload of citation CSVs for title/abstract (L1) screening.
 
 Behavior:
-- All endpoints require a Systematic Review (sr_id) that the user is a member of (re-uses checks from manage.router).
+- All endpoints require a Systematic Review (sr_id) that the user is a member of.
 - Uploading a CSV will:
   - Parse the CSV
-  - Create a new Postgres database (requires POSTGRES_ADMIN_DSN env var)
-  - Create a `citations` table with columns based on the "include" list from the criteria YAML
-  - Insert citation rows from the CSV into the table
-  - Save connection information for the created DB into the Systematic Review Mongo document
-Notes:
-- This implementation uses blocking psycopg2 calls dispatched into a threadpool with run_in_threadpool.
-- It is defensive: if required env vars or psycopg2 are missing it returns HTTP 503 with an actionable message.
+  - Create a new Postgres *table* in the shared database (POSTGRES_URI)
+  - Insert citation rows from the CSV into that table
+  - Save the table name + connection string into the Systematic Review record
+
+We intentionally avoid creating a new Postgres database per upload.
 """
 
 from typing import Dict, Any, List, Optional
@@ -27,9 +26,6 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-import yaml
-import psycopg2
-import psycopg2.extras
 
 
 from ..services.sr_db_service import srdb_service
@@ -44,13 +40,10 @@ router = APIRouter()
 
 class UploadResult(BaseModel):
     sr_id: str
-    db_name: str
+    table_name: str
     rows_inserted: int
     message: str
     created_at: str
-
-
-
 
 def _load_include_columns_from_criteria(sr_doc: Optional[Dict[str, Any]] = None) -> List[str]:
     # Delegate to consolidated postgres service
@@ -58,19 +51,14 @@ def _load_include_columns_from_criteria(sr_doc: Optional[Dict[str, Any]] = None)
         return cits_dp_service.load_include_columns_from_criteria(sr_doc)
     except Exception:
         return []
-
-
 def _parse_dsn(dsn: str) -> Dict[str, str]:
     # Delegate to consolidated postgres service
     try:
         return parse_dsn(dsn)
     except Exception:
         return {}
-
-
-def _create_db_and_table_sync(admin_dsn: str, db_name: str, columns: List[str], rows: List[Dict[str, Any]]) -> int:
-    # Delegate to consolidated postgres service
-    return cits_dp_service.create_db_and_table_sync(admin_dsn, db_name, columns, rows)
+def _create_table_and_insert_sync(db_conn_str: str, table_name: str, columns: List[str], rows: List[Dict[str, Any]]) -> int:
+    return cits_dp_service.create_table_and_insert_sync(db_conn_str, table_name, columns, rows)
 
 
 @router.post("/{sr_id}/upload-csv", response_model=UploadResult)
@@ -80,11 +68,10 @@ async def upload_screening_csv(
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ):
     """
-    Upload a CSV of citations for title/abstract screening and create a dedicated Postgres DB/table.
+    Upload a CSV of citations for title/abstract screening and create a dedicated Postgres table.
 
     Requirements:
-    - Environment variable POSTGRES_ADMIN_DSN must be set and point to a Postgres server where the service has permission to CREATE DATABASE.
-    - The YAML criteria include list (manage/configs/criteria_config_measles_updated.yaml) is used to determine columns to create.
+    - POSTGRES_URI must be configured.
     - The SR must exist and the user must be a member of the SR (or owner).
     """
 
@@ -96,12 +83,12 @@ async def upload_screening_csv(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
-    # Check admin DSN (use centralized settings)
-    admin_dsn = settings.POSTGRES_URI
-    if not admin_dsn:
+    # Shared DB connection string
+    db_conn = settings.POSTGRES_URI
+    if not db_conn:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Postgres admin DSN not configured. Set POSTGRES_ADMIN_DSN or DATABASE_URL in configuration/environment.",
+            detail="PostgreSQL connection not configured. Set POSTGRES_URI in configuration/environment.",
         )
 
     # Read CSV content
@@ -117,40 +104,35 @@ async def upload_screening_csv(
     if len(include_columns) == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No columns found to create screening table")
 
-    # Build a database name
+    # Build a unique table name for this upload
     safe_sr = re.sub(r"[^0-9a-zA-Z_]", "_", sr_id)
     timestamp = int(time.time())
-    db_name = f"sr_{safe_sr}_{timestamp}"
+    # keep within 63 chars: prefix + '_' + ts + '_citations'
+    table_name = f"sr_{safe_sr}_{timestamp}_cit"
 
-    # Create DB, table and insert rows in threadpool
+    # If replacing, best-effort drop previous table (if any)
     try:
-        inserted = await run_in_threadpool(_create_db_and_table_sync, admin_dsn, db_name, include_columns, normalized_rows)
+        old = (sr.get("screening_db") or {}).get("table_name")
+        if old:
+            await run_in_threadpool(cits_dp_service.drop_table, db_conn, old)
+    except Exception:
+        # best-effort only
+        pass
+
+    # Create table and insert rows in threadpool
+    try:
+        inserted = await run_in_threadpool(_create_table_and_insert_sync, db_conn, table_name, include_columns, normalized_rows)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create database/table or insert rows: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create table or insert rows: {e}")
 
     # Save DB connection metadata into SR Mongo doc
     try:
-        parsed = _parse_dsn(admin_dsn)
-        # construct a connection string for the new DB (do not alter credentials - reuse admin DSN but point to DB)
-        if "://" in admin_dsn:
-            import urllib.parse as up
-
-            p = up.urlparse(admin_dsn)
-            new_path = "/" + db_name
-            new_p = p._replace(path=new_path)
-            db_conn = up.urlunparse(new_p)
-        else:
-            if "dbname=" in admin_dsn:
-                db_conn = re.sub(r"dbname=[^ ]+", f"dbname={db_name}", admin_dsn)
-            else:
-                db_conn = f"{admin_dsn} dbname={db_name}"
-
         screening_info = {
             "screening_db": {
-                "db_name": db_name,
                 "connection_string": db_conn,
+                "table_name": table_name,
                 "created_at": datetime.utcnow().isoformat(),
                 "rows": inserted,
             }
@@ -165,13 +147,13 @@ async def upload_screening_csv(
         )
     except Exception as e:
         # DB succeeded but saving metadata failed - surface warning but allow API to succeed with caution
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database created ({db_name}) but failed to update Systematic Review entry: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Table created ({table_name}) but failed to update Systematic Review entry: {e}")
 
     return UploadResult(
         sr_id=sr_id,
-        db_name=db_name,
+        table_name=table_name,
         rows_inserted=inserted,
-        message=f"Created screening DB '{db_name}' and inserted {inserted} rows",
+        message=f"Created screening table '{table_name}' and inserted {inserted} rows",
         created_at=datetime.utcnow().isoformat(),
     )
 
@@ -200,8 +182,10 @@ async def list_citation_ids(
     if not screening:
         return {"citation_ids": []}
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, db_conn, filter_step)
+        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, db_conn, filter_step, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -234,8 +218,10 @@ async def get_citation_by_id(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -288,8 +274,10 @@ async def build_combined_citation(
     if not screening:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -350,14 +338,10 @@ async def upload_citation_fulltext(
 
     content = await file.read()
     # Verify citation exists BEFORE uploading blob to storage
+    table_name = (screening or {}).get("table_name") or "citations"
+
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
-    except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
-    try:
-        existing_row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+        existing_row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -392,7 +376,7 @@ async def upload_citation_fulltext(
 
     # Update citation row in Postgres
     try:
-        updated = await run_in_threadpool(cits_dp_service.attach_fulltext, db_conn, citation_id, storage_path, content)
+        updated = await run_in_threadpool(cits_dp_service.attach_fulltext, db_conn, citation_id, storage_path, content, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -420,7 +404,7 @@ async def upload_citation_fulltext(
 # Helper to drop a database - delegated to backend.api.core.postgres.drop_database
 async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Delete the screening Postgres database and all associated fulltext files
+    Delete the screening Postgres table and all associated fulltext files
     for the given systematic review.
 
     This should be called prior to permanently deleting the SR document so
@@ -428,7 +412,6 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
 
     Requirements:
     - Caller must be the SR owner.
-    - POSTGRES_ADMIN_DSN or DATABASE_URL must be configured in settings.
     """
 
     db_conn_str = settings.POSTGRES_URI
@@ -444,19 +427,19 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may perform screening cleanup for this systematic review")
 
     if not screening:
-        return {"status": "no_screening_db", "message": "No screening DB configured for this SR", "deleted_db": False, "deleted_files": 0}
+        return {"status": "no_screening_db", "message": "No screening table configured for this SR", "deleted_table": False, "deleted_files": 0}
 
     db_conn = screening.get("connection_string")
     if not db_conn:
-        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_db": False, "deleted_files": 0}
+        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_table": False, "deleted_files": 0}
 
-    admin_dsn = settings.POSTGRES_ADMIN_DSN or settings.DATABASE_URL
-    if not admin_dsn:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Postgres admin DSN not configured. Set POSTGRES_ADMIN_DSN or DATABASE_URL in configuration/environment.")
+    table_name = screening.get("table_name")
+    if not table_name:
+        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_table": False, "deleted_files": 0}
 
     # 1) collect fulltext URLs from the screening DB
     try:
-        urls = await run_in_threadpool(cits_dp_service.list_fulltext_urls, db_conn)
+        urls = await run_in_threadpool(cits_dp_service.list_fulltext_urls, db_conn, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -525,14 +508,14 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
         # non-fatal; proceed to drop DB but report file deletion failures
         pass
 
-    # 3) drop the screening database
+    # 3) drop the screening table
     try:
-        await run_in_threadpool(cits_dp_service.drop_database, admin_dsn, db_name)
-        db_dropped = True
+        await run_in_threadpool(cits_dp_service.drop_table, db_conn, table_name)
+        table_dropped = True
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to drop screening DB: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to drop screening table: {e}")
 
     # 4) remove screening_db metadata from SR document
     try:
@@ -548,7 +531,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     return {
         "status": "success",
         "sr_id": sr_id,
-        "deleted_db": db_dropped,
+        "deleted_table": table_dropped,
         "deleted_files": deleted_files,
         "failed_file_deletions": failed_files,
     }
@@ -593,8 +576,10 @@ async def export_citations_csv(
             detail="No screening database configured for this systematic review",
         )
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     try:
-        csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv, db_conn)
+        csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv, db_conn, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
