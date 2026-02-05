@@ -26,7 +26,6 @@ def _ensure_psycopg2():
     except ImportError:
         raise RuntimeError("psycopg2 is not installed on the server environment")
 
-@lru_cache(maxsize=2)
 def get_postgres_token() -> str:
     """
     Get an access token for Azure Database for PostgreSQL using DefaultAzureCredential.
