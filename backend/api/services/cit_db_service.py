@@ -158,20 +158,10 @@ class CitsDPService:
                 except Exception:
                     pass
             conn.commit()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def update_jsonb_column(
         self,
@@ -199,21 +189,11 @@ class CitsDPService:
             cur.execute(f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s', (json.dumps(data), int(citation_id)))
             rows = cur.rowcount
             conn.commit()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+           
             return rows or 0
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def update_text_column(
         self,
@@ -241,21 +221,11 @@ class CitsDPService:
             cur.execute(f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s', (text_value, int(citation_id)))
             rows = cur.rowcount
             conn.commit()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return rows or 0
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     # -----------------------
     # Citation row helpers
@@ -282,22 +252,12 @@ class CitsDPService:
             )
             csv_text = buf.getvalue()
 
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
 
             return csv_text.encode("utf-8")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def get_citation_by_id(self, db_conn_str: str, citation_id: int, table_name: str = "citations") -> Optional[Dict[str, Any]]:
         """
@@ -314,35 +274,17 @@ class CitsDPService:
             cur.execute(f'SELECT * FROM "{table_name}" WHERE id = %s', (citation_id,))
             row = cur.fetchone()
             if row is None:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
                 return None
             if isinstance(row, dict):
                 result = row
             else:
                 cols = [desc[0] for desc in cur.description]
                 result = {cols[i]: row[i] for i in range(len(cols))}
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return result
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def list_citation_ids(self, db_conn_str: str, filter_step=None, table_name: str = "citations") -> List[int]:
         """
@@ -385,21 +327,11 @@ class CitsDPService:
 
             cur.execute(query)
             rows = cur.fetchall()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return [int(r[0]) for r in rows]
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def list_fulltext_urls(self, db_conn_str: str, table_name: str = "citations") -> List[str]:
         """
@@ -412,21 +344,11 @@ class CitsDPService:
             cur = conn.cursor()
             cur.execute(f'SELECT fulltext_url FROM "{table_name}" WHERE fulltext_url IS NOT NULL')
             rows = cur.fetchall()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return [r[0] for r in rows if r and r[0]]
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def update_citation_fulltext(self, db_conn_str: str, citation_id: int, fulltext_path: str) -> int:
         """
@@ -462,8 +384,8 @@ class CitsDPService:
         rows = cur.rowcount
         conn.commit()
 
-        cur.close()
-        postgres_server.close()
+
+        
         return rows
 
     # -----------------------
@@ -484,35 +406,17 @@ class CitsDPService:
             cur.execute(f'SELECT "{column}" FROM "{table_name}" WHERE id = %s', (citation_id,))
             row = cur.fetchone()
             if not row:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
                 return None
             # row may be dict or tuple
             if isinstance(row, dict):
                 val = list(row.values())[0] if row else None
             else:
                 val = row[0] if row and len(row) > 0 else None
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return val
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def set_column_value(self, db_conn_str: str, citation_id: int, column: str, value: Any, table_name: str = "citations") -> int:
         """
@@ -535,16 +439,9 @@ class CitsDPService:
             cur = conn.cursor()
             cas = " CASCADE" if cascade else ""
             cur.execute(f'DROP TABLE IF EXISTS "{table_name}"{cas}')
-            try:
-                cur.close()
-            except Exception:
-                pass
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def create_table_and_insert_sync(
         self,
@@ -611,21 +508,11 @@ class CitsDPService:
                     inserted = len(values)
 
             conn.commit()
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             return inserted
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     # NOTE: legacy per-database helpers (drop_database, create_db_and_table_sync) were
     # intentionally removed in favor of per-upload tables in a shared database.

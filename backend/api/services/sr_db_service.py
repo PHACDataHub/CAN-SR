@@ -58,14 +58,7 @@ class SRDBService:
             cur.execute(create_table_sql)
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
                 
             logger.info("Ensured systematic_reviews table exists")
         except Exception as e:
@@ -73,10 +66,7 @@ class SRDBService:
             raise
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def build_criteria_parsed(self, criteria_obj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -235,14 +225,7 @@ class SRDBService:
             if sr_doc.get('updated_at') and isinstance(sr_doc['updated_at'], dt):
                 sr_doc['updated_at'] = sr_doc['updated_at'].isoformat()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return sr_doc
             
@@ -251,10 +234,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create systematic review: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def add_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
@@ -301,14 +281,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "added_user_id": target_user_id}
             
@@ -319,10 +292,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def remove_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
@@ -371,14 +341,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "removed_user_id": target_user_id}
             
@@ -389,10 +352,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def user_has_sr_permission(self, db_conn_str: str, sr_id: str, user_id: str) -> bool:
         """
@@ -456,14 +416,7 @@ class SRDBService:
             
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             # Return fresh doc
             doc = self.get_systematic_review(db_conn_str, sr_id)
@@ -476,10 +429,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update criteria: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def list_systematic_reviews_for_user(self, db_conn_str: str, user_email: str) -> List[Dict[str, Any]]:
         """
@@ -523,14 +473,7 @@ class SRDBService:
                 
                 results.append(doc)
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return results
             
@@ -539,10 +482,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list systematic reviews: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def get_systematic_review(self, db_conn_str: str, sr_id: str, ignore_visibility: bool = False) -> Optional[Dict[str, Any]]:
         """
@@ -565,14 +505,6 @@ class SRDBService:
             row = cur.fetchone()
             
             if not row:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
                 return None
             
             cols = [desc[0] for desc in cur.description]
@@ -592,14 +524,7 @@ class SRDBService:
             if doc.get('updated_at') and isinstance(doc['updated_at'], dt):
                 doc['updated_at'] = doc['updated_at'].isoformat()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return doc
             
@@ -608,10 +533,7 @@ class SRDBService:
             return None
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def set_visibility(self, db_conn_str: str, sr_id: str, visible: bool, requester_id: str) -> Dict[str, Any]:
         """
@@ -640,14 +562,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "visible": visible}
             
@@ -656,10 +571,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to set visibility: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+               pass
 
     def soft_delete_systematic_review(self, db_conn_str: str, sr_id: str, requester_id: str) -> Dict[str, Any]:
         """
@@ -695,16 +607,7 @@ class SRDBService:
             cur.execute("DELETE FROM systematic_reviews WHERE id = %s", (sr_id,))
             deleted_count = cur.rowcount
             conn.commit()
-            
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
-            
+
             return {"deleted_count": deleted_count}
             
         except Exception as e:
@@ -712,10 +615,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to hard-delete systematic review: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
 
     def update_screening_db_info(self, db_conn_str: str, sr_id: str, screening_db: Dict[str, Any]) -> None:
@@ -736,24 +636,14 @@ class SRDBService:
             )
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
         except Exception as e:
             logger.exception(f"Failed to update screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update screening DB info: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
     def clear_screening_db_info(self, db_conn_str: str, sr_id: str) -> None:
         """
@@ -773,24 +663,14 @@ class SRDBService:
             )
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                postgres_server.close()
-            except Exception:
-                pass
+
             
         except Exception as e:
             logger.exception(f"Failed to clear screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear screening DB info: {e}")
         finally:
             if conn:
-                try:
-                    postgres_server.close()
-                except Exception:
-                    pass
+                pass
 
 
 # module-level instance
