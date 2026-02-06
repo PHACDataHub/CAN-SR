@@ -13,8 +13,6 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
-from api.services.postgres_auth import pgsql_entra_auth_configured
-
 from .config import settings
 
 
@@ -51,18 +49,6 @@ async def load_sr_and_check(
 
     Raises HTTPException with appropriate status codes on failure so routers can just propagate.
     """
-    # ensure DB helper present and call it
-    if not _is_postgres_configured(db_conn_str):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Server misconfiguration: PostgreSQL connection not available. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.",
-        )
-    try:
-        await run_in_threadpool(srdb_service.ensure_db_available, db_conn_str)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
     # fetch SR
     try:
@@ -95,8 +81,6 @@ async def load_sr_and_check(
     if require_screening:
         if not screening:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
-        db_conn = screening.get("connection_string")
-        if not db_conn and not pgsql_entra_auth_configured():
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Screening DB connection info missing")
+        db_conn = None
 
     return sr, screening, db_conn

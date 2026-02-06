@@ -13,6 +13,8 @@ Methods raise RuntimeError when psycopg2 is not available so callers
 can surface a 503 with an actionable message.
 """
 from typing import Any, Dict, List, Optional
+import psycopg2
+import psycopg2.extras
 import json
 import re
 import os
@@ -26,7 +28,7 @@ try:
 except Exception:
     settings = None
 
-from .postgres_auth import _ensure_psycopg2, connect_postgres
+from .postgres_auth import postgres_server
 
 
 # -----------------------
@@ -131,16 +133,7 @@ class CitsDPService:
     # -----------------------
     # Low level connection helpers
     # -----------------------
-    def _ensure_psycopg2(self):
-        return _ensure_psycopg2()
 
-    def _connect(self, db_conn_str: Optional[str] = None):
-        """
-        Connect and return a psycopg2 connection using Entra ID auth (preferred) or connection string.
-        Raises RuntimeError if psycopg2 missing.
-        Caller is responsible for closing the connection.
-        """
-        return connect_postgres(db_conn_str)
 
     # -----------------------
     # Generic column ops
@@ -154,7 +147,7 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             try:
                 cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" {col_type}')
@@ -170,13 +163,13 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -194,7 +187,7 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             try:
                 cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" JSONB')
@@ -211,14 +204,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return rows or 0
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -236,7 +229,7 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             try:
                 cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" TEXT')
@@ -253,14 +246,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return rows or 0
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -278,7 +271,7 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             buf = io.StringIO()
 
@@ -294,7 +287,7 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
 
@@ -302,7 +295,7 @@ class CitsDPService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -311,10 +304,9 @@ class CitsDPService:
         Return a dict mapping column -> value for the citation row, or None.
         """
         table_name = _validate_ident(table_name, kind="table_name")
-        psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = connect_postgres(db_conn_str)
+            conn = postgres_server.conn
             try:
                 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             except Exception:
@@ -327,7 +319,7 @@ class CitsDPService:
                 except Exception:
                     pass
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
                 return None
@@ -341,14 +333,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return result
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -357,10 +349,9 @@ class CitsDPService:
         Return list of integer primary keys (id) from citations table ordered by id.
         """
         table_name = _validate_ident(table_name, kind="table_name")
-        psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = connect_postgres(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             if filter_step is not None:
 
@@ -399,14 +390,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return [int(r[0]) for r in rows]
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -415,10 +406,9 @@ class CitsDPService:
         Return list of fulltext_url values (non-null) from citations table.
         """
         table_name = _validate_ident(table_name, kind="table_name")
-        psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = connect_postgres(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             cur.execute(f'SELECT fulltext_url FROM "{table_name}" WHERE fulltext_url IS NOT NULL')
             rows = cur.fetchall()
@@ -427,14 +417,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return [r[0] for r in rows if r and r[0]]
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -466,14 +456,14 @@ class CitsDPService:
         md5 = hashlib.md5(file_bytes).hexdigest() if file_bytes is not None else ""
         
         # update both columns in one statement
-        conn = self._connect(db_conn_str)
+        conn = postgres_server.conn
         cur = conn.cursor()
         cur.execute(f'UPDATE "{table_name}" SET "fulltext_url" = %s WHERE id = %s', (azure_path, int(citation_id)))
         rows = cur.rowcount
         conn.commit()
 
         cur.close()
-        conn.close()
+        postgres_server.close()
         return rows
 
     # -----------------------
@@ -484,10 +474,9 @@ class CitsDPService:
         Return the value stored in `column` for the citation row (or None).
         """
         table_name = _validate_ident(table_name, kind="table_name")
-        psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = connect_postgres(db_conn_str)
+            conn = postgres_server.conn
             try:
                 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             except Exception:
@@ -500,7 +489,7 @@ class CitsDPService:
                 except Exception:
                     pass
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
                 return None
@@ -514,14 +503,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return val
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -541,7 +530,7 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
         try:
-            conn = connect_postgres(admin_dsn)
+            conn = postgres_server.conn
             conn.autocommit = True
             cur = conn.cursor()
             cas = " CASCADE" if cascade else ""
@@ -553,7 +542,7 @@ class CitsDPService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -570,11 +559,9 @@ class CitsDPService:
         is per-upload (e.g. sr_<sr>_<ts>_citations) inside the shared DB.
         """
         table_name = _validate_ident(table_name, kind="table_name")
-
-        psycopg2 = self._ensure_psycopg2()
         conn = None
         try:
-            conn = connect_postgres(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
 
             # Create table
@@ -629,14 +616,14 @@ class CitsDPService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             return inserted
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 

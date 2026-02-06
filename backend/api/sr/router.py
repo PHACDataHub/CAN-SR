@@ -99,7 +99,6 @@ async def create_systematic_review(
     The created SR is stored in PostgreSQL and the creating user is added as the first member.
     """
     db_conn_str = _get_db_conn_str()
-    await run_in_threadpool(srdb_service.ensure_db_available, db_conn_str)
 
     if not name or not name.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
@@ -265,7 +264,6 @@ async def list_systematic_reviews_for_user(
     Hidden/deleted SRs (visible == False) are excluded.
     """
     db_conn_str = _get_db_conn_str()
-    await run_in_threadpool(srdb_service.ensure_db_available, db_conn_str)
 
     user_id = current_user.get("email")
     results = []

@@ -16,7 +16,7 @@ from datetime import datetime
 
 from fastapi import HTTPException, status
 
-from .postgres_auth import _ensure_psycopg2, connect_postgres
+from .postgres_auth import postgres_server
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -27,60 +27,6 @@ class SRDBService:
         # Service is stateless; connection strings passed per-call
         pass
 
-    def _ensure_psycopg2(self):
-        return _ensure_psycopg2()
-
-    def _connect(self, db_conn_str: Optional[str] = None):
-        """
-        Connect and return a psycopg2 connection using Entra ID auth (preferred) or connection string.
-        Raises RuntimeError if psycopg2 missing.
-        Caller is responsible for closing the connection.
-        """
-        return connect_postgres(db_conn_str)
-
-    def _is_postgres_configured(self, db_conn_str: Optional[str] = None) -> bool:
-        """
-        Check if PostgreSQL is configured via Entra ID env vars or connection string.
-        """
-        has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
-        has_uri_config = db_conn_str or settings.POSTGRES_URI
-        return bool(has_entra_config or has_uri_config)
-
-    def _ensure_postgres_configured(self, db_conn_str: Optional[str] = None) -> None:
-        """
-        Raise HTTPException if PostgreSQL is not configured.
-        """
-        if not self._is_postgres_configured(db_conn_str):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Systematic review DB not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev."
-            )
-
-    def ensure_db_available(self, db_conn_str: Optional[str] = None) -> None:
-        """
-        Raise an HTTPException (503) if the PostgreSQL connection is not available.
-        Routers call this to provide consistent error messages when Postgres is not configured.
-        """
-        # Check if any Postgres config is available
-        has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
-        has_uri_config = db_conn_str or settings.POSTGRES_URI
-        
-        if not has_entra_config and not has_uri_config:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="PostgreSQL connection not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.",
-            )
-        # Try to connect to verify availability
-        try:
-            conn = self._connect(db_conn_str)
-            conn.close()
-        except Exception as e:
-            logger.warning(f"PostgreSQL connection failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"PostgreSQL connection failed: {e}",
-            )
-
     def ensure_table_exists(self, db_conn_str: str) -> None:
         """
         Ensure the systematic_reviews table exists in PostgreSQL.
@@ -89,7 +35,7 @@ class SRDBService:
         """
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             create_table_sql = """
@@ -117,7 +63,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
                 
@@ -128,7 +74,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -232,7 +178,6 @@ class SRDBService:
         """
         Create a new SR document and insert into the table. Returns the created document.
         """
-        self._ensure_postgres_configured(db_conn_str)
 
         sr_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -243,7 +188,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             insert_sql = """
@@ -295,7 +240,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -307,7 +252,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -317,7 +262,7 @@ class SRDBService:
         requester must be a member or owner.
         Returns a dict with update result metadata.
         """
-        self._ensure_postgres_configured(db_conn_str)
+  
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -330,7 +275,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Get current users array
@@ -361,7 +306,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -375,7 +320,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -384,7 +329,7 @@ class SRDBService:
         Remove a user id from the SR's users list. Owner cannot be removed.
         Enforces requester permissions (must be a member or owner).
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -400,7 +345,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Get current users array
@@ -431,7 +376,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -445,7 +390,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -456,7 +401,7 @@ class SRDBService:
         Note: this check deliberately ignores the SR's 'visible' flag so membership checks
         work regardless of whether the SR is hidden/soft-deleted.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         doc = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not doc:
@@ -473,7 +418,7 @@ class SRDBService:
         The requester must be a member or owner.
         Returns the updated SR document.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -486,7 +431,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -516,7 +461,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -532,7 +477,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -540,11 +485,11 @@ class SRDBService:
         """
         Return all SR documents where the user is a member (regardless of visible flag).
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Query using jsonb operator to check if user_email is in users array
@@ -583,7 +528,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -595,7 +540,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -604,11 +549,11 @@ class SRDBService:
         Return SR document by id. Returns None if not found.
         If ignore_visibility is False, only returns visible SRs.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             if ignore_visibility:
@@ -625,7 +570,7 @@ class SRDBService:
                 except Exception:
                     pass
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
                 return None
@@ -652,7 +597,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -664,7 +609,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -673,7 +618,7 @@ class SRDBService:
         Set the visible flag on the SR. Only owner is allowed to change visibility.
         Returns update metadata.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not sr:
@@ -684,7 +629,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -700,7 +645,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -712,7 +657,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -733,7 +678,7 @@ class SRDBService:
         Permanently remove the SR document. Only owner may hard delete.
         Returns deletion metadata (deleted_count).
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not sr:
@@ -744,7 +689,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             cur.execute("DELETE FROM systematic_reviews WHERE id = %s", (sr_id,))
@@ -756,7 +701,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -768,7 +713,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -777,11 +722,11 @@ class SRDBService:
         """
         Update the screening_db field in the SR document with screening database metadata.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -796,7 +741,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -806,7 +751,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 
@@ -814,11 +759,11 @@ class SRDBService:
         """
         Remove the screening_db field from the SR document.
         """
-        self._ensure_postgres_configured(db_conn_str)
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -833,7 +778,7 @@ class SRDBService:
             except Exception:
                 pass
             try:
-                conn.close()
+                postgres_server.close()
             except Exception:
                 pass
             
@@ -843,7 +788,7 @@ class SRDBService:
         finally:
             if conn:
                 try:
-                    conn.close()
+                    postgres_server.close()
                 except Exception:
                     pass
 

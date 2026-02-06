@@ -116,7 +116,9 @@ class Settings(BaseSettings):
     POSTGRES_DATABASE: Optional[str] = os.getenv("POSTGRES_DATABASE")
     POSTGRES_USER: Optional[str] = os.getenv("POSTGRES_USER")  # Entra ID user (e.g., user@tenant.onmicrosoft.com)
     POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
-    POSTGRES_SSL_MODE: str = os.getenv("POSTGRES_SSL_MODE", "require")
+    POSTGRES_SSL_MODE: Optional[str] = os.getenv("POSTGRES_SSL_MODE")
+    POSTGRES_PASSWORD: Optional[str] = os.getenv("POSTGRES_PASSWORD")
+    AZURE_DB: bool = os.getenv("AZURE_DB", "false").lower() == "true"
     # Legacy: Postgres DSN used for systematic reviews and screening databases (fallback)
     POSTGRES_URI: Optional[str] = os.getenv("POSTGRES_URI")
 

@@ -27,9 +27,6 @@ from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from api.services.postgres_auth import pgsql_entra_auth_configured
-
-
 from ..services.sr_db_service import srdb_service
 
 from ..core.security import get_current_active_user
@@ -459,9 +456,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     if not screening:
         return {"status": "no_screening_db", "message": "No screening table configured for this SR", "deleted_table": False, "deleted_files": 0}
 
-    db_conn = screening.get("connection_string")
-    if not db_conn and not pgsql_entra_auth_configured():
-        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_table": False, "deleted_files": 0}
+    db_conn = None
 
     table_name = screening.get("table_name")
     if not table_name:
