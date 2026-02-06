@@ -91,12 +91,14 @@ async def extract_parameter_endpoint(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     # Obtain fulltext: prefer payload, otherwise read from DB row
     fulltext = payload.fulltext
     row = None
     if not fulltext:
         try:
-            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
         except RuntimeError as rexc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
         except Exception as e:
@@ -227,7 +229,7 @@ async def extract_parameter_endpoint(
     col_name = snake_case_param(payload.parameter_name)
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -262,9 +264,11 @@ async def human_extract_parameter(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     # Ensure citation exists (we won't require full_text for human input but check row presence)
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -319,7 +323,7 @@ async def human_extract_parameter(
         col_name = f"human_param_{core}" if core else "human_param_param"
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -351,9 +355,11 @@ async def extract_fulltext_from_storage(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
+    table_name = (screening or {}).get("table_name") or "citations"
+
     # fetch citation row
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id))
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -424,10 +430,10 @@ async def extract_fulltext_from_storage(
 
     # persist full_text_str and coordinates/pages into citation row
     try:
-        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext", full_text_str)
-        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext_md5", current_md5)
-        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_coords", annotations)
-        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_pages", pages)
+        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext", full_text_str, table_name)
+        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext_md5", current_md5, table_name)
+        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_coords", annotations, table_name)
+        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_pages", pages, table_name)
         updated = updated1 or updated2 or updated3 or updated4
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
