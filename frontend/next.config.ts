@@ -2,10 +2,7 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   /* config options here */
-  eslint: {
-    // Disable ESLint during builds for production deployment
-    ignoreDuringBuilds: true,
-  },
+  output: 'standalone',
   typescript: {
     // Disable TypeScript errors during builds for production deployment
     ignoreBuildErrors: true,
@@ -18,6 +15,7 @@ const nextConfig: NextConfig = {
     }
     return config
   },
+  turbopack: {},
 }
 
 export default nextConfig

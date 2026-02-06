@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 from passlib.context import CryptContext
@@ -17,12 +18,15 @@ class UserDatabaseService:
     """Service for managing user data in Azure Blob Storage"""
 
     def __init__(self):
-        if not settings.AZURE_STORAGE_CONNECTION_STRING:
-            raise ValueError("Azure Storage connection string not configured")
+        if not settings.AZURE_STORAGE_ACCOUNT_NAME:
+            raise ValueError("AZURE_STORAGE_ACCOUNT_NAME is not configured")
 
-        self.blob_service_client = BlobServiceClient.from_connection_string(
-            settings.AZURE_STORAGE_CONNECTION_STRING
+        account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        self.blob_service_client = BlobServiceClient(
+            account_url=account_url, credential=credential
         )
+
         self.container_name = settings.AZURE_STORAGE_CONTAINER_NAME
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -108,8 +112,8 @@ class UserDatabaseService:
             if await self._save_user_registry(registry):
                 # Create user directory structure in storage
                 from .storage import storage_service
-                from .dual_milvus_manager import dual_milvus_manager
-                from .base_knowledge_manager import base_knowledge_manager
+                # from .dual_milvus_manager import dual_milvus_manager
+                # from .base_knowledge_manager import base_knowledge_manager
 
                 if storage_service:
                     await storage_service.create_user_directory(user_id)
@@ -245,7 +249,7 @@ class UserDatabaseService:
 
 # Global user database service instance
 user_db_service = (
-    UserDatabaseService() if settings.AZURE_STORAGE_CONNECTION_STRING else None
+    UserDatabaseService() if settings.AZURE_STORAGE_ACCOUNT_NAME else None
 )
 
 # Alias for backward compatibility

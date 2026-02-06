@@ -16,55 +16,16 @@ from datetime import datetime
 
 from fastapi import HTTPException, status
 
+from .postgres_auth import postgres_server
+from ..core.config import settings
+
 logger = logging.getLogger(__name__)
-
-
-def _ensure_psycopg2():
-    try:
-        import psycopg2
-        import psycopg2.extras  # noqa: F401
-        return psycopg2
-    except Exception:
-        raise RuntimeError("psycopg2 is not installed on the server environment")
 
 
 class SRDBService:
     def __init__(self):
         # Service is stateless; connection strings passed per-call
         pass
-
-    def _ensure_psycopg2(self):
-        return _ensure_psycopg2()
-
-    def _connect(self, db_conn_str: str):
-        """
-        Connect and return a psycopg2 connection. Raises RuntimeError if psycopg2 missing.
-        Caller is responsible for closing the connection.
-        """
-        psycopg2 = self._ensure_psycopg2()
-        conn = psycopg2.connect(db_conn_str)
-        return conn
-
-    def ensure_db_available(self, db_conn_str: Optional[str] = None) -> None:
-        """
-        Raise an HTTPException (503) if the PostgreSQL connection is not available.
-        Routers call this to provide consistent error messages when Postgres is not configured.
-        """
-        if not db_conn_str:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="PostgreSQL connection not configured. Set POSTGRES_URI environment variable.",
-            )
-        # Try to connect to verify availability
-        try:
-            conn = self._connect(db_conn_str)
-            conn.close()
-        except Exception as e:
-            logger.warning(f"PostgreSQL connection failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"PostgreSQL connection failed: {e}",
-            )
 
     def ensure_table_exists(self, db_conn_str: str) -> None:
         """
@@ -74,7 +35,7 @@ class SRDBService:
         """
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             create_table_sql = """
@@ -97,14 +58,7 @@ class SRDBService:
             cur.execute(create_table_sql)
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
                 
             logger.info("Ensured systematic_reviews table exists")
         except Exception as e:
@@ -112,10 +66,7 @@ class SRDBService:
             raise
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def build_criteria_parsed(self, criteria_obj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -217,8 +168,6 @@ class SRDBService:
         """
         Create a new SR document and insert into the table. Returns the created document.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
 
         sr_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -229,7 +178,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             insert_sql = """
@@ -276,14 +225,7 @@ class SRDBService:
             if sr_doc.get('updated_at') and isinstance(sr_doc['updated_at'], dt):
                 sr_doc['updated_at'] = sr_doc['updated_at'].isoformat()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return sr_doc
             
@@ -292,10 +234,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create systematic review: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def add_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
@@ -303,8 +242,7 @@ class SRDBService:
         requester must be a member or owner.
         Returns a dict with update result metadata.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+  
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -317,7 +255,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Get current users array
@@ -343,14 +281,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "added_user_id": target_user_id}
             
@@ -361,18 +292,14 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def remove_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Remove a user id from the SR's users list. Owner cannot be removed.
         Enforces requester permissions (must be a member or owner).
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -388,7 +315,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Get current users array
@@ -414,14 +341,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "removed_user_id": target_user_id}
             
@@ -432,10 +352,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def user_has_sr_permission(self, db_conn_str: str, sr_id: str, user_id: str) -> bool:
         """
@@ -444,8 +361,7 @@ class SRDBService:
         Note: this check deliberately ignores the SR's 'visible' flag so membership checks
         work regardless of whether the SR is hidden/soft-deleted.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         doc = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not doc:
@@ -462,8 +378,7 @@ class SRDBService:
         The requester must be a member or owner.
         Returns the updated SR document.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id)
         if not sr or not sr.get("visible", True):
@@ -476,7 +391,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -501,14 +416,7 @@ class SRDBService:
             
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             # Return fresh doc
             doc = self.get_systematic_review(db_conn_str, sr_id)
@@ -521,21 +429,17 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update criteria: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def list_systematic_reviews_for_user(self, db_conn_str: str, user_email: str) -> List[Dict[str, Any]]:
         """
         Return all SR documents where the user is a member (regardless of visible flag).
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             # Query using jsonb operator to check if user_email is in users array
@@ -569,14 +473,7 @@ class SRDBService:
                 
                 results.append(doc)
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return results
             
@@ -585,22 +482,18 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list systematic reviews: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def get_systematic_review(self, db_conn_str: str, sr_id: str, ignore_visibility: bool = False) -> Optional[Dict[str, Any]]:
         """
         Return SR document by id. Returns None if not found.
         If ignore_visibility is False, only returns visible SRs.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             if ignore_visibility:
@@ -612,14 +505,6 @@ class SRDBService:
             row = cur.fetchone()
             
             if not row:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                try:
-                    conn.close()
-                except Exception:
-                    pass
                 return None
             
             cols = [desc[0] for desc in cur.description]
@@ -639,14 +524,7 @@ class SRDBService:
             if doc.get('updated_at') and isinstance(doc['updated_at'], dt):
                 doc['updated_at'] = doc['updated_at'].isoformat()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return doc
             
@@ -655,18 +533,14 @@ class SRDBService:
             return None
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def set_visibility(self, db_conn_str: str, sr_id: str, visible: bool, requester_id: str) -> Dict[str, Any]:
         """
         Set the visible flag on the SR. Only owner is allowed to change visibility.
         Returns update metadata.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not sr:
@@ -677,7 +551,7 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -688,14 +562,7 @@ class SRDBService:
             modified_count = cur.rowcount
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
             return {"matched_count": 1, "modified_count": modified_count, "visible": visible}
             
@@ -704,10 +571,7 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to set visibility: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+               pass
 
     def soft_delete_systematic_review(self, db_conn_str: str, sr_id: str, requester_id: str) -> Dict[str, Any]:
         """
@@ -726,8 +590,7 @@ class SRDBService:
         Permanently remove the SR document. Only owner may hard delete.
         Returns deletion metadata (deleted_count).
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
         if not sr:
@@ -738,22 +601,13 @@ class SRDBService:
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             cur.execute("DELETE FROM systematic_reviews WHERE id = %s", (sr_id,))
             deleted_count = cur.rowcount
             conn.commit()
-            
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-            
+
             return {"deleted_count": deleted_count}
             
         except Exception as e:
@@ -761,22 +615,18 @@ class SRDBService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to hard-delete systematic review: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
 
     def update_screening_db_info(self, db_conn_str: str, sr_id: str, screening_db: Dict[str, Any]) -> None:
         """
         Update the screening_db field in the SR document with screening database metadata.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -786,35 +636,24 @@ class SRDBService:
             )
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
         except Exception as e:
             logger.exception(f"Failed to update screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update screening DB info: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
     def clear_screening_db_info(self, db_conn_str: str, sr_id: str) -> None:
         """
         Remove the screening_db field from the SR document.
         """
-        if not db_conn_str:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Systematic review DB not configured")
+        
 
         conn = None
         try:
-            conn = self._connect(db_conn_str)
+            conn = postgres_server.conn
             cur = conn.cursor()
             
             updated_at = datetime.utcnow().isoformat()
@@ -824,24 +663,14 @@ class SRDBService:
             )
             conn.commit()
             
-            try:
-                cur.close()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+
             
         except Exception as e:
             logger.exception(f"Failed to clear screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear screening DB info: {e}")
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                pass
 
 
 # module-level instance
