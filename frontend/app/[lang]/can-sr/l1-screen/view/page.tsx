@@ -57,7 +57,7 @@ export default function CanSrL1ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
-  const [selectedModel, setSelectedModel] = useState('gpt-4o')
+  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const dict = useDictionary()
 
   // Data states

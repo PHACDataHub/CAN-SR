@@ -20,7 +20,7 @@ export default function Search() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const dict = useDictionary()
-  const [selectedModel, setSelectedModel] = useState('gpt-4o')
+  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const databases = ['Pubmed', 'Scopus', 'EuropePMC']
   const [selectedDatabase, setSelectedDatabase] = useState('')
   const [searchStrings, setSearchString] = useState<Record<string, string>>({})

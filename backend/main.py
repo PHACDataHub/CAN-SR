@@ -31,11 +31,17 @@ async def startup_event():
     print("📚 Initializing systematic review database...", flush=True)
     # Ensure systematic review table exists in PostgreSQL
     try:
-        if settings.POSTGRES_URI:
-            await run_in_threadpool(srdb_service.ensure_table_exists, settings.POSTGRES_URI)
+        # Check if Entra ID or POSTGRES_URI is configured
+        has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
+        has_uri_config = settings.POSTGRES_URI
+        
+        if has_entra_config or has_uri_config:
+            # Pass connection string if available, otherwise None for Entra ID auth
+            db_conn_str = settings.POSTGRES_URI if has_uri_config else None
+            await run_in_threadpool(srdb_service.ensure_table_exists, db_conn_str)
             print("✓ Systematic review table initialized", flush=True)
         else:
-            print("⚠️ POSTGRES_URI not configured - skipping SR table initialization", flush=True)
+            print("⚠️ PostgreSQL not configured - skipping SR table initialization", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)

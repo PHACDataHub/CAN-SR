@@ -17,7 +17,7 @@ export default function CanSrLandingPage() {
   const srId = searchParams?.get('sr_id')
   const dict = useDictionary()
 
-  const [selectedModel, setSelectedModel] = useState('gpt-4o')
+  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const [manageOpen, setManageOpen] = useState(false)
   const token = getAuthToken()
   const tokenType = getTokenType()
