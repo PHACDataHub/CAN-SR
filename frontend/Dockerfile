@@ -16,7 +16,7 @@ RUN npm ci
 FROM base AS build
 
 # Public build-time environment variables
-ARG NEXT_PUBLIC_BACKEND_URL="https://grep-exp-can-sr-api-dv.phac-aspc.gc.ca"
+ARG NEXT_PUBLIC_BACKEND_URL="https://was-sdse-spib-hail-api-dt.azurewebsites.net"
 
 ENV NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
 
@@ -31,8 +31,8 @@ FROM base AS run
 ENV NODE_ENV=production
 ENV PORT=$PORT
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --gid 1001 nodejs
+RUN adduser --uid 1001 --ingroup nodejs --disabled-password --gecos "" nextjs
 RUN mkdir .next
 RUN chown nextjs:nodejs .next
 

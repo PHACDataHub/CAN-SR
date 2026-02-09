@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     # Storage settings
     STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure")
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv(
+        "AZURE_STORAGE_ACCOUNT_NAME"
+    )
     AZURE_STORAGE_CONNECTION_STRING: Optional[str] = os.getenv(
         "AZURE_STORAGE_CONNECTION_STRING"
     )
@@ -108,8 +111,16 @@ class Settings(BaseSettings):
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     # Database and external system environment variables
-    # Postgres DSN used for systematic reviews and screening databases
-    POSTGRES_URI: str = os.getenv("POSTGRES_URI")
+    # Postgres settings for Entra ID authentication
+    POSTGRES_HOST: Optional[str] = os.getenv("POSTGRES_HOST")
+    POSTGRES_DATABASE: Optional[str] = os.getenv("POSTGRES_DATABASE")
+    POSTGRES_USER: Optional[str] = os.getenv("POSTGRES_USER")  # Entra ID user (e.g., user@tenant.onmicrosoft.com)
+    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_SSL_MODE: Optional[str] = os.getenv("POSTGRES_SSL_MODE")
+    POSTGRES_PASSWORD: Optional[str] = os.getenv("POSTGRES_PASSWORD")
+    AZURE_DB: bool = os.getenv("AZURE_DB", "false").lower() == "true"
+    # Legacy: Postgres DSN used for systematic reviews and screening databases (fallback)
+    POSTGRES_URI: Optional[str] = os.getenv("POSTGRES_URI")
 
     # Databricks settings
     DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE")
@@ -123,6 +134,9 @@ class Settings(BaseSettings):
     OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET")
     REDIRECT_URI: str = os.getenv("REDIRECT_URI")
     SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL")
+
+    # Entra
+    USE_ENTRA_AUTH: bool = os.getenv("USE_ENTRA_AUTH", "false").lower() == "true"
 
     class Config:
         case_sensitive = True

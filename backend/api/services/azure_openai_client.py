@@ -1,9 +1,31 @@
 """Azure OpenAI client service for chat completions"""
 
+import time
 from typing import Dict, List, Any, Optional
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
 from ..core.config import settings
+
+# Token cache TTL in seconds (9 minutes)
+TOKEN_CACHE_TTL = 9 * 60
+
+
+class CachedTokenProvider:
+    """Simple in-memory token cache wrapper"""
+
+    def __init__(self, token_provider):
+        self._token_provider = token_provider
+        self._cached_token: Optional[str] = None
+        self._token_expiry: float = 0
+
+    def __call__(self) -> str:
+        """Return cached token or fetch a new one if expired"""
+        current_time = time.time()
+        if self._cached_token is None or current_time >= self._token_expiry:
+            self._cached_token = self._token_provider()
+            self._token_expiry = current_time + TOKEN_CACHE_TTL
+        return self._cached_token
 
 
 class AzureOpenAIClient:
@@ -12,18 +34,27 @@ class AzureOpenAIClient:
     def __init__(self):
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
+        # Create token provider for Azure OpenAI using DefaultAzureCredential
+        # Wrapped with caching to avoid fetching a new token on every request
+        if not settings.AZURE_OPENAI_API_KEY and not settings.USE_ENTRA_AUTH:
+            raise ValueError("Azure OpenAI API key or Entra auth must be configured")
+
+        if settings.USE_ENTRA_AUTH:
+            self._credential = DefaultAzureCredential()
+            self._token_provider = CachedTokenProvider(
+                get_bearer_token_provider(
+                    self._credential, "https://cognitiveservices.azure.com/.default"
+                )
+            )
+
         self.model_configs = {
             "gpt-4.1-mini": {
-                "api_key": settings.AZURE_OPENAI_GPT41_MINI_API_KEY
-                or settings.AZURE_OPENAI_API_KEY,
                 "endpoint": settings.AZURE_OPENAI_GPT41_MINI_ENDPOINT
                 or settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_GPT41_MINI_DEPLOYMENT,
                 "api_version": settings.AZURE_OPENAI_GPT41_MINI_API_VERSION,
             },
             "gpt-5-mini": {
-                "api_key": settings.AZURE_OPENAI_GPT5_MINI_API_KEY
-                or settings.AZURE_OPENAI_API_KEY,
                 "endpoint": settings.AZURE_OPENAI_GPT5_MINI_ENDPOINT
                 or settings.AZURE_OPENAI_ENDPOINT,
                 "deployment": settings.AZURE_OPENAI_GPT5_MINI_DEPLOYMENT,
@@ -43,16 +74,22 @@ class AzureOpenAIClient:
         """Get official Azure OpenAI client instance"""
         if model not in self._official_clients:
             config = self._get_model_config(model)
-            if not config.get("api_key"):
+            if not config.get("endpoint"):
                 raise ValueError(
-                    f"Azure OpenAI API key not configured for model {model}"
+                    f"Azure OpenAI endpoint not configured for model {model}"
                 )
 
-            self._official_clients[model] = AzureOpenAI(
-                api_key=config["api_key"],
-                azure_endpoint=config["endpoint"],
-                api_version=config["api_version"],
-            )
+            azure_openai_kwargs = {
+                "azure_endpoint": config["endpoint"],
+                "api_version": config["api_version"],
+            }
+            if settings.USE_ENTRA_AUTH:
+                azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
+            
+            if settings.AZURE_OPENAI_API_KEY:
+                azure_openai_kwargs["api_key"] = settings.AZURE_OPENAI_API_KEY
+
+            self._official_clients[model] = AzureOpenAI(**azure_openai_kwargs)
 
         return self._official_clients[model]
 
@@ -99,7 +136,6 @@ class AzureOpenAIClient:
 
         try:
             client = self._get_official_client(model)
-
             request_kwargs = {
                 "model": deployment,
                 "messages": messages,
@@ -301,7 +337,7 @@ Guidelines:
         return [
             model
             for model, config in self.model_configs.items()
-            if config.get("api_key") and config.get("endpoint")
+            if config.get("endpoint")
         ]
 
     def is_configured(self) -> bool:

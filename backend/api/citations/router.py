@@ -27,7 +27,6 @@ from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-
 from ..services.sr_db_service import srdb_service
 
 from ..core.security import get_current_active_user
@@ -36,6 +35,34 @@ from ..services.cit_db_service import cits_dp_service, snake_case, parse_dsn
 from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
+
+
+def _get_db_conn_str() -> Optional[str]:
+    """
+    Get database connection string for PostgreSQL.
+    
+    If POSTGRES_URI is set, returns it directly (local development).
+    If Entra ID env variables are configured (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER),
+    returns None to signal that connect_postgres() should use Entra ID authentication.
+    """
+    if settings.POSTGRES_URI:
+        return settings.POSTGRES_URI
+    
+    # If Entra ID config is available, return None to let connect_postgres use token auth
+    if settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER:
+        return None
+    
+    # No configuration available - return None, let downstream handle the error
+    return None
+
+
+def _is_postgres_configured() -> bool:
+    """
+    Check if PostgreSQL is configured via Entra ID env vars or connection string.
+    """
+    has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
+    has_uri_config = settings.POSTGRES_URI
+    return bool(has_entra_config or has_uri_config)
 
 
 class UploadResult(BaseModel):
@@ -75,7 +102,7 @@ async def upload_screening_csv(
     - The SR must exist and the user must be a member of the SR (or owner).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, _ = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
     except HTTPException:
@@ -83,13 +110,13 @@ async def upload_screening_csv(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
 
-    # Shared DB connection string
-    db_conn = settings.POSTGRES_URI
-    if not db_conn:
+    # Check admin DSN (use centralized settings) - need either Entra ID config or POSTGRES_URI
+    if not _is_postgres_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="PostgreSQL connection not configured. Set POSTGRES_URI in configuration/environment.",
+            detail="Postgres not configured. Set POSTGRES_HOST/DATABASE/USER for Entra ID auth, or POSTGRES_URI for local dev.",
         )
+    admin_dsn = _get_db_conn_str()
 
     # Read CSV content
     include_columns = None
@@ -114,14 +141,14 @@ async def upload_screening_csv(
     try:
         old = (sr.get("screening_db") or {}).get("table_name")
         if old:
-            await run_in_threadpool(cits_dp_service.drop_table, db_conn, old)
+            await run_in_threadpool(cits_dp_service.drop_table, admin_dsn, old)
     except Exception:
         # best-effort only
         pass
 
     # Create table and insert rows in threadpool
     try:
-        inserted = await run_in_threadpool(_create_table_and_insert_sync, db_conn, table_name, include_columns, normalized_rows)
+        inserted = await run_in_threadpool(_create_table_and_insert_sync, admin_dsn, table_name, include_columns, normalized_rows)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -131,7 +158,7 @@ async def upload_screening_csv(
     try:
         screening_info = {
             "screening_db": {
-                "connection_string": db_conn,
+                "connection_string": admin_dsn,
                 "table_name": table_name,
                 "created_at": datetime.utcnow().isoformat(),
                 "rows": inserted,
@@ -141,7 +168,7 @@ async def upload_screening_csv(
         # Update SR document with screening DB info using PostgreSQL
         await run_in_threadpool(
             srdb_service.update_screening_db_info,
-            settings.POSTGRES_URI,
+            _get_db_conn_str(),
             sr_id,
             screening_info["screening_db"]
         )
@@ -171,7 +198,7 @@ async def list_citation_ids(
 
     Returns a simple list of integers (the 'id' primary key from the citations table).
     """
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -210,7 +237,7 @@ async def get_citation_by_id(
     Returns: a JSON object representing the citation row (keys are DB column names).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -263,7 +290,7 @@ async def build_combined_citation(
     the format "<ColumnName>: <value>  \\n" for each included column, in the order provided.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -318,7 +345,7 @@ async def upload_citation_fulltext(
       to the storage path (container/blob).
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -414,7 +441,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     - Caller must be the SR owner.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
     except HTTPException:
@@ -429,9 +456,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     if not screening:
         return {"status": "no_screening_db", "message": "No screening table configured for this SR", "deleted_table": False, "deleted_files": 0}
 
-    db_conn = screening.get("connection_string")
-    if not db_conn:
-        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_table": False, "deleted_files": 0}
+    db_conn = None
 
     table_name = screening.get("table_name")
     if not table_name:
@@ -521,7 +546,7 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     try:
         await run_in_threadpool(
             srdb_service.clear_screening_db_info,
-            settings.POSTGRES_URI,
+            _get_db_conn_str(),
             sr_id
         )
     except Exception:
@@ -557,7 +582,7 @@ async def export_citations_csv(
       Content-Disposition.
     """
 
-    db_conn_str = settings.POSTGRES_URI
+    db_conn_str = _get_db_conn_str()
     try:
         sr, screening, db_conn = await load_sr_and_check(
             sr_id, current_user, db_conn_str, srdb_service

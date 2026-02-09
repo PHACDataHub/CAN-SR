@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 
@@ -19,12 +20,19 @@ class AzureStorageService:
     """Service for managing user data in Azure Blob Storage"""
 
     def __init__(self):
-        if not settings.AZURE_STORAGE_CONNECTION_STRING:
-            raise ValueError("Azure Storage connection string not configured")
+        if not settings.AZURE_STORAGE_ACCOUNT_NAME and not settings.AZURE_STORAGE_CONNECTION_STRING:
+            raise ValueError("AZURE_STORAGE_ACCOUNT_NAME or AZURE_STORAGE_CONNECTION_STRING must be configured")
 
-        self.blob_service_client = BlobServiceClient.from_connection_string(
-            settings.AZURE_STORAGE_CONNECTION_STRING
-        )
+        if settings.AZURE_STORAGE_ACCOUNT_NAME:
+            account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+            credential = DefaultAzureCredential()
+            self.blob_service_client = BlobServiceClient(
+                account_url=account_url, credential=credential
+            )
+        elif settings.AZURE_STORAGE_CONNECTION_STRING:
+            self.blob_service_client = BlobServiceClient.from_connection_string(
+                settings.AZURE_STORAGE_CONNECTION_STRING
+            )
         self.container_name = settings.AZURE_STORAGE_CONTAINER_NAME
 
         self._ensure_container_exists()
@@ -354,5 +362,5 @@ class AzureStorageService:
 
 # Global storage service instance
 storage_service = (
-    AzureStorageService() if settings.AZURE_STORAGE_CONNECTION_STRING else None
+    AzureStorageService() if settings.AZURE_STORAGE_ACCOUNT_NAME else None
 )
