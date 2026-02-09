@@ -30,12 +30,16 @@ services:
   # GROBID SERVICE - PDF Parsing for Full-Text Extraction
   # =============================================================================
   grobid-service:
-    image: grobid/grobid:0.8.2-crf
+    image: grobid/grobid:0.8.2
     container_name: grobid-service
     ports:
       - "8070:8070"
       - "8081:8081"
     restart: unless-stopped
+    environment:
+    _JAVA_OPTIONS: >
+      -Djava.lang.management.disableSystemMetrics=true
+      -XX:-UseContainerSupport
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8070/api/isalive"]
       interval: 30s
@@ -47,7 +51,7 @@ services:
   # POSTGRESQL - Database (Citations & Systematic Reviews)
   # =============================================================================
   pgdb-service:
-    image: postgres
+    image: pgvector/pgvector:pg16
     container_name: pgdb-service
     restart: unless-stopped
     environment:
