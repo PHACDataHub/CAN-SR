@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -69,6 +69,9 @@ export default function LoginPage() {
       setIsLoading(false)
     }
   }
+
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="flex min-h-screen overflow-hidden">
@@ -182,7 +185,7 @@ export default function LoginPage() {
             <p className="text-sm text-gray-600">
               {dict.login.noAccount}{' '}
               <Link
-                href="/register"
+                href={`/${lang}/register`}
                 className="font-medium text-blue-600 transition-colors hover:text-blue-800"
               >
                 {dict.login.registerHere}
