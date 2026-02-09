@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     DESCRIPTION: str = os.getenv(
         "DESCRIPTION", "AI-powered systematic review platform for Government of Canada"
     )
-    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED")
+    # IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED") # ns: assume it's running locally not deployed
+    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED", "false").lower() == "true"
 
     # CORS
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
@@ -125,18 +126,18 @@ class Settings(BaseSettings):
     # Postgres DSN used for systematic reviews and screening databases
     POSTGRES_URI: str = os.getenv("POSTGRES_URI")
 
-    # Databricks settings
-    DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE")
-    DATABRICKS_TOKEN: str = os.getenv("DATABRICKS_TOKEN")
-    JOB_ID_EUROPEPMC: str = os.getenv("JOB_ID_EUROPEPMC")
-    JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED")
-    JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS")
+    # Databricks settings (ns: testing optional to see if pydantic_core.ValidationError persists)
+    DATABRICKS_INSTANCE: Optional[str] = os.getenv("DATABRICKS_INSTANCE")
+    DATABRICKS_TOKEN: Optional[str] = os.getenv("DATABRICKS_TOKEN")
+    JOB_ID_EUROPEPMC: Optional[str] = os.getenv("JOB_ID_EUROPEPMC")
+    JOB_ID_PUBMED: Optional[str] = os.getenv("JOB_ID_PUBMED")
+    JOB_ID_SCOPUS: Optional[str] = os.getenv("JOB_ID_SCOPUS")
 
-    # OAuth
-    OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID")
-    OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET")
-    REDIRECT_URI: str = os.getenv("REDIRECT_URI")
-    SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL")
+    # OAuth (ns: testing optional to see if pydantic_core.ValidationError persists)
+    OAUTH_CLIENT_ID: Optional[str] = os.getenv("OAUTH_CLIENT_ID")
+    OAUTH_CLIENT_SECRET: Optional[str] = os.getenv("OAUTH_CLIENT_SECRET")
+    REDIRECT_URI: Optional[str] = os.getenv("REDIRECT_URI")
+    SSO_LOGIN_URL: Optional[str] = os.getenv("SSO_LOGIN_URL")
 
     class Config:
         case_sensitive = True
