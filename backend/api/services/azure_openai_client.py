@@ -29,6 +29,14 @@ class AzureOpenAIClient:
                 "deployment": settings.AZURE_OPENAI_GPT5_MINI_DEPLOYMENT,
                 "api_version": settings.AZURE_OPENAI_GPT5_MINI_API_VERSION,
             },
+            "embedding": {
+                "api_key": settings.AZURE_OPENAI_EMBEDDING_API_KEY
+                or settings.AZURE_OPENAI_API_KEY,
+                "endpoint": settings.AZURE_OPENAI_EMBEDDING_ENDPOINT
+                or settings.AZURE_OPENAI_ENDPOINT,
+                "deployment": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+                "api_version": settings.AZURE_OPENAI_EMBEDDING_API_VERSION,
+            },
         }
 
         self._official_clients: Dict[str, AzureOpenAI] = {}
@@ -307,6 +315,41 @@ Guidelines:
     def is_configured(self) -> bool:
         """Check if Azure OpenAI is properly configured"""
         return len(self.get_available_models()) > 0
+
+    async def get_embeddings(self, text: str, model: str = "embedding") -> List[float]:
+        """
+        Get embeddings for a text string using Azure OpenAI
+
+        Args:
+            text: Text to get embeddings for
+            model: Model identifier (defaults to "embedding" configured in __init__)
+
+        Returns:
+            List of floats representing the embedding vector
+        """
+        try:
+            # Ensure text is not empty
+            if not text:
+                return []
+
+            client = self._get_official_client(model)
+            config = self._get_model_config(model)
+            deployment = config["deployment"]
+
+            # Replace newlines with spaces for better embeddings (common practice)
+            cleaned_text = text.replace("\n", " ")
+
+            response = client.embeddings.create(
+                input=[cleaned_text], model=deployment
+            )
+
+            return response.data[0].embedding
+
+        except Exception as e:
+            print(f"Error getting embeddings: {e}")
+            # Return empty list on error to avoid crashing the caller, 
+            # but caller should check for empty list
+            return []
 
 
 # Global Azure OpenAI client instance

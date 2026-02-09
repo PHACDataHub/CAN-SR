@@ -165,3 +165,9 @@ backend/api/citations/test.ipynb
 file1.csv
 */criteria_config_measles_updated.yaml
 AGENTS_ROADMAP.md
+
+# venv
+venv/
+
+# duplicate repo folder
+CAN-SR/

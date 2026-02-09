@@ -12,6 +12,7 @@ load_dotenv(env_path)
 from api.router import api_router
 from api.core.config import settings
 from api.services.sr_db_service import srdb_service
+from api.services.vector_db import vector_db_service
 
 
 app = FastAPI(
@@ -38,6 +39,21 @@ async def startup_event():
             print("⚠️ POSTGRES_URI not configured - skipping SR table initialization", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
+
+    print("🧠 Initializing vector database...", flush=True)
+    try:
+        if settings.POSTGRES_URI:
+            # We don't need run_in_threadpool here as ensure_schema uses sync DB calls but is fast enough for startup
+            # and run_in_threadpool is for async routes mostly. But for consistency/safety:
+            await run_in_threadpool(vector_db_service.ensure_schema)
+            print("✓ Vector database initialized", flush=True)
+        else:
+            print("⚠️ POSTGRES_URI not configured - skipping Vector DB initialization", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to ensure Vector DB schema exists: {e}", flush=True)
+
     print("🎯 CAN-SR Backend ready!", flush=True)
 
     

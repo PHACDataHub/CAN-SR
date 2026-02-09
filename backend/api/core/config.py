@@ -92,6 +92,20 @@ class Settings(BaseSettings):
         "AZURE_OPENAI_GPT5_MINI_API_VERSION", "2025-08-07"
     )
 
+    # Embedding configuration
+    AZURE_OPENAI_EMBEDDING_API_KEY: Optional[str] = os.getenv(
+        "AZURE_OPENAI_EMBEDDING_API_KEY"
+    )
+    AZURE_OPENAI_EMBEDDING_ENDPOINT: Optional[str] = os.getenv(
+        "AZURE_OPENAI_EMBEDDING_ENDPOINT"
+    )
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT: str = os.getenv(
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small"
+    )
+    AZURE_OPENAI_EMBEDDING_API_VERSION: str = os.getenv(
+        "AZURE_OPENAI_EMBEDDING_API_VERSION", "2023-05-15"
+    )
+
     # Default model to use
     DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-5-mini")
 

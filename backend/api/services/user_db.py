@@ -108,8 +108,6 @@ class UserDatabaseService:
             if await self._save_user_registry(registry):
                 # Create user directory structure in storage
                 from .storage import storage_service
-                from .dual_milvus_manager import dual_milvus_manager
-                from .base_knowledge_manager import base_knowledge_manager
 
                 if storage_service:
                     await storage_service.create_user_directory(user_id)
