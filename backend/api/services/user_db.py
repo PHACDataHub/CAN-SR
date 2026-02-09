@@ -18,14 +18,19 @@ class UserDatabaseService:
     """Service for managing user data in Azure Blob Storage"""
 
     def __init__(self):
-        if not settings.AZURE_STORAGE_ACCOUNT_NAME:
-            raise ValueError("AZURE_STORAGE_ACCOUNT_NAME is not configured")
+        if not settings.AZURE_STORAGE_ACCOUNT_NAME and not settings.AZURE_STORAGE_CONNECTION_STRING:
+            raise ValueError("AZURE_STORAGE_ACCOUNT_NAME or AZURE_STORAGE_CONNECTION_STRING must be configured")
 
-        account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
-        credential = DefaultAzureCredential()
-        self.blob_service_client = BlobServiceClient(
-            account_url=account_url, credential=credential
-        )
+        if settings.AZURE_STORAGE_ACCOUNT_NAME:
+            account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+            credential = DefaultAzureCredential()
+            self.blob_service_client = BlobServiceClient(
+                account_url=account_url, credential=credential
+            )
+        elif settings.AZURE_STORAGE_CONNECTION_STRING:
+            self.blob_service_client = BlobServiceClient.from_connection_string(
+                settings.AZURE_STORAGE_CONNECTION_STRING
+            )
 
         self.container_name = settings.AZURE_STORAGE_CONTAINER_NAME
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

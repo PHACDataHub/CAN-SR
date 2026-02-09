@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     REDIRECT_URI: str = os.getenv("REDIRECT_URI")
     SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL")
 
+    # Entra
+    USE_ENTRA_AUTH: bool = os.getenv("USE_ENTRA_AUTH", "false").lower() == "true"
+
     class Config:
         case_sensitive = True
         env_file = ".env"

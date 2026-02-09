@@ -36,12 +36,16 @@ class AzureOpenAIClient:
 
         # Create token provider for Azure OpenAI using DefaultAzureCredential
         # Wrapped with caching to avoid fetching a new token on every request
-        self._credential = DefaultAzureCredential()
-        self._token_provider = CachedTokenProvider(
-            get_bearer_token_provider(
-                self._credential, "https://cognitiveservices.azure.com/.default"
+        if not settings.AZURE_OPENAI_API_KEY and not settings.USE_ENTRA_AUTH:
+            raise ValueError("Azure OpenAI API key or Entra auth must be configured")
+
+        if settings.USE_ENTRA_AUTH:
+            self._credential = DefaultAzureCredential()
+            self._token_provider = CachedTokenProvider(
+                get_bearer_token_provider(
+                    self._credential, "https://cognitiveservices.azure.com/.default"
+                )
             )
-        )
 
         self.model_configs = {
             "gpt-4.1-mini": {
@@ -75,11 +79,17 @@ class AzureOpenAIClient:
                     f"Azure OpenAI endpoint not configured for model {model}"
                 )
 
-            self._official_clients[model] = AzureOpenAI(
-                azure_ad_token_provider=self._token_provider,
-                azure_endpoint=config["endpoint"],
-                api_version=config["api_version"],
-            )
+            azure_openai_kwargs = {
+                "azure_endpoint": config["endpoint"],
+                "api_version": config["api_version"],
+            }
+            if settings.USE_ENTRA_AUTH:
+                azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
+            
+            if settings.AZURE_OPENAI_API_KEY:
+                azure_openai_kwargs["api_key"] = settings.AZURE_OPENAI_API_KEY
+
+            self._official_clients[model] = AzureOpenAI(**azure_openai_kwargs)
 
         return self._official_clients[model]
 
