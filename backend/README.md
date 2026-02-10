@@ -75,25 +75,27 @@ ENTRA_AZURE_STORAGE_CONTAINER_NAME=your-container
 # Postgres configuration
 POSTGRES_MODE=docker  # docker | local | azure
 
-# Docker Postgres (docker-compose)
-DOCKER_POSTGRES_HOST=pgdb-service
-DOCKER_POSTGRES_DATABASE=postgres
-DOCKER_POSTGRES_USER=admin
-DOCKER_POSTGRES_PASSWORD=password
+# Canonical Postgres connection settings (single set)
+# - docker/local: POSTGRES_PASSWORD is required
+# - azure: POSTGRES_PASSWORD is ignored (Entra token auth via DefaultAzureCredential)
+POSTGRES_HOST=pgdb-service
+POSTGRES_DATABASE=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=password
 
-# Local Postgres (developer machine) - also used as fallback if configured
-LOCAL_POSTGRES_HOST=localhost
-LOCAL_POSTGRES_DATABASE=grep
-LOCAL_POSTGRES_USER=postgres
-LOCAL_POSTGRES_PASSWORD=123
+# Local Postgres (developer machine)
+# POSTGRES_MODE=local
+# POSTGRES_HOST=localhost
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=123
 
 # Azure Database for PostgreSQL (Entra auth)
-AZURE_POSTGRES_HOST=<your-azure-postgres-hostname>
-AZURE_POSTGRES_DATABASE=<db>
-AZURE_POSTGRES_USER=<your-entra-upn>
-
-# Note: the backend will always try POSTGRES_MODE first and fall back to LOCAL
-# if LOCAL_POSTGRES_* is fully configured.
+# POSTGRES_MODE=azure
+# POSTGRES_HOST=<your-azure-postgres-hostname>
+# POSTGRES_DATABASE=<db>
+# POSTGRES_USER=<your-entra-upn>
+# POSTGRES_PASSWORD=  # not used in azure mode
 
 # GROBID Service
 GROBID_SERVICE_URL=http://grobid-service:8070
@@ -263,17 +265,10 @@ docker compose restart api
 |----------|-------------|---------|
 | `MONGODB_URI` | MongoDB connection string | `mongodb://sr-mongodb-service:27017/mongodb-sr` |
 | `POSTGRES_MODE` | Postgres connection mode: `docker` \| `local` \| `azure` | `docker` |
-| `DOCKER_POSTGRES_HOST` | Docker Postgres host (compose service name) | `pgdb-service` |
-| `DOCKER_POSTGRES_DATABASE` | Docker Postgres database | `postgres` |
-| `DOCKER_POSTGRES_USER` | Docker Postgres user | `admin` |
-| `DOCKER_POSTGRES_PASSWORD` | Docker Postgres password | `password` |
-| `LOCAL_POSTGRES_HOST` | Local Postgres host | `localhost` |
-| `LOCAL_POSTGRES_DATABASE` | Local Postgres database | `grep` |
-| `LOCAL_POSTGRES_USER` | Local Postgres user | `postgres` |
-| `LOCAL_POSTGRES_PASSWORD` | Local Postgres password | `123` |
-| `AZURE_POSTGRES_HOST` | Azure Postgres host | `...postgres.database.azure.com` |
-| `AZURE_POSTGRES_DATABASE` | Azure Postgres database | `grep` |
-| `AZURE_POSTGRES_USER` | Azure Postgres user (Entra UPN or role) | `HAIL-DBAs` |
+| `POSTGRES_HOST` | Postgres host (docker: service name; local: localhost; azure: FQDN) | `pgdb-service` |
+| `POSTGRES_DATABASE` | Postgres database name | `postgres` |
+| `POSTGRES_USER` | Postgres user (azure: Entra UPN or role) | `admin` |
+| `POSTGRES_PASSWORD` | Postgres password (ignored when POSTGRES_MODE=azure) | `password` |
 | `GROBID_SERVICE_URL` | GROBID service URL | `http://grobid-service:8070` |
 | `DATABRICKS_INSTANCE` | Databricks workspace URL | - |
 | `DATABRICKS_TOKEN` | Databricks access token | - |

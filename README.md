@@ -244,22 +244,27 @@ MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
 # Postgres configuration
 POSTGRES_MODE=docker  # docker | local | azure
 
-# Docker Postgres (docker-compose)
-DOCKER_POSTGRES_HOST=pgdb-service
-DOCKER_POSTGRES_DATABASE=postgres
-DOCKER_POSTGRES_USER=admin
-DOCKER_POSTGRES_PASSWORD=password
+# Canonical Postgres connection settings (single set)
+# - docker/local: POSTGRES_PASSWORD is required
+# - azure: POSTGRES_PASSWORD is ignored (Entra token auth via DefaultAzureCredential)
+POSTGRES_HOST=pgdb-service
+POSTGRES_DATABASE=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=password
 
-# Local Postgres (developer machine) - also used as fallback if configured
-# LOCAL_POSTGRES_HOST=localhost
-# LOCAL_POSTGRES_DATABASE=grep
-# LOCAL_POSTGRES_USER=postgres
-# LOCAL_POSTGRES_PASSWORD=123
+# Local Postgres (developer machine)
+# POSTGRES_MODE=local
+# POSTGRES_HOST=localhost
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=123
 
 # Azure Database for PostgreSQL (Entra auth)
-# AZURE_POSTGRES_HOST=...postgres.database.azure.com
-# AZURE_POSTGRES_DATABASE=grep
-# AZURE_POSTGRES_USER=<entra-upn-or-role>
+# POSTGRES_MODE=azure
+# POSTGRES_HOST=...postgres.database.azure.com
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=<entra-upn-or-role>
+# POSTGRES_PASSWORD=  # not used in azure mode
 
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-instance
