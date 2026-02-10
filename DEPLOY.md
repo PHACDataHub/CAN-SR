@@ -306,7 +306,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES=10080
 
 # Databases (configured in docker-compose.yml)
 MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
-POSTGRES_URI=postgres://admin:password@cit-pgdb-service:5432/postgres-cits
+POSTGRES_MODE=docker
+DOCKER_POSTGRES_HOST=pgdb-service
+DOCKER_POSTGRES_DATABASE=postgres
+DOCKER_POSTGRES_USER=admin
+DOCKER_POSTGRES_PASSWORD=password
 
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-databricks-instance

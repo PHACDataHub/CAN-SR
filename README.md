@@ -224,8 +224,27 @@ AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 AZURE_STORAGE_CONNECTION_STRING=your-connection-string
 
 # Databases
-MONGODB_URI=mongodb://localhost:27017/mongodb-sr
-POSTGRES_URI=postgres://admin:password@localhost:5432/postgres-cits
+MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
+
+# Postgres configuration
+POSTGRES_MODE=docker  # docker | local | azure
+
+# Docker Postgres (docker-compose)
+DOCKER_POSTGRES_HOST=pgdb-service
+DOCKER_POSTGRES_DATABASE=postgres
+DOCKER_POSTGRES_USER=admin
+DOCKER_POSTGRES_PASSWORD=password
+
+# Local Postgres (developer machine) - also used as fallback if configured
+# LOCAL_POSTGRES_HOST=localhost
+# LOCAL_POSTGRES_DATABASE=grep
+# LOCAL_POSTGRES_USER=postgres
+# LOCAL_POSTGRES_PASSWORD=123
+
+# Azure Database for PostgreSQL (Entra auth)
+# AZURE_POSTGRES_HOST=...postgres.database.azure.com
+# AZURE_POSTGRES_DATABASE=grep
+# AZURE_POSTGRES_USER=<entra-upn-or-role>
 
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-instance

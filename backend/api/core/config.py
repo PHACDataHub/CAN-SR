@@ -110,17 +110,77 @@ class Settings(BaseSettings):
     )
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
-    # Database and external system environment variables
-    # Postgres settings for Entra ID authentication
-    POSTGRES_HOST: Optional[str] = os.getenv("POSTGRES_HOST")
-    POSTGRES_DATABASE: Optional[str] = os.getenv("POSTGRES_DATABASE")
-    POSTGRES_USER: Optional[str] = os.getenv("POSTGRES_USER")  # Entra ID user (e.g., user@tenant.onmicrosoft.com)
-    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
-    POSTGRES_SSL_MODE: Optional[str] = os.getenv("POSTGRES_SSL_MODE")
-    POSTGRES_PASSWORD: Optional[str] = os.getenv("POSTGRES_PASSWORD")
-    AZURE_DB: bool = os.getenv("AZURE_DB", "false").lower() == "true"
-    # Legacy: Postgres DSN used for systematic reviews and screening databases (fallback)
+    # -------------------------------------------------------------------------
+    # Postgres configuration
+    # -------------------------------------------------------------------------
+    # A single selector, with three isolated profiles (AZURE_/DOCKER_/LOCAL_)
+    POSTGRES_MODE: str = os.getenv("POSTGRES_MODE", "docker").lower().strip()  # docker|local|azure
+
+    # Docker profile (typically for docker-compose)
+    DOCKER_POSTGRES_HOST: Optional[str] = os.getenv("DOCKER_POSTGRES_HOST")
+    DOCKER_POSTGRES_DATABASE: Optional[str] = os.getenv("DOCKER_POSTGRES_DATABASE")
+    DOCKER_POSTGRES_USER: Optional[str] = os.getenv("DOCKER_POSTGRES_USER")
+    DOCKER_POSTGRES_PASSWORD: Optional[str] = os.getenv("DOCKER_POSTGRES_PASSWORD")
+    DOCKER_POSTGRES_PORT: int = int(os.getenv("DOCKER_POSTGRES_PORT", "5432"))
+
+    # Local profile (developer machine)
+    LOCAL_POSTGRES_HOST: str = os.getenv("LOCAL_POSTGRES_HOST", "localhost")
+    LOCAL_POSTGRES_DATABASE: Optional[str] = os.getenv("LOCAL_POSTGRES_DATABASE")
+    LOCAL_POSTGRES_USER: Optional[str] = os.getenv("LOCAL_POSTGRES_USER")
+    LOCAL_POSTGRES_PASSWORD: Optional[str] = os.getenv("LOCAL_POSTGRES_PASSWORD")
+    LOCAL_POSTGRES_PORT: int = int(os.getenv("LOCAL_POSTGRES_PORT", "5432"))
+
+    # Azure profile (Azure Database for PostgreSQL) using Entra token auth
+    AZURE_POSTGRES_HOST: Optional[str] = os.getenv("AZURE_POSTGRES_HOST")
+    AZURE_POSTGRES_DATABASE: Optional[str] = os.getenv("AZURE_POSTGRES_DATABASE")
+    AZURE_POSTGRES_USER: Optional[str] = os.getenv("AZURE_POSTGRES_USER")
+    AZURE_POSTGRES_PORT: int = int(os.getenv("AZURE_POSTGRES_PORT", "5432"))
+    AZURE_POSTGRES_SSL_MODE: str = os.getenv("AZURE_POSTGRES_SSL_MODE", "require")
+
+    # Deprecated (will be removed): legacy Postgres DSN
     POSTGRES_URI: Optional[str] = os.getenv("POSTGRES_URI")
+
+    def postgres_profile(self, mode: Optional[str] = None) -> dict:
+        """Return resolved Postgres connection settings for a specific mode."""
+        m = (mode or self.POSTGRES_MODE or "").lower().strip()
+        if m not in {"docker", "local", "azure"}:
+            raise ValueError("POSTGRES_MODE must be one of: docker, local, azure")
+
+        if m == "docker":
+            return {
+                "mode": "docker",
+                "host": self.DOCKER_POSTGRES_HOST or "pgdb-service",
+                "database": self.DOCKER_POSTGRES_DATABASE,
+                "user": self.DOCKER_POSTGRES_USER,
+                "password": self.DOCKER_POSTGRES_PASSWORD,
+                "port": self.DOCKER_POSTGRES_PORT,
+                "sslmode": None,
+            }
+
+        if m == "local":
+            return {
+                "mode": "local",
+                "host": self.LOCAL_POSTGRES_HOST or "localhost",
+                "database": self.LOCAL_POSTGRES_DATABASE,
+                "user": self.LOCAL_POSTGRES_USER,
+                "password": self.LOCAL_POSTGRES_PASSWORD,
+                "port": self.LOCAL_POSTGRES_PORT,
+                "sslmode": None,
+            }
+
+        # azure
+        return {
+            "mode": "azure",
+            "host": self.AZURE_POSTGRES_HOST,
+            "database": self.AZURE_POSTGRES_DATABASE,
+            "user": self.AZURE_POSTGRES_USER,
+            "password": None,
+            "port": self.AZURE_POSTGRES_PORT,
+            "sslmode": self.AZURE_POSTGRES_SSL_MODE or "require",
+        }
+
+    def has_local_fallback(self) -> bool:
+        return bool(self.LOCAL_POSTGRES_DATABASE and self.LOCAL_POSTGRES_USER and self.LOCAL_POSTGRES_PASSWORD)
 
     # Databricks settings
     DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE")

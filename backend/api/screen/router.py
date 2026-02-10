@@ -79,9 +79,8 @@ async def classify_citation(
     The 'selected' field in the returned JSON is validated against the provided `options`.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -223,9 +222,8 @@ async def human_classify_citation(
     The column name is prefixed with 'human_' to distinguish from automated classifications.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:

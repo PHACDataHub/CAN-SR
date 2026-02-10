@@ -28,28 +28,6 @@ from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
 
-# Helper to get database connection string
-def _get_db_conn_str() -> Optional[str]:
-    """
-    Get database connection string for PostgreSQL.
-    
-    If POSTGRES_URI is set, returns it directly (local development).
-    If Entra ID env variables are configured (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER),
-    returns None to signal that connect_postgres() should use Entra ID authentication.
-    """
-    if settings.POSTGRES_URI:
-        return settings.POSTGRES_URI
-    
-    # If Entra ID config is available, return None to let connect_postgres use token auth
-    if settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER:
-        return None
-    
-    # No configuration available
-    raise ValueError(
-        "PostgreSQL not configured. Set POSTGRES_URI for local development, "
-        "or POSTGRES_HOST, POSTGRES_DATABASE, and POSTGRES_USER for Entra ID authentication."
-    )
-
 class SystematicReviewCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -98,7 +76,6 @@ async def create_systematic_review(
     One of criteria_file or criteria_yaml may be provided. If both are provided, criteria_file takes precedence.
     The created SR is stored in PostgreSQL and the creating user is added as the first member.
     """
-    db_conn_str = _get_db_conn_str()
 
     if not name or not name.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
@@ -134,7 +111,6 @@ async def create_systematic_review(
     try:
         sr_doc = await run_in_threadpool(
             srdb_service.create_systematic_review,
-            db_conn_str,
             name,
             description,
             criteria_str,
@@ -187,9 +163,8 @@ async def add_user_to_systematic_review(
     The endpoint checks that the requester is a member of the SR.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -203,7 +178,7 @@ async def add_user_to_systematic_review(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email")
 
     try:
-        res = await run_in_threadpool(srdb_service.add_user, db_conn_str, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get("id"))
     except HTTPException:
         raise
     except Exception as e:
@@ -225,10 +200,8 @@ async def remove_user_from_systematic_review(
     The endpoint checks that the requester is a member of the SR (or owner).
     The owner cannot be removed via this endpoint.
     """
-
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -246,7 +219,7 @@ async def remove_user_from_systematic_review(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove the owner from the systematic review")
 
     try:
-        res = await run_in_threadpool(srdb_service.remove_user, db_conn_str, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get("id"))
     except HTTPException:
         raise
     except Exception as e:
@@ -263,12 +236,11 @@ async def list_systematic_reviews_for_user(
     List all systematic reviews the current user has access to (is a member of).
     Hidden/deleted SRs (visible == False) are excluded.
     """
-    db_conn_str = _get_db_conn_str()
 
     user_id = current_user.get("email")
     results = []
     try:
-        docs = await run_in_threadpool(srdb_service.list_systematic_reviews_for_user, db_conn_str, user_id)
+        docs = await run_in_threadpool(srdb_service.list_systematic_reviews_for_user, user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -301,9 +273,8 @@ async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depen
     Get a single systematic review by id. User must be a member to view.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -336,9 +307,8 @@ async def get_systematic_review_criteria_parsed(
     Returns an empty dict if no parsed criteria are available.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -363,9 +333,8 @@ async def update_systematic_review_criteria(
     The parsed criteria (dict) and the raw YAML are both saved to the SR document.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -402,7 +371,7 @@ async def update_systematic_review_criteria(
 
     # perform update
     try:
-        doc = await run_in_threadpool(srdb_service.update_criteria, db_conn_str, sr_id, criteria_obj, criteria_str, current_user.get("id"))
+        doc = await run_in_threadpool(srdb_service.update_criteria, sr_id, criteria_obj, criteria_str, current_user.get("id"))
     except HTTPException:
         raise
     except Exception as e:
@@ -432,9 +401,8 @@ async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = De
     Only the owner may delete a systematic review.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -445,7 +413,7 @@ async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = De
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may delete this systematic review")
 
     try:
-        res = await run_in_threadpool(srdb_service.soft_delete_systematic_review, db_conn_str, sr_id, requester_id)
+        res = await run_in_threadpool(srdb_service.soft_delete_systematic_review, sr_id, requester_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -462,9 +430,8 @@ async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = 
     Only the owner may undelete a systematic review.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False, require_visible=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -475,7 +442,7 @@ async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may undelete this systematic review")
 
     try:
-        res = await run_in_threadpool(srdb_service.undelete_systematic_review, db_conn_str, sr_id, requester_id)
+        res = await run_in_threadpool(srdb_service.undelete_systematic_review, sr_id, requester_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -495,9 +462,8 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
     Only the owner may perform a hard delete.
     """
 
-    db_conn_str = _get_db_conn_str()
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service, require_screening=False, require_visible=False)
+        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -526,7 +492,7 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
         cleanup_result = {"status": "cleanup_import_failed", "error": str(e)}
 
     try:
-        res = await run_in_threadpool(srdb_service.hard_delete_systematic_review, db_conn_str, sr_id, requester_id)
+        res = await run_in_threadpool(srdb_service.hard_delete_systematic_review, sr_id, requester_id)
         deleted_count = res.get("deleted_count")
         if not deleted_count:
             # If backend reported zero deletions, raise NotFound to match prior behavior
