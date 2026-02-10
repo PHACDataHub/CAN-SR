@@ -18,6 +18,7 @@ services:
       - pgdb-service
     volumes:
       - ./api:/app/api
+      - ./configs:/app/configs
       - ./uploads:/app/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

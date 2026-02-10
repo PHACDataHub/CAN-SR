@@ -75,10 +75,6 @@ class Settings(BaseSettings):
     # Backwards/alternate env var: OPENAI_TYPE
     AZURE_OPENAI_MODE: str = os.getenv("AZURE_OPENAI_MODE", "key").lower().strip()
 
-    # Model catalog (UI/display key -> {deployment, api_version})
-    # Stored as a raw string in env; parsed in azure_openai_client.py.
-    MODELS_AVAILABLE: Optional[str] = os.getenv("MODELS_AVAILABLE")
-    
     # Default model to use
     DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-5-mini")
 

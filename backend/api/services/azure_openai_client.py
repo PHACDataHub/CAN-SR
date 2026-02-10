@@ -7,13 +7,14 @@ Supports:
 * Entra/managed identity auth (AZURE_OPENAI_MODE=entra)
 
 Model catalog:
-MODELS_AVAILABLE is a JSON dict (as a string) mapping UI/display keys to
-deployment + api_version, e.g.:
+Loaded from YAML at runtime:
+  /app/configs/models.yaml
 
-MODELS_AVAILABLE='{
-  "GPT-5-Mini": {"deployment": "gpt-5-mini", "api_version": "2025-04-01-preview"},
-  "GPT-4.1-Mini": {"deployment": "gpt-4.1-mini", "api_version": "2025-01-01-preview"}
-}'
+The YAML is a mapping of UI/display keys to {deployment, api_version}, e.g.:
+
+GPT-5-Mini:
+  deployment: gpt-5-mini
+  api_version: 2025-04-01-preview
 
 DEFAULT_CHAT_MODEL must be one of those keys.
 """
@@ -23,7 +24,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
@@ -57,10 +61,6 @@ class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
 
     def __init__(self):
-        # NOTE: Historically this project used USE_ENTRA_AUTH (global) and
-        # per-model env vars. We now prefer AZURE_OPENAI_MODE + MODELS_AVAILABLE,
-        # but keep legacy fallbacks.
-
         self._config_error: Optional[str] = None
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
@@ -121,36 +121,45 @@ class AzureOpenAIClient:
             return s[1:-1]
         return s
 
-    def _load_models_available(self) -> Optional[Dict[str, Any]]:
-        raw = getattr(settings, "MODELS_AVAILABLE", None)
-        if not raw:
-            return None
+    def _load_models_yaml(self) -> Dict[str, Any]:
+        """Load model catalog from /app/configs/models.yaml.
+
+        This file is expected to be mounted in docker-compose so changes can be
+        applied without rebuilding the image.
+        """
+        path = Path("/app/configs/models.yaml")
+        if not path.exists():
+            logger.warning("Azure OpenAI model catalog not found at %s", path)
+            return {}
         try:
-            raw = self._strip_outer_quotes(str(raw))
-            return json.loads(raw)
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                logger.warning("Invalid models.yaml format (expected mapping): %s", type(data))
+                return {}
+            return data
         except Exception as e:
-            logger.warning("Failed to parse MODELS_AVAILABLE; falling back to legacy model config: %s", e)
-            return None
+            logger.exception("Failed to load Azure OpenAI model catalog from %s: %s", path, e)
+            return {}
 
     def _load_model_configs(self) -> Dict[str, Dict[str, str]]:
         """Build model configs keyed by UI/display name."""
-        models = self._load_models_available()
-        if models:
-            cfg: Dict[str, Dict[str, str]] = {}
-            for display_name, meta in models.items():
-                if not isinstance(meta, dict):
-                    continue
-                deployment = meta.get("deployment")
-                api_version = meta.get("api_version")
-                if not deployment or not api_version:
-                    continue
-                cfg[str(display_name)] = {
-                    "endpoint": self._endpoint or "",
-                    "deployment": str(deployment),
-                    "api_version": str(api_version),
-                }
-            if cfg:
-                return cfg
+        models = self._load_models_yaml()
+        cfg: Dict[str, Dict[str, str]] = {}
+        for display_name, meta in models.items():
+            if not isinstance(meta, dict):
+                continue
+            deployment = meta.get("deployment")
+            api_version = meta.get("api_version")
+            if not deployment or not api_version:
+                continue
+            cfg[str(display_name)] = {
+                "endpoint": self._endpoint or "",
+                "deployment": str(deployment),
+                "api_version": str(api_version),
+            }
+
+        if cfg:
+            return cfg
 
         return {}
 
