@@ -36,10 +36,10 @@ export default function StackingCard({ title, description, href, className }: St
               {open ? 'Minimize' : 'Expand'}
             </button> */}
 
-            <Link href={href} legacyBehavior>
-              <a className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+            <Link href={href} className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+              
                 Open
-              </a>
+              
             </Link>
           </div>
         </div>
@@ -58,5 +58,5 @@ export default function StackingCard({ title, description, href, className }: St
         </CollapsibleContent>
       </Collapsible>
     </div>
-  )
+  );
 }

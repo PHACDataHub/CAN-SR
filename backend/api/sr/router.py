@@ -164,7 +164,7 @@ async def add_user_to_systematic_review(
     """
 
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -201,7 +201,7 @@ async def remove_user_from_systematic_review(
     The owner cannot be removed via this endpoint.
     """
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -274,7 +274,7 @@ async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depen
     """
 
     try:
-        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        doc, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -308,7 +308,7 @@ async def get_systematic_review_criteria_parsed(
     """
 
     try:
-        doc, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        doc, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -334,7 +334,7 @@ async def update_systematic_review_criteria(
     """
 
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -402,7 +402,7 @@ async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = De
     """
 
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -431,7 +431,7 @@ async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = 
     """
 
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -463,7 +463,7 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
     """
 
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
     except HTTPException:
         raise
     except Exception as e:
