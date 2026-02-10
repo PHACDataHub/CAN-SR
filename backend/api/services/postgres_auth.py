@@ -3,22 +3,26 @@
 PostgreSQL connection helper supporting three runtime modes.
 
 Configuration model:
-* POSTGRES_MODE selects one profile: docker | local | azure
-* Each profile has its own env var namespace to avoid accidental overrides:
-  - DOCKER_POSTGRES_*
-  - LOCAL_POSTGRES_*
-  - AZURE_POSTGRES_*
+* POSTGRES_MODE selects behavior: docker | local | azure
+* Connection settings are provided via a single set of env vars:
+  - POSTGRES_HOST
+  - POSTGRES_DATABASE
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD
+
+Auth behavior:
+* docker/local: password auth (POSTGRES_PASSWORD required)
+* azure: Entra token auth via DefaultAzureCredential (password ignored)
 
 Behavior:
-* Always try the configured POSTGRES_MODE first.
-* If that fails, fall back to LOCAL (when fully configured).
+* Only try the configured POSTGRES_MODE (no fallback).
 
 Notes:
 * POSTGRES_URI is deprecated and intentionally not used.
 """
 
 import os
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import psycopg2
 from ..core.config import settings
@@ -79,9 +83,12 @@ class PostgresServer:
         except Exception as e:
             raise RuntimeError(str(e))
 
-        required = [prof.get("database"), prof.get("user")]
+        required = [prof.get("host"), prof.get("database"), prof.get("user")]
         if not all(required):
-            raise RuntimeError(f"{mode} profile requires database and user")
+            raise RuntimeError(f"{mode} profile requires host, database and user")
+
+        if mode in {"docker", "local"} and not prof.get("password"):
+            raise RuntimeError(f"{mode} mode requires POSTGRES_PASSWORD")
 
     def _is_token_expired(self) -> bool:
         """Check whether the cached Azure token needs refreshing."""
@@ -104,14 +111,14 @@ class PostgresServer:
 
     @staticmethod
     def _mode() -> str:
-        return (settings.POSTGRES_MODE or "azure").lower().strip()
+        return (settings.POSTGRES_MODE or "docker").lower().strip()
 
     @staticmethod
     def _has_local_fallback() -> bool:
-        return bool(settings.has_local_fallback())
+        return False
 
     def _candidate_kwargs(self, mode: str) -> Dict[str, Any]:
-        """Build connect kwargs for a given mode based on namespaced env vars."""
+        """Build connect kwargs for a given mode based on POSTGRES_* env vars."""
         prof = settings.postgres_profile(mode)
 
         kwargs: Dict[str, Any] = {
@@ -119,7 +126,7 @@ class PostgresServer:
             "database": prof.get("database"),
             "user": prof.get("user"),
             "port": int(prof.get("port") or 5432),
-            # Fail fast so we can try fallbacks
+            # Fail fast so connection errors surface quickly
             "connect_timeout": int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "3")),
         }
 
@@ -148,29 +155,15 @@ class PostgresServer:
         return psycopg2.connect(**kwargs)
 
     def _connect(self):
-        """Create a new psycopg2 connection, with fallback to local."""
+        """Create a new psycopg2 connection."""
         primary_mode = self._mode()
-        tried: List[str] = []
-
-        # Try primary
         try:
-            tried.append(primary_mode)
             return self._connect_with_mode(primary_mode)
         except Exception as e:
-            logger.warning("Postgres connect failed (mode=%s): %s", primary_mode, e, exc_info=True)
-
-        # Fallback to local (if not already local)
-        if primary_mode != "local" and self._has_local_fallback():
-            try:
-                tried.append("local")
-                logger.info("Falling back to local Postgres connection")
-                return self._connect_with_mode("local")
-            except Exception as e:
-                logger.error("Postgres local fallback failed: %s", e, exc_info=True)
-
-        raise psycopg2.OperationalError(
-            f"Could not connect to Postgres. Tried modes: {', '.join(tried)}"
-        )
+            logger.error("Postgres connect failed (mode=%s): %s", primary_mode, e, exc_info=True)
+            raise psycopg2.OperationalError(
+                f"Could not connect to Postgres for mode={primary_mode}"
+            )
 
     def __repr__(self) -> str:
         status = "open" if self._conn and not self._conn.closed else "closed"
