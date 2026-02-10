@@ -28,7 +28,7 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt --no-cache-dir
 
 # Copy application code
 COPY . .

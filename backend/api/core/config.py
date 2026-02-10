@@ -74,41 +74,17 @@ class Settings(BaseSettings):
     # Azure OpenAI settings (Primary - GPT-4o)
     AZURE_OPENAI_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_API_VERSION: str = os.getenv(
-        "AZURE_OPENAI_API_VERSION", "2025-01-01-preview"
-    )
-    AZURE_OPENAI_DEPLOYMENT_NAME: str = os.getenv(
-        "AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"
-    )
+    # Azure OpenAI auth selection
+    # key -> uses AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY
+    # entra -> uses ENTRA_AZURE_OPENAI_ENDPOINT + DefaultAzureCredential
+    # Backwards/alternate env var: OPENAI_TYPE
+    AZURE_OPENAI_TYPE: str = os.getenv("AZURE_OPENAI_TYPE", "key").lower().strip()
+    ENTRA_AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("ENTRA_AZURE_OPENAI_ENDPOINT")
 
-    # GPT-4.1-mini configuration
-    AZURE_OPENAI_GPT41_MINI_API_KEY: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT41_MINI_API_KEY"
-    )
-    AZURE_OPENAI_GPT41_MINI_ENDPOINT: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT41_MINI_ENDPOINT"
-    )
-    AZURE_OPENAI_GPT41_MINI_DEPLOYMENT: str = os.getenv(
-        "AZURE_OPENAI_GPT41_MINI_DEPLOYMENT", "gpt-4.1-mini"
-    )
-    AZURE_OPENAI_GPT41_MINI_API_VERSION: str = os.getenv(
-        "AZURE_OPENAI_GPT41_MINI_API_VERSION", "2025-01-01-preview"
-    )
-
-    # GPT-5-mini configuration
-    AZURE_OPENAI_GPT5_MINI_API_KEY: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT5_MINI_API_KEY"
-    )
-    AZURE_OPENAI_GPT5_MINI_ENDPOINT: Optional[str] = os.getenv(
-        "AZURE_OPENAI_GPT5_MINI_ENDPOINT"
-    )
-    AZURE_OPENAI_GPT5_MINI_DEPLOYMENT: str = os.getenv(
-        "AZURE_OPENAI_GPT5_MINI_DEPLOYMENT", "gpt-5-mini"
-    )
-    AZURE_OPENAI_GPT5_MINI_API_VERSION: str = os.getenv(
-        "AZURE_OPENAI_GPT5_MINI_API_VERSION", "2025-08-07"
-    )
-
+    # Model catalog (UI/display key -> {deployment, api_version})
+    # Stored as a raw string in env; parsed in azure_openai_client.py.
+    MODELS_AVAILABLE: Optional[str] = os.getenv("MODELS_AVAILABLE")
+    
     # Default model to use
     DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-5-mini")
 

@@ -1,11 +1,36 @@
-"""Azure OpenAI client service for chat completions"""
+"""backend.api.services.azure_openai_client
 
+Azure OpenAI client service for chat completions.
+
+Supports:
+* API key auth (AZURE_OPENAI_TYPE=key)
+* Entra/managed identity auth (AZURE_OPENAI_TYPE=entra)
+
+Model catalog:
+MODELS_AVAILABLE is a JSON dict (as a string) mapping UI/display keys to
+deployment + api_version, e.g.:
+
+MODELS_AVAILABLE='{
+  "GPT-5-Mini": {"deployment": "gpt-5-mini", "api_version": "2025-04-01-preview"},
+  "GPT-4.1-Mini": {"deployment": "gpt-4.1-mini", "api_version": "2025-01-01-preview"}
+}'
+
+DEFAULT_CHAT_MODEL must be one of those keys.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
 import time
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Token cache TTL in seconds (9 minutes)
 TOKEN_CACHE_TTL = 9 * 60
@@ -32,66 +57,151 @@ class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
 
     def __init__(self):
+        # NOTE: Historically this project used USE_ENTRA_AUTH (global) and
+        # per-model env vars. We now prefer AZURE_OPENAI_TYPE + MODELS_AVAILABLE,
+        # but keep legacy fallbacks.
+
+        self._config_error: Optional[str] = None
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
-        # Create token provider for Azure OpenAI using DefaultAzureCredential
-        # Wrapped with caching to avoid fetching a new token on every request
-        if not settings.AZURE_OPENAI_API_KEY and not settings.USE_ENTRA_AUTH:
-            raise ValueError("Azure OpenAI API key or Entra auth must be configured")
+        self._auth_type = self._resolve_auth_type()
+        self._endpoint = self._resolve_endpoint(self._auth_type)
+        self._api_key = settings.AZURE_OPENAI_API_KEY
 
-        if settings.USE_ENTRA_AUTH:
-            self._credential = DefaultAzureCredential()
-            self._token_provider = CachedTokenProvider(
-                get_bearer_token_provider(
-                    self._credential, "https://cognitiveservices.azure.com/.default"
+        self._token_provider: Optional[CachedTokenProvider] = None
+        if self._auth_type == "entra":
+            if not DefaultAzureCredential or not get_bearer_token_provider:
+                self._config_error = (
+                    "AZURE_OPENAI_TYPE=entra requires azure-identity to be installed"
                 )
-            )
+            else:
+                # Create token provider for Azure OpenAI using DefaultAzureCredential
+                # Wrapped with caching to avoid fetching a new token on every request
+                credential = DefaultAzureCredential()
+                self._token_provider = CachedTokenProvider(
+                    get_bearer_token_provider(
+                        credential, "https://cognitiveservices.azure.com/.default"
+                    )
+                )
 
-        self.model_configs = {
-            "gpt-4.1-mini": {
-                "endpoint": settings.AZURE_OPENAI_GPT41_MINI_ENDPOINT
-                or settings.AZURE_OPENAI_ENDPOINT,
-                "deployment": settings.AZURE_OPENAI_GPT41_MINI_DEPLOYMENT,
-                "api_version": settings.AZURE_OPENAI_GPT41_MINI_API_VERSION,
-            },
-            "gpt-5-mini": {
-                "endpoint": settings.AZURE_OPENAI_GPT5_MINI_ENDPOINT
-                or settings.AZURE_OPENAI_ENDPOINT,
-                "deployment": settings.AZURE_OPENAI_GPT5_MINI_DEPLOYMENT,
-                "api_version": settings.AZURE_OPENAI_GPT5_MINI_API_VERSION,
-            },
-        }
+        self.model_configs = self._load_model_configs()
+        self.default_model = self._resolve_default_model(self.default_model)
 
-        self._official_clients: Dict[str, AzureOpenAI] = {}
+        # Cache official clients by (endpoint, api_version, auth_type)
+        self._official_clients: Dict[Tuple[str, str, str], AzureOpenAI] = {}
+
+
+    # ---------------------------------------------------------------------
+    # Configuration
+    # ---------------------------------------------------------------------
+
+
+    @staticmethod
+    def _resolve_auth_type() -> str:
+        """Return key|entra.
+
+        New config: AZURE_OPENAI_TYPE
+        Legacy config: USE_ENTRA_AUTH
+        """
+        t = (getattr(settings, "AZURE_OPENAI_TYPE", None) or "").lower().strip()
+        if t in {"key", "entra"}:
+            return t
+        # Legacy fallback
+        if getattr(settings, "USE_ENTRA_AUTH", False):
+            return "entra"
+        return "key"
+
+    @staticmethod
+    def _resolve_endpoint(auth_type: str) -> Optional[str]:
+        if auth_type == "entra":
+            # Entra auth must use the Entra-targeted endpoint.
+            return getattr(settings, "ENTRA_AZURE_OPENAI_ENDPOINT", None)
+        return settings.AZURE_OPENAI_ENDPOINT
+
+    def _strip_outer_quotes(self, s: str) -> str:
+        s = s.strip()
+        if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+            return s[1:-1]
+        return s
+
+    def _load_models_available(self) -> Optional[Dict[str, Any]]:
+        raw = getattr(settings, "MODELS_AVAILABLE", None)
+        if not raw:
+            return None
+        try:
+            raw = self._strip_outer_quotes(str(raw))
+            return json.loads(raw)
+        except Exception as e:
+            logger.warning("Failed to parse MODELS_AVAILABLE; falling back to legacy model config: %s", e)
+            return None
+
+    def _load_model_configs(self) -> Dict[str, Dict[str, str]]:
+        """Build model configs keyed by UI/display name."""
+        models = self._load_models_available()
+        if models:
+            cfg: Dict[str, Dict[str, str]] = {}
+            for display_name, meta in models.items():
+                if not isinstance(meta, dict):
+                    continue
+                deployment = meta.get("deployment")
+                api_version = meta.get("api_version")
+                if not deployment or not api_version:
+                    continue
+                cfg[str(display_name)] = {
+                    "endpoint": self._endpoint or "",
+                    "deployment": str(deployment),
+                    "api_version": str(api_version),
+                }
+            if cfg:
+                return cfg
+
+        return {}
+
+    def _resolve_default_model(self, desired: str) -> str:
+        if desired in self.model_configs:
+            return desired
+        # If configured default doesn't exist, fall back to first configured model
+        for k in self.model_configs.keys():
+            return k
+        return desired
 
     def _get_model_config(self, model: str) -> Dict[str, str]:
         """Get configuration for a specific model"""
         if model in self.model_configs:
             return self.model_configs[model]
-        return self.model_configs["gpt-5-mini"]
+        # fallback to first configured model
+        for _, cfg in self.model_configs.items():
+            return cfg
+        raise ValueError("No Azure OpenAI models are configured")
 
     def _get_official_client(self, model: str) -> AzureOpenAI:
         """Get official Azure OpenAI client instance"""
-        if model not in self._official_clients:
-            config = self._get_model_config(model)
-            if not config.get("endpoint"):
-                raise ValueError(
-                    f"Azure OpenAI endpoint not configured for model {model}"
-                )
+        config = self._get_model_config(model)
+        endpoint = config.get("endpoint")
+        api_version = config.get("api_version")
+        if not endpoint or not api_version:
+            raise ValueError(f"Azure OpenAI endpoint/api_version not configured for model {model}")
 
-            azure_openai_kwargs = {
-                "azure_endpoint": config["endpoint"],
-                "api_version": config["api_version"],
+        cache_key = (endpoint, api_version, self._auth_type)
+        if cache_key not in self._official_clients:
+            azure_openai_kwargs: Dict[str, Any] = {
+                "azure_endpoint": endpoint,
+                "api_version": api_version,
             }
-            if settings.USE_ENTRA_AUTH:
-                azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
-            
-            if settings.AZURE_OPENAI_API_KEY:
-                azure_openai_kwargs["api_key"] = settings.AZURE_OPENAI_API_KEY
 
-            self._official_clients[model] = AzureOpenAI(**azure_openai_kwargs)
+            if self._auth_type == "entra":
+                if not self._token_provider:
+                    raise ValueError(self._config_error or "Azure AD token provider not configured")
+                azure_openai_kwargs["entra_token_provider"] = self._token_provider
+            else:
+                # key auth
+                if not self._api_key:
+                    raise ValueError("AZURE_OPENAI_TYPE=key requires AZURE_OPENAI_API_KEY")
+                azure_openai_kwargs["api_key"] = self._api_key
 
-        return self._official_clients[model]
+            self._official_clients[cache_key] = AzureOpenAI(**azure_openai_kwargs)
+
+        return self._official_clients[cache_key]
 
     def _build_messages(
         self, user_message: str, system_prompt: Optional[str] = None
@@ -145,7 +255,9 @@ class AzureOpenAIClient:
                 "stream": stream,
             }
             
-            if model != "gpt-5-mini":
+            # gpt-5 deployments may reject temperature/max_tokens in some previews.
+            # We gate this by the *deployment* name because the UI key can differ.
+            if deployment != "gpt-5-mini":
                 request_kwargs["max_tokens"] = max_tokens
                 request_kwargs["temperature"] = temperature
 
@@ -219,16 +331,19 @@ class AzureOpenAIClient:
             deployment = self._get_model_config(model)["deployment"]
             client = self._get_official_client(model)
 
-            response = client.chat.completions.create(
-                stream=True,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
-                model=deployment,
-            )
+            request_kwargs: Dict[str, Any] = {
+                "stream": True,
+                "messages": messages,
+                "top_p": top_p,
+                "frequency_penalty": 0.0,
+                "presence_penalty": 0.0,
+                "model": deployment,
+            }
+            if deployment != "gpt-5-mini":
+                request_kwargs["max_tokens"] = max_tokens
+                request_kwargs["temperature"] = temperature
+
+            response = client.chat.completions.create(**request_kwargs)
 
             for update in response:
                 if update.choices:
@@ -334,16 +449,40 @@ Guidelines:
 
     def get_available_models(self) -> List[str]:
         """Get list of available models that are properly configured"""
-        return [
-            model
-            for model, config in self.model_configs.items()
-            if config.get("endpoint")
-        ]
+        out: List[str] = []
+        for model, config in self.model_configs.items():
+            if not config.get("endpoint") or not config.get("deployment") or not config.get("api_version"):
+                continue
+            out.append(model)
+        return out
 
     def is_configured(self) -> bool:
         """Check if Azure OpenAI is properly configured"""
-        return len(self.get_available_models()) > 0
+        if self._config_error:
+            return False
+        if not self.get_available_models():
+            return False
+
+        if self._auth_type == "key":
+            return bool(self._endpoint and self._api_key)
+        if self._auth_type == "entra":
+            return bool(self._endpoint and self._token_provider)
+        return False
 
 
 # Global Azure OpenAI client instance
-azure_openai_client = AzureOpenAIClient()
+# NOTE: This is used by routers. We intentionally avoid raising during import
+# so the API can start up and report configuration issues as 503s.
+try:
+    azure_openai_client = AzureOpenAIClient()
+except Exception as e:  # pragma: no cover
+    logger.exception("Failed to initialize AzureOpenAIClient: %s", e)
+    # Provide a stub that reports not-configured.
+    class _DisabledAzureOpenAIClient:  # type: ignore
+        def is_configured(self) -> bool:
+            return False
+
+        def get_available_models(self) -> List[str]:
+            return []
+
+    azure_openai_client = _DisabledAzureOpenAIClient()  # type: ignore
