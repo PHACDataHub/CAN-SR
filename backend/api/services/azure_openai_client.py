@@ -65,7 +65,7 @@ class AzureOpenAIClient:
         self.default_model = settings.DEFAULT_CHAT_MODEL
 
         self._auth_type = self._resolve_auth_type()
-        self._endpoint = self._resolve_endpoint(self._auth_type)
+        self._endpoint = self._resolve_endpoint()
         self._api_key = settings.AZURE_OPENAI_API_KEY
 
         self._token_provider: Optional[CachedTokenProvider] = None
@@ -112,10 +112,7 @@ class AzureOpenAIClient:
         return "key"
 
     @staticmethod
-    def _resolve_endpoint(auth_type: str) -> Optional[str]:
-        if auth_type == "entra":
-            # Entra auth must use the Entra-targeted endpoint.
-            return getattr(settings, "ENTRA_AZURE_OPENAI_ENDPOINT", None)
+    def _resolve_endpoint() -> Optional[str]:
         return settings.AZURE_OPENAI_ENDPOINT
 
     def _strip_outer_quotes(self, s: str) -> str:

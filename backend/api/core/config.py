@@ -76,10 +76,9 @@ class Settings(BaseSettings):
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
     # Azure OpenAI auth selection
     # key -> uses AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY
-    # entra -> uses ENTRA_AZURE_OPENAI_ENDPOINT + DefaultAzureCredential
+    # entra -> uses AZURE_OPENAI_ENDPOINT + DefaultAzureCredential
     # Backwards/alternate env var: OPENAI_TYPE
     AZURE_OPENAI_TYPE: str = os.getenv("AZURE_OPENAI_TYPE", "key").lower().strip()
-    ENTRA_AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("ENTRA_AZURE_OPENAI_ENDPOINT")
 
     # Model catalog (UI/display key -> {deployment, api_version})
     # Stored as a raw string in env; parsed in azure_openai_client.py.
