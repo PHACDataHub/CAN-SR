@@ -3,8 +3,8 @@
 Azure OpenAI client service for chat completions.
 
 Supports:
-* API key auth (AZURE_OPENAI_TYPE=key)
-* Entra/managed identity auth (AZURE_OPENAI_TYPE=entra)
+* API key auth (AZURE_OPENAI_MODE=key)
+* Entra/managed identity auth (AZURE_OPENAI_MODE=entra)
 
 Model catalog:
 MODELS_AVAILABLE is a JSON dict (as a string) mapping UI/display keys to
@@ -58,7 +58,7 @@ class AzureOpenAIClient:
 
     def __init__(self):
         # NOTE: Historically this project used USE_ENTRA_AUTH (global) and
-        # per-model env vars. We now prefer AZURE_OPENAI_TYPE + MODELS_AVAILABLE,
+        # per-model env vars. We now prefer AZURE_OPENAI_MODE + MODELS_AVAILABLE,
         # but keep legacy fallbacks.
 
         self._config_error: Optional[str] = None
@@ -72,7 +72,7 @@ class AzureOpenAIClient:
         if self._auth_type == "entra":
             if not DefaultAzureCredential or not get_bearer_token_provider:
                 self._config_error = (
-                    "AZURE_OPENAI_TYPE=entra requires azure-identity to be installed"
+                    "AZURE_OPENAI_MODE=entra requires azure-identity to be installed"
                 )
             else:
                 # Create token provider for Azure OpenAI using DefaultAzureCredential
@@ -100,10 +100,10 @@ class AzureOpenAIClient:
     def _resolve_auth_type() -> str:
         """Return key|entra.
 
-        New config: AZURE_OPENAI_TYPE
+        New config: AZURE_OPENAI_MODE
         Legacy config: USE_ENTRA_AUTH
         """
-        t = (getattr(settings, "AZURE_OPENAI_TYPE", None) or "").lower().strip()
+        t = (getattr(settings, "AZURE_OPENAI_MODE", None) or "").lower().strip()
         if t in {"key", "entra"}:
             return t
         # Legacy fallback
@@ -193,7 +193,7 @@ class AzureOpenAIClient:
             else:
                 # key auth
                 if not self._api_key:
-                    raise ValueError("AZURE_OPENAI_TYPE=key requires AZURE_OPENAI_API_KEY")
+                    raise ValueError("AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY")
                 azure_openai_kwargs["api_key"] = self._api_key
 
             self._official_clients[cache_key] = AzureOpenAI(**azure_openai_kwargs)

@@ -2,7 +2,7 @@
 
 Storage abstraction for CAN-SR.
 
-Supported backends (selected via STORAGE_TYPE):
+Supported backends (selected via STORAGE_MODE):
 * local - Local filesystem storage (backed by docker compose volume)
 * azure - Azure Blob Storage via **account name + key** (strict)
 * entra - Azure Blob Storage via **DefaultAzureCredential** (Entra/Managed Identity) (strict)
@@ -64,7 +64,7 @@ class AzureStorageService:
     def __init__(self, *, account_url: str | None = None, connection_string: str | None = None, container_name: str):
         if not BlobServiceClient:
             raise RuntimeError(
-                "Azure storage libraries are not installed. Install azure-identity and azure-storage-blob, or use STORAGE_TYPE=local."
+                "Azure storage libraries are not installed. Install azure-identity and azure-storage-blob, or use STORAGE_MODE=local."
             )
 
         if bool(account_url) == bool(connection_string):
@@ -75,7 +75,7 @@ class AzureStorageService:
         else:
             if not DefaultAzureCredential:
                 raise RuntimeError(
-                    "azure-identity is not installed. Install azure-identity, or use STORAGE_TYPE=azure (connection string) or local."
+                    "azure-identity is not installed. Install azure-identity, or use STORAGE_MODE=azure (connection string) or local."
                 )
             credential = DefaultAzureCredential()
             self.blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
@@ -550,7 +550,7 @@ class LocalStorageService:
 
 
 def _build_storage_service() -> Optional[StorageService]:
-    stype = (settings.STORAGE_TYPE or "azure").lower().strip()
+    stype = (settings.STORAGE_MODE or "azure").lower().strip()
     if stype == "local":
         try:
             return LocalStorageService()
@@ -560,7 +560,7 @@ def _build_storage_service() -> Optional[StorageService]:
     if stype == "azure":
         try:
             if not settings.AZURE_STORAGE_ACCOUNT_NAME or not settings.AZURE_STORAGE_ACCOUNT_KEY:
-                raise ValueError("STORAGE_TYPE=azure requires AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY")
+                raise ValueError("STORAGE_MODE=azure requires AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY")
             connection_string = (
                 "DefaultEndpointsProtocol=https;"
                 f"AccountName={settings.AZURE_STORAGE_ACCOUNT_NAME};"
@@ -577,7 +577,7 @@ def _build_storage_service() -> Optional[StorageService]:
     if stype == "entra":
         try:
             if not settings.AZURE_STORAGE_ACCOUNT_NAME:
-                raise ValueError("STORAGE_TYPE=entra requires AZURE_STORAGE_ACCOUNT_NAME")
+                raise ValueError("STORAGE_MODE=entra requires AZURE_STORAGE_ACCOUNT_NAME")
             account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
             return AzureStorageService(
                 account_url=account_url,
@@ -587,7 +587,7 @@ def _build_storage_service() -> Optional[StorageService]:
             logger.exception("Failed to initialize AzureStorageService (Entra): %s", e)
             return None
 
-    logger.warning("Unsupported STORAGE_TYPE=%s; storage disabled", stype)
+    logger.warning("Unsupported STORAGE_MODE=%s; storage disabled", stype)
     return None
 
 

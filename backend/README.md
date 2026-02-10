@@ -52,8 +52,8 @@ AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
 # Storage
-# STORAGE_TYPE is strict: local | azure | entra
-STORAGE_TYPE=local
+# STORAGE_MODE is strict: local | azure | entra
+STORAGE_MODE=local
 
 # Storage container name
 # - local: folder name under LOCAL_STORAGE_BASE_PATH
@@ -64,12 +64,12 @@ STORAGE_CONTAINER_NAME=can-sr-storage
 LOCAL_STORAGE_BASE_PATH=uploads
 
 # azure storage (account name + key)
-# STORAGE_TYPE=azure
+# STORAGE_MODE=azure
 AZURE_STORAGE_ACCOUNT_NAME=youraccount
 AZURE_STORAGE_ACCOUNT_KEY=your-key
 
 # entra storage (Managed Identity / DefaultAzureCredential)
-# STORAGE_TYPE=entra
+# STORAGE_MODE=entra
 AZURE_STORAGE_ACCOUNT_NAME=youraccount
 
 # Databases (Docker defaults - change for production)
@@ -257,10 +257,10 @@ docker compose restart api
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | `abc123...` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com` |
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-4o` |
-| `STORAGE_TYPE` | Storage backend selector | `local` |
+| `STORAGE_MODE` | Storage backend selector | `local` |
 | `LOCAL_STORAGE_BASE_PATH` | Local storage base path (when local) | `uploads` |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob (when STORAGE_TYPE=azure) | `DefaultEndpointsProtocol=https;...` |
-| `ENTRA_AZURE_STORAGE_ACCOUNT_NAME` | Azure account (when STORAGE_TYPE=entra) | `mystorageacct` |
+| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob (when STORAGE_MODE=azure) | `DefaultEndpointsProtocol=https;...` |
+| `ENTRA_AZURE_STORAGE_ACCOUNT_NAME` | Azure account (when STORAGE_MODE=entra) | `mystorageacct` |
 | `SECRET_KEY` | JWT token signing key | `your-secure-secret-key` |
 
 ### Optional Variables

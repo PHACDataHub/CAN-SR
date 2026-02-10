@@ -29,18 +29,18 @@ class Settings(BaseSettings):
 
     # Storage settings
     # Storage selection (strict): local | azure | entra
-    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure").lower().strip()
+    STORAGE_MODE: str = os.getenv("STORAGE_MODE", "azure").lower().strip()
     # Canonical storage container name used across all storage types.
     # - local: folder name under LOCAL_STORAGE_BASE_PATH
     # - azure/entra: blob container name
     STORAGE_CONTAINER_NAME: str = os.getenv("STORAGE_CONTAINER_NAME", "can-sr-storage")
     # Azure Storage
-    # - STORAGE_TYPE=azure requires account name + account key
-    # - STORAGE_TYPE=entra requires only account name (uses DefaultAzureCredential)
+    # - STORAGE_MODE=azure requires account name + account key
+    # - STORAGE_MODE=entra requires only account name (uses DefaultAzureCredential)
     AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
     AZURE_STORAGE_ACCOUNT_KEY: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 
-    # Local storage settings (used when STORAGE_TYPE=local)
+    # Local storage settings (used when STORAGE_MODE=local)
     # In docker, default path is backed by the compose volume: ./uploads:/app/uploads
     # Default to a relative directory so it works both locally and in docker:
     # - locally: <repo>/backend/uploads
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # key -> uses AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY
     # entra -> uses AZURE_OPENAI_ENDPOINT + DefaultAzureCredential
     # Backwards/alternate env var: OPENAI_TYPE
-    AZURE_OPENAI_TYPE: str = os.getenv("AZURE_OPENAI_TYPE", "key").lower().strip()
+    AZURE_OPENAI_MODE: str = os.getenv("AZURE_OPENAI_MODE", "key").lower().strip()
 
     # Model catalog (UI/display key -> {deployment, api_version})
     # Stored as a raw string in env; parsed in azure_openai_client.py.
