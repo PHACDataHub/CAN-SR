@@ -95,6 +95,7 @@ fi
 # Create necessary directories
 echo -e "${BLUE}📁 Creating volume directories...${NC}"
 mkdir -p volumes/{postgres-cits}
+mkdir -p uploads/users
 
 echo -e "${GREEN}🚀 Starting services...${NC}"
 

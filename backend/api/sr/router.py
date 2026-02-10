@@ -22,7 +22,7 @@ import yaml
 
 from ..core.config import settings
 from ..core.security import get_current_active_user
-from ..services.user_db import user_db as user_db_service
+from ..services.user_db import user_db_service
 from ..services.sr_db_service import srdb_service
 from ..core.cit_utils import load_sr_and_check
 

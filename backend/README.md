@@ -15,7 +15,7 @@ CAN-SR Backend provides a production-ready REST API for managing systematic revi
 - **PDF Processing** - Full-text extraction using GROBID
 - **Azure OpenAI Integration** - GPT-4o, GPT-4o-mini, GPT-3.5-turbo for AI features
 - **JWT Authentication** - Secure user authentication
-- **Azure Blob Storage** - Scalable document storage
+- **Storage** - Local filesystem or Azure Blob Storage (connection string or Entra)
 
 ## Architecture
 
@@ -51,8 +51,23 @@ AZURE_OPENAI_API_KEY=your-azure-openai-api-key
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
-# Azure Storage (Required)
+# Storage
+# STORAGE_TYPE is strict: local | azure | entra
+STORAGE_TYPE=local
+
+# local storage
+LOCAL_STORAGE_BASE_PATH=uploads
+LOCAL_STORAGE_CONTAINER_NAME=users
+
+# azure storage (connection string)
+# STORAGE_TYPE=azure
 AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
+AZURE_STORAGE_CONTAINER_NAME=your-container
+
+# entra storage (Managed Identity / DefaultAzureCredential)
+# STORAGE_TYPE=entra
+ENTRA_AZURE_STORAGE_ACCOUNT_NAME=youraccount
+ENTRA_AZURE_STORAGE_CONTAINER_NAME=your-container
 
 # Databases (Docker defaults - change for production)
 
@@ -237,7 +252,10 @@ docker compose restart api
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | `abc123...` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com` |
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-4o` |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob Storage connection | `DefaultEndpointsProtocol=https;...` |
+| `STORAGE_TYPE` | Storage backend selector | `local` |
+| `LOCAL_STORAGE_BASE_PATH` | Local storage base path (when local) | `uploads` |
+| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob (when STORAGE_TYPE=azure) | `DefaultEndpointsProtocol=https;...` |
+| `ENTRA_AZURE_STORAGE_ACCOUNT_NAME` | Azure account (when STORAGE_TYPE=entra) | `mystorageacct` |
 | `SECRET_KEY` | JWT token signing key | `your-secure-secret-key` |
 
 ### Optional Variables

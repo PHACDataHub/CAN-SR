@@ -504,12 +504,13 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
                     parsed_ok = False
 
             if not parsed_ok:
-                # fallback: try direct deletion via blob client (best-effort)
+                # fallback: delete by storage path (works for both azure/local)
                 if storage_service:
                     try:
-                        blob_client = storage_service.blob_service_client.get_blob_client(container=container, blob=blob)
-                        blob_client.delete_blob()
+                        await storage_service.delete_by_path(f"{container}/{blob}")
                         deleted_files += 1
+                    except FileNotFoundError:
+                        failed_files += 1
                     except Exception:
                         failed_files += 1
                 else:

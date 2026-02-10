@@ -221,7 +221,22 @@ AZURE_OPENAI_ENDPOINT=your-endpoint
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
 # Storage
+# STORAGE_TYPE is strict: local | azure | entra
+STORAGE_TYPE=local
+
+# local storage
+LOCAL_STORAGE_BASE_PATH=uploads
+LOCAL_STORAGE_CONTAINER_NAME=users
+
+# azure storage (connection string)
+# STORAGE_TYPE=azure
 AZURE_STORAGE_CONNECTION_STRING=your-connection-string
+AZURE_STORAGE_CONTAINER_NAME=your-container
+
+# entra storage (Managed Identity / DefaultAzureCredential)
+# STORAGE_TYPE=entra
+ENTRA_AZURE_STORAGE_ACCOUNT_NAME=youraccount
+ENTRA_AZURE_STORAGE_CONTAINER_NAME=your-container
 
 # Databases
 MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr

@@ -370,16 +370,14 @@ async def extract_fulltext_from_storage(
     if not storage_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No fulltext storage path found on citation row")
 
-    if "/" not in storage_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
-
-    container, blob = storage_path.split("/", 1)
-
     try:
-        blob_client = storage_service.blob_service_client.get_blob_client(container=container, blob=blob)
-        content = blob_client.download_blob().readall()
+        content, _filename = await storage_service.get_bytes_by_path(storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fulltext file not found in storage")
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download blob: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download from storage: {e}")
 
     # If the citation row already contains an extracted full text in the "fulltext" column,
     # only use it if the stored md5 matches the pdf we just downloaded.

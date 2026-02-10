@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import List, Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -21,13 +22,14 @@ class Settings(BaseSettings):
     DESCRIPTION: str = os.getenv(
         "DESCRIPTION", "AI-powered systematic review platform for Government of Canada"
     )
-    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED")
+    IS_DEPLOYED: bool = os.getenv("IS_DEPLOYED", "false").lower() == "true"
 
     # CORS
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
 
     # Storage settings
-    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure")
+    # Storage selection (strict): local | azure | entra
+    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure").lower().strip()
     AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv(
         "AZURE_STORAGE_ACCOUNT_NAME"
     )
@@ -37,6 +39,18 @@ class Settings(BaseSettings):
     AZURE_STORAGE_CONTAINER_NAME: str = os.getenv(
         "AZURE_STORAGE_CONTAINER_NAME", "can-sr-storage"
     )
+
+    # Entra storage settings (used when STORAGE_TYPE=entra)
+    ENTRA_AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv("ENTRA_AZURE_STORAGE_ACCOUNT_NAME")
+    ENTRA_AZURE_STORAGE_CONTAINER_NAME: str = os.getenv("ENTRA_AZURE_STORAGE_CONTAINER_NAME", "can-sr-storage")
+
+    # Local storage settings (used when STORAGE_TYPE=local)
+    # In docker, default path is backed by the compose volume: ./uploads:/app/uploads
+    # Default to a relative directory so it works both locally and in docker:
+    # - locally: <repo>/backend/uploads
+    # - in docker: /app/uploads
+    LOCAL_STORAGE_BASE_PATH: str = os.getenv("LOCAL_STORAGE_BASE_PATH", "uploads")
+    LOCAL_STORAGE_CONTAINER_NAME: str = os.getenv("LOCAL_STORAGE_CONTAINER_NAME", "users")
 
     # File upload settings
     MAX_FILE_SIZE: int = Field(default=52428800)  # 50MB in bytes
@@ -183,24 +197,25 @@ class Settings(BaseSettings):
         return bool(self.LOCAL_POSTGRES_DATABASE and self.LOCAL_POSTGRES_USER and self.LOCAL_POSTGRES_PASSWORD)
 
     # Databricks settings
-    DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE")
-    DATABRICKS_TOKEN: str = os.getenv("DATABRICKS_TOKEN")
-    JOB_ID_EUROPEPMC: str = os.getenv("JOB_ID_EUROPEPMC")
-    JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED")
-    JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS")
+    DATABRICKS_INSTANCE: str = os.getenv("DATABRICKS_INSTANCE", "")
+    DATABRICKS_TOKEN: str = os.getenv("DATABRICKS_TOKEN", "")
+    JOB_ID_EUROPEPMC: str = os.getenv("JOB_ID_EUROPEPMC", "")
+    JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED", "")
+    JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS", "")
 
     # OAuth
-    OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID")
-    OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET")
-    REDIRECT_URI: str = os.getenv("REDIRECT_URI")
-    SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL")
+    OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID", "")
+    OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET", "")
+    REDIRECT_URI: str = os.getenv("REDIRECT_URI", "")
+    SSO_LOGIN_URL: str = os.getenv("SSO_LOGIN_URL", "")
 
     # Entra
     USE_ENTRA_AUTH: bool = os.getenv("USE_ENTRA_AUTH", "false").lower() == "true"
 
     class Config:
         case_sensitive = True
-        env_file = ".env"
+        # Resolve to backend/.env regardless of current working directory.
+        env_file = str(Path(__file__).resolve().parents[2] / ".env")
         extra = "ignore"  # Allow extra environment variables
 
 

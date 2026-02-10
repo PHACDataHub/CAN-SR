@@ -24,7 +24,11 @@ import psycopg2
 from ..core.config import settings
 import logging
 import datetime
-from azure.identity import DefaultAzureCredential
+
+try:
+    from azure.identity import DefaultAzureCredential
+except Exception:  # pragma: no cover
+    DefaultAzureCredential = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
