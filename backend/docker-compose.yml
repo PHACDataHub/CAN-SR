@@ -14,7 +14,7 @@ services:
     env_file:
       - .env
     depends_on:
-      - grobid-service : {condition: service_healthy}
+      - grobid-service
       - pgdb-service
     volumes:
       - ./api:/app/api
@@ -29,7 +29,7 @@ services:
   # GROBID SERVICE - PDF Parsing for Full-Text Extraction
   # =============================================================================
   grobid-service:
-    image: grobid/grobid:0.8.2
+    image: grobid/grobid:0.8.2-crf
     container_name: grobid-service
     ports:
       - "8070:8070"
