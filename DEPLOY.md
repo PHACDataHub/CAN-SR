@@ -298,7 +298,7 @@ AZURE_OPENAI_GPT4O_MINI_ENDPOINT=your-gpt4o-mini-endpoint
 
 # Storage
 AZURE_STORAGE_CONNECTION_STRING=your-connection-string
-AZURE_STORAGE_CONTAINER_NAME=can-sr-storage
+STORAGE_CONTAINER_NAME=can-sr-storage
 
 # Authentication
 SECRET_KEY=your-secret-key-change-in-production
@@ -307,10 +307,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES=10080
 # Databases (configured in docker-compose.yml)
 MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
 POSTGRES_MODE=docker
-DOCKER_POSTGRES_HOST=pgdb-service
-DOCKER_POSTGRES_DATABASE=postgres
-DOCKER_POSTGRES_USER=admin
-DOCKER_POSTGRES_PASSWORD=password
+POSTGRES_HOST=pgdb-service
+POSTGRES_DATABASE=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=password
 
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-databricks-instance

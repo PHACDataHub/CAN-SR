@@ -30,19 +30,15 @@ class Settings(BaseSettings):
     # Storage settings
     # Storage selection (strict): local | azure | entra
     STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "azure").lower().strip()
-    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv(
-        "AZURE_STORAGE_ACCOUNT_NAME"
-    )
-    AZURE_STORAGE_CONNECTION_STRING: Optional[str] = os.getenv(
-        "AZURE_STORAGE_CONNECTION_STRING"
-    )
-    AZURE_STORAGE_CONTAINER_NAME: str = os.getenv(
-        "AZURE_STORAGE_CONTAINER_NAME", "can-sr-storage"
-    )
-
-    # Entra storage settings (used when STORAGE_TYPE=entra)
-    ENTRA_AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv("ENTRA_AZURE_STORAGE_ACCOUNT_NAME")
-    ENTRA_AZURE_STORAGE_CONTAINER_NAME: str = os.getenv("ENTRA_AZURE_STORAGE_CONTAINER_NAME", "can-sr-storage")
+    # Canonical storage container name used across all storage types.
+    # - local: folder name under LOCAL_STORAGE_BASE_PATH
+    # - azure/entra: blob container name
+    STORAGE_CONTAINER_NAME: str = os.getenv("STORAGE_CONTAINER_NAME", "can-sr-storage")
+    # Azure Storage
+    # - STORAGE_TYPE=azure requires account name + account key
+    # - STORAGE_TYPE=entra requires only account name (uses DefaultAzureCredential)
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    AZURE_STORAGE_ACCOUNT_KEY: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 
     # Local storage settings (used when STORAGE_TYPE=local)
     # In docker, default path is backed by the compose volume: ./uploads:/app/uploads
@@ -50,7 +46,6 @@ class Settings(BaseSettings):
     # - locally: <repo>/backend/uploads
     # - in docker: /app/uploads
     LOCAL_STORAGE_BASE_PATH: str = os.getenv("LOCAL_STORAGE_BASE_PATH", "uploads")
-    LOCAL_STORAGE_CONTAINER_NAME: str = os.getenv("LOCAL_STORAGE_CONTAINER_NAME", "users")
 
     # File upload settings
     MAX_FILE_SIZE: int = Field(default=52428800)  # 50MB in bytes

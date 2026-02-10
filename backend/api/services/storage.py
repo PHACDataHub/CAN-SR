@@ -4,7 +4,7 @@ Storage abstraction for CAN-SR.
 
 Supported backends (selected via STORAGE_TYPE):
 * local - Local filesystem storage (backed by docker compose volume)
-* azure - Azure Blob Storage via **connection string** (strict)
+* azure - Azure Blob Storage via **account name + key** (strict)
 * entra - Azure Blob Storage via **DefaultAzureCredential** (Entra/Managed Identity) (strict)
 
 Routers should not access Azure SDK objects directly.
@@ -303,12 +303,12 @@ class LocalStorageService:
     """Local filesystem storage implementation.
 
     Layout:
-      {LOCAL_STORAGE_BASE_PATH}/{LOCAL_STORAGE_CONTAINER_NAME}/users/{user_id}/...
+      {LOCAL_STORAGE_BASE_PATH}/{STORAGE_CONTAINER_NAME}/users/{user_id}/...
     """
 
     def __init__(self):
         self.base_path = Path(settings.LOCAL_STORAGE_BASE_PATH).resolve()
-        self.container_name = settings.LOCAL_STORAGE_CONTAINER_NAME
+        self.container_name = settings.STORAGE_CONTAINER_NAME
         (self.base_path / self.container_name).mkdir(parents=True, exist_ok=True)
 
     def _container_root(self) -> Path:
@@ -559,23 +559,29 @@ def _build_storage_service() -> Optional[StorageService]:
             return None
     if stype == "azure":
         try:
-            if not settings.AZURE_STORAGE_CONNECTION_STRING:
-                raise ValueError("STORAGE_TYPE=azure requires AZURE_STORAGE_CONNECTION_STRING")
+            if not settings.AZURE_STORAGE_ACCOUNT_NAME or not settings.AZURE_STORAGE_ACCOUNT_KEY:
+                raise ValueError("STORAGE_TYPE=azure requires AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY")
+            connection_string = (
+                "DefaultEndpointsProtocol=https;"
+                f"AccountName={settings.AZURE_STORAGE_ACCOUNT_NAME};"
+                f"AccountKey={settings.AZURE_STORAGE_ACCOUNT_KEY};"
+                "EndpointSuffix=core.windows.net"
+            )
             return AzureStorageService(
-                connection_string=settings.AZURE_STORAGE_CONNECTION_STRING,
-                container_name=settings.AZURE_STORAGE_CONTAINER_NAME,
+                connection_string=connection_string,
+                container_name=settings.STORAGE_CONTAINER_NAME,
             )
         except Exception as e:
             logger.exception("Failed to initialize AzureStorageService (connection string): %s", e)
             return None
     if stype == "entra":
         try:
-            if not settings.ENTRA_AZURE_STORAGE_ACCOUNT_NAME:
-                raise ValueError("STORAGE_TYPE=entra requires ENTRA_AZURE_STORAGE_ACCOUNT_NAME")
-            account_url = f"https://{settings.ENTRA_AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+            if not settings.AZURE_STORAGE_ACCOUNT_NAME:
+                raise ValueError("STORAGE_TYPE=entra requires AZURE_STORAGE_ACCOUNT_NAME")
+            account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
             return AzureStorageService(
                 account_url=account_url,
-                container_name=settings.ENTRA_AZURE_STORAGE_CONTAINER_NAME,
+                container_name=settings.STORAGE_CONTAINER_NAME,
             )
         except Exception as e:
             logger.exception("Failed to initialize AzureStorageService (Entra): %s", e)

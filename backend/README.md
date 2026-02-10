@@ -55,19 +55,22 @@ AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 # STORAGE_TYPE is strict: local | azure | entra
 STORAGE_TYPE=local
 
+# Storage container name
+# - local: folder name under LOCAL_STORAGE_BASE_PATH
+# - azure/entra: blob container name
+STORAGE_CONTAINER_NAME=can-sr-storage
+
 # local storage
 LOCAL_STORAGE_BASE_PATH=uploads
-LOCAL_STORAGE_CONTAINER_NAME=users
 
-# azure storage (connection string)
+# azure storage (account name + key)
 # STORAGE_TYPE=azure
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
-AZURE_STORAGE_CONTAINER_NAME=your-container
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
+AZURE_STORAGE_ACCOUNT_KEY=your-key
 
 # entra storage (Managed Identity / DefaultAzureCredential)
 # STORAGE_TYPE=entra
-ENTRA_AZURE_STORAGE_ACCOUNT_NAME=youraccount
-ENTRA_AZURE_STORAGE_CONTAINER_NAME=your-container
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
 
 # Databases (Docker defaults - change for production)
 
