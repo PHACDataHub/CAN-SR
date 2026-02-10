@@ -14,7 +14,7 @@ services:
     env_file:
       - .env
     depends_on:
-      - grobid-service
+      - grobid-service : {condition: service_healthy}
       - pgdb-service
     volumes:
       - ./api:/app/api
@@ -29,7 +29,7 @@ services:
   # GROBID SERVICE - PDF Parsing for Full-Text Extraction
   # =============================================================================
   grobid-service:
-    image: grobid/grobid:0.8.2-crf
+    image: grobid/grobid:0.8.2
     container_name: grobid-service
     ports:
       - "8070:8070"
@@ -37,10 +37,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8070/api/isalive"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 120s
 
   # =============================================================================
   # POSTGRESQL - Database (Citations & Systematic Reviews)
