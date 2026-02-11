@@ -127,7 +127,7 @@ class AzureOpenAIClient:
         This file is expected to be mounted in docker-compose so changes can be
         applied without rebuilding the image.
         """
-        path = Path("/app/configs/models.yaml")
+        path = Path("configs/models.yaml")
         if not path.exists():
             logger.warning("Azure OpenAI model catalog not found at %s", path)
             return {}
