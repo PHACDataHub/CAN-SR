@@ -123,6 +123,9 @@ const wrapperRefs = useRef<Record<number, HTMLDivElement | null>>({})
   const renderTasksRef = useRef<Record<number, any>>({})
   const renderTokenRef = useRef(0)
   const [hoverInfo, setHoverInfo] = useState<{ page: number; left: number; top: number; content: string } | null>(null)
+  // Explicitly selected box (e.g., when user clicks an evidence chip). This is drawn
+  // regardless of whether the LLM evidence panels contain that coordinate.
+  const [selectedCoord, setSelectedCoord] = useState<any | null>(null)
 
 const sentenceTexts = extractSentenceArray(fulltext)
 
@@ -138,6 +141,7 @@ useImperativeHandle(ref, () => ({
   },
   scrollToCoord: (coord: any) => {
     try {
+      setSelectedCoord(coord)
       const pageNum = Number(coord?.page ?? coord?.page_number ?? coord?.pageNum ?? 1)
       const vp = pageViewports[pageNum]
       const dims = pages?.[pageNum - 1]
@@ -166,6 +170,7 @@ useImperativeHandle(ref, () => ({
       const firstCoord =
         Array.isArray(coords) ? coords.find((c: any) => String(c?.text || '').trim() === trimmed) : null
       if (!firstCoord) return
+      setSelectedCoord(firstCoord)
       const pageNum = Number(firstCoord?.page ?? firstCoord?.page_number ?? firstCoord?.pageNum ?? 1)
       const vp = pageViewports[pageNum]
       const dims = pages?.[pageNum - 1]
@@ -595,6 +600,18 @@ useImperativeHandle(ref, () => ({
               })
             : []
 
+          // Add an explicitly selected coordinate (e.g., table/figure chip click)
+          if (selectedCoord) {
+            try {
+              const p = Number(selectedCoord?.page ?? selectedCoord?.page_number ?? selectedCoord?.pageNum ?? 0)
+              if (p === pageNum) {
+                filtered.unshift({ ...selectedCoord, __selected: true })
+              }
+            } catch {
+              // ignore
+            }
+          }
+
 
           const elements = filtered.map((c: any, idx: number) => {
             const x = parseFloat(c?.x ?? '0')
@@ -651,10 +668,25 @@ useImperativeHandle(ref, () => ({
               (isOpen ? (paramsOpenHere[0] || coordsParamsOpen[0]) : undefined) ??
               (isClosed ? (paramsClosedHere[0] || coordsParamsClosed[0]) : undefined)
 
-            const alpha = isOpen ? 0.2 : 0.05
-            const fill = chosenParam ? colorForParam(chosenParam, alpha) : `rgba(255, 229, 100, ${alpha})`
-            const borderColor = chosenParam ? solidForParam(chosenParam) : 'rgba(255, 196, 0, 0.95)'
-            const border = isOpen ? `2px solid ${borderColor}` : `1px dashed ${borderColor}`
+            const isSelected = !!c?.__selected
+            const isArtifact = c?.type === 'table' || c?.type === 'figure'
+            // Keep tables/figures highlights more transparent so users can still read/see
+            // the underlying content.
+            const alpha = isArtifact
+              ? (isSelected ? 0.5 : (isOpen ? 0.5 : 0.5))
+              : (isSelected ? 0.0 : (isOpen ? 0.0 : 0.0))
+            const border_alpha = isArtifact
+              ? 0.95
+              : 0.0
+            const fill = isSelected
+              ? `rgba(59, 130, 246, ${alpha})`
+              : (chosenParam ? colorForParam(chosenParam, alpha) : `rgba(255, 229, 100, ${alpha})`)
+            const borderColor = isSelected
+              ? `rgba(37, 99, 235, ${border_alpha})`
+              : (chosenParam ? solidForParam(chosenParam) : `rgba(255, 196, 0, ${border_alpha})`)
+            const border = isSelected
+              ? `3px solid ${borderColor}`
+              : (isOpen ? `2px solid ${borderColor}` : `1px dashed ${borderColor}`)
             const title = chosenParam ? `${chosenParam}${t ? `: ${t.slice(0, 160)}` : ''}` : t ? t.slice(0, 160) : 'Sentence'
 
 
