@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import BackButton from '@/components/ui/backbutton'
 import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-button'
 import { Settings, Download } from 'lucide-react'
@@ -12,6 +12,9 @@ import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 export function GCHeader() {
   const router = useRouter()
   const dict = useDictionary()
+
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
 
   return (
     <header className="relative z-20 w-full py-4 bg-white shadow-sm">
@@ -36,7 +39,7 @@ export function GCHeader() {
               try {
                 localStorage.removeItem('access_token')
               } catch {}
-              router.push('/login')
+              router.push(`/${lang}/login`)
             }}
             className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
           >
@@ -121,6 +124,9 @@ export function SRHeader({
     }
   }
 
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <header className="relative border-b border-gray-200 bg-white shadow-sm">
       <div className="mx-auto max-w-4xl px-6">
@@ -128,7 +134,7 @@ export function SRHeader({
           {/* Left: optional back button */}
           {showBack ? (
             <div
-              onClick={() => router.push(backHref)}
+              onClick={() => router.push(`/${lang}${backHref}`)}
               style={{ cursor: 'pointer' }}
               className="flex items-center space-x-3"
             >

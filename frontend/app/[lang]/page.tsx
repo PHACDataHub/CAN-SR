@@ -1,12 +1,15 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useDictionary } from './DictionaryProvider'
 
 export default function HomePage() {
   const router = useRouter()
   const dict = useDictionary()
+
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
 
   useEffect(() => {
     // Check if user is logged in
@@ -14,10 +17,10 @@ export default function HomePage() {
 
     if (isLoggedIn) {
       // If logged in, redirect to portal
-      router.push('/can-sr')
+      router.push(`${lang}/can-sr`)
     } else {
       // If not logged in, redirect to login
-      router.push('/login')
+      router.push(`${lang}/login`)
     }
   }, [router])
 

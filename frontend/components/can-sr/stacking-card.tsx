@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible'
 import { Button } from '@/components/ui/button'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { useParams } from 'next/navigation'
 
 interface StackingCardProps {
   title: string
@@ -16,6 +17,9 @@ interface StackingCardProps {
 export default function StackingCard({ title, description, href, className }: StackingCardProps) {
   const [open, setOpen] = useState(false)
   const dict = useDictionary()
+
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className={`w-full ${className || ''}`}>
@@ -38,7 +42,7 @@ export default function StackingCard({ title, description, href, className }: St
               {open ? 'Minimize' : 'Expand'}
             </button> */}
 
-            <Link href={href} legacyBehavior>
+            <Link href={`/${lang}${href}`} legacyBehavior>
               <a className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
                 {dict.common.open}
               </a>

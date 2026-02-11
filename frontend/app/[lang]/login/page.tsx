@@ -61,7 +61,7 @@ export default function LoginPage() {
 
       // Small delay to ensure localStorage is written
       setTimeout(() => {
-        router.push('/can-sr')
+        router.push(`/${lang}/can-sr`)
       }, 100)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
