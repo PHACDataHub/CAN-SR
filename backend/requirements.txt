@@ -33,7 +33,7 @@ requests==2.32.5
 
 # Agent framework dependencies
 langchain==1.2.7
-langchain-core==1.2.7
+langchain-core==1.2.11
 langchain-google-genai==4.2.0
 
 # OAuth
