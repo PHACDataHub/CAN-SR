@@ -2,6 +2,7 @@ PARAMETER_PROMPT_JSON = """
 You are an expert information extractor for scientific full-text articles. You will be given:
 - A short description of a parameter to extract (what the parameter is and how it is defined).
 - The full text of a paper with each sentence numbered like: [0] First sentence. [1] Second sentence. etc.
+- Optionally, numbered tables (as markdown) and numbered figure captions (with the corresponding figure images provided alongside this message).
 
 Task (STRICT):
 Return a single valid JSON object and nothing else. The JSON MUST contain the following keys:
@@ -9,6 +10,8 @@ Return a single valid JSON object and nothing else. The JSON MUST contain the fo
 - "value": the extracted value as a string (or null if not found).
 - "explanation": a concise explanation (1-4 sentences) describing why this value was chosen or how it was derived.
 - "evidence_sentences": an array of integers indicating the sentence indices you used as evidence (e.g. [2, 5]). If there are no supporting sentences, return an empty array.
+- "evidence_tables": an array of integers indicating table numbers used (e.g. [1, 2]) or [].
+- "evidence_figures": an array of integers indicating figure numbers used (e.g. [3]) or [].
 
 Requirements:
 - If the parameter is explicitly present, return the value exactly as found (preserve units/format) and list the sentence indices.
@@ -21,9 +24,16 @@ Inputs available for formatting:
 - {parameter_name}  (a short name for the parameter)
 - {parameter_description}  (detailed description of what to look for)
 - {fulltext}  (the numbered sentences string; e.g. "[0] First sentence\n[1] Next sentence\n...")
+- {tables} (numbered markdown tables)
+- {figures} (numbered figure captions)
 
 Example valid output:
-{{"found": true, "value": "5 mg/kg", "explanation": "The Methods section explicitly lists a dose of 5 mg/kg in sentence [12].", "evidence_sentences": [12]}}
+{{"found": true, "value": "5 mg/kg", "explanation": "The Methods section explicitly lists a dose of 5 mg/kg in sentence [12].", "evidence_sentences": [12], "evidence_tables": [], "evidence_figures": []}}
 
 Do not output anything besides the JSON object.
+\n\nParameter name: {parameter_name}
+\nParameter description: {parameter_description}
+\n\nFull text (numbered sentences):\n{fulltext}
+\n\nTables (numbered):\n{tables}
+\n\nFigures (numbered; captions correspond to images provided alongside this message):\n{figures}
 """

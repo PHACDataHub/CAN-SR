@@ -41,22 +41,34 @@ Context:
 - Full text (numbered sentences):
 {fulltext}
 
+- Tables (numbered):
+{tables}
+
+- Figures (numbered; captions correspond to images provided alongside this message):
+{figures}
+
 Respond with a JSON object containing these keys:
 - "selected": the exact option string you selected (must match one of the options above; if none fits, pick the closest option and report a low confidence score)
 - "explanation": a concise explanation (1-4 sentences) of why you selected that option
 - "confidence": a floating number between 0 and 1 (inclusive) representing your estimated confidence for the selected option
 - "evidence_sentences": an array of integers indicating the sentence indices you used as evidence (e.g. [2, 5]). If there is low confidence, return an empty array [].
+- "evidence_tables": an array of integers indicating the table numbers you used (e.g. [1, 3]) or [] if none.
+- "evidence_figures": an array of integers indicating the figure numbers you used (e.g. [2]) or [] if none.
 
 JSON object format:
 {{
   "selected": "<one of the provided options>",
   "explanation": "<1-4 sentences explaining the choice>",
   "confidence": <float 0..1>,
-  "evidence_sentences": [<indices of sentences used as evidence>]
+  "evidence_sentences": [<indices of sentences used as evidence>],
+  "evidence_tables": [<table numbers used>],
+  "evidence_figures": [<figure numbers used>]
 }}
 
 Notes:
 - Keep the response strictly as a JSON object that matches the schema above.
 - Do not wrap the response in Markdown code fences or add language tags (e.g., ```json). Return only raw JSON.
 - Use sentence indices from the numbered full text for "evidence_sentences"
+- Use table numbers from the Tables section for "evidence_tables"
+- Use figure numbers from the Figures section for "evidence_figures"
 """

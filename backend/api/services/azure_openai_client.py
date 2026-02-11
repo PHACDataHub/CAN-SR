@@ -25,6 +25,7 @@ import json
 import logging
 import time
 from pathlib import Path
+import base64
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -211,7 +212,7 @@ class AzureOpenAIClient:
 
     def _build_messages(
         self, user_message: str, system_prompt: Optional[str] = None
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """Build message list for chat completion"""
         messages = []
         if system_prompt:
@@ -221,7 +222,7 @@ class AzureOpenAIClient:
 
     async def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         max_tokens: int = 1000,
         temperature: float = 0.7,
@@ -320,6 +321,51 @@ class AzureOpenAIClient:
         except Exception as e:
             print(f"Error in simple chat: {e}")
             return f"I apologize, but I encountered an error while processing your request. Please try again later. (Error: {str(e)})"
+
+    async def multimodal_chat(
+        self,
+        user_text: str,
+        images: List[Tuple[bytes, str]],
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: int = 1000,
+        temperature: float = 0.0,
+    ) -> str:
+        """Send a single user message with multiple attached images.
+
+        `images` items are (bytes, mime_type) where mime_type is e.g. "image/png".
+        """
+        try:
+            parts: List[Dict[str, Any]] = [{"type": "text", "text": user_text}]
+            for b, mime in images or []:
+                if not b:
+                    continue
+                b64 = base64.b64encode(b).decode("utf-8")
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    }
+                )
+
+            messages: List[Dict[str, Any]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": parts})
+
+            response = await self.chat_completion(
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return response["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"Error in multimodal_chat: {e}")
+            return (
+                "I apologize, but I encountered an error while processing your request. "
+                f"Please try again later. (Error: {str(e)})"
+            )
 
     async def streaming_chat(
         self,
