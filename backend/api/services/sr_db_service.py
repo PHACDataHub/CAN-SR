@@ -27,7 +27,7 @@ class SRDBService:
         # Service is stateless; connection strings passed per-call
         pass
 
-    def ensure_table_exists(self, db_conn_str: str) -> None:
+    def ensure_table_exists(self) -> None:
         """
         Ensure the systematic_reviews table exists in PostgreSQL.
         Creates the table if it doesn't exist.
@@ -57,8 +57,6 @@ class SRDBService:
             """
             cur.execute(create_table_sql)
             conn.commit()
-            
-
                 
             logger.info("Ensured systematic_reviews table exists")
         except Exception as e:
@@ -157,7 +155,6 @@ class SRDBService:
 
     def create_systematic_review(
         self,
-        db_conn_str: str,
         name: str,
         description: Optional[str],
         criteria_str: Optional[str],
@@ -236,7 +233,7 @@ class SRDBService:
             if conn:
                 pass
 
-    def add_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
+    def add_user(self, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Add a user id to the SR's users list. Enforces that the SR exists and is visible;
         requester must be a member or owner.
@@ -244,12 +241,12 @@ class SRDBService:
         """
   
 
-        sr = self.get_systematic_review(db_conn_str, sr_id)
+        sr = self.get_systematic_review(sr_id)
         if not sr or not sr.get("visible", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
 
         # Check permission
-        has_perm = self.user_has_sr_permission(db_conn_str, sr_id, requester_id)
+        has_perm = self.user_has_sr_permission(sr_id, requester_id)
         if not has_perm:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this systematic review")
 
@@ -294,19 +291,19 @@ class SRDBService:
             if conn:
                 pass
 
-    def remove_user(self, db_conn_str: str, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
+    def remove_user(self, sr_id: str, target_user_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Remove a user id from the SR's users list. Owner cannot be removed.
         Enforces requester permissions (must be a member or owner).
         """
         
 
-        sr = self.get_systematic_review(db_conn_str, sr_id)
+        sr = self.get_systematic_review(sr_id)
         if not sr or not sr.get("visible", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
 
         # Check permission
-        has_perm = self.user_has_sr_permission(db_conn_str, sr_id, requester_id)
+        has_perm = self.user_has_sr_permission(sr_id, requester_id)
         if not has_perm:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this systematic review")
 
@@ -354,7 +351,7 @@ class SRDBService:
             if conn:
                 pass
 
-    def user_has_sr_permission(self, db_conn_str: str, sr_id: str, user_id: str) -> bool:
+    def user_has_sr_permission(self, sr_id: str, user_id: str) -> bool:
         """
         Check whether the given user_id is a member (in 'users') or the owner of the SR.
         Returns True if the SR exists and the user is present in the SR's users list or is the owner.
@@ -363,7 +360,7 @@ class SRDBService:
         """
         
 
-        doc = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
+        doc = self.get_systematic_review(sr_id, ignore_visibility=True)
         if not doc:
             return False
 
@@ -372,7 +369,7 @@ class SRDBService:
             return True
         return False
 
-    def update_criteria(self, db_conn_str: str, sr_id: str, criteria_obj: Dict[str, Any], criteria_str: str, requester_id: str) -> Dict[str, Any]:
+    def update_criteria(self, sr_id: str, criteria_obj: Dict[str, Any], criteria_str: str, requester_id: str) -> Dict[str, Any]:
         """
         Update the criteria fields (criteria, criteria_yaml, criteria_parsed, updated_at).
         The requester must be a member or owner.
@@ -380,12 +377,12 @@ class SRDBService:
         """
         
 
-        sr = self.get_systematic_review(db_conn_str, sr_id)
+        sr = self.get_systematic_review(sr_id)
         if not sr or not sr.get("visible", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
 
         # Check permission
-        has_perm = self.user_has_sr_permission(db_conn_str, sr_id, requester_id)
+        has_perm = self.user_has_sr_permission(sr_id, requester_id)
         if not has_perm:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this systematic review")
 
@@ -419,7 +416,7 @@ class SRDBService:
 
             
             # Return fresh doc
-            doc = self.get_systematic_review(db_conn_str, sr_id)
+            doc = self.get_systematic_review(sr_id)
             return doc
             
         except HTTPException:
@@ -431,7 +428,7 @@ class SRDBService:
             if conn:
                 pass
 
-    def list_systematic_reviews_for_user(self, db_conn_str: str, user_email: str) -> List[Dict[str, Any]]:
+    def list_systematic_reviews_for_user(self, user_email: str) -> List[Dict[str, Any]]:
         """
         Return all SR documents where the user is a member (regardless of visible flag).
         """
@@ -484,7 +481,7 @@ class SRDBService:
             if conn:
                 pass
 
-    def get_systematic_review(self, db_conn_str: str, sr_id: str, ignore_visibility: bool = False) -> Optional[Dict[str, Any]]:
+    def get_systematic_review(self, sr_id: str, ignore_visibility: bool = False) -> Optional[Dict[str, Any]]:
         """
         Return SR document by id. Returns None if not found.
         If ignore_visibility is False, only returns visible SRs.
@@ -535,14 +532,14 @@ class SRDBService:
             if conn:
                 pass
 
-    def set_visibility(self, db_conn_str: str, sr_id: str, visible: bool, requester_id: str) -> Dict[str, Any]:
+    def set_visibility(self, sr_id: str, visible: bool, requester_id: str) -> Dict[str, Any]:
         """
         Set the visible flag on the SR. Only owner is allowed to change visibility.
         Returns update metadata.
         """
         
 
-        sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
+        sr = self.get_systematic_review(sr_id, ignore_visibility=True)
         if not sr:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
 
@@ -573,26 +570,26 @@ class SRDBService:
             if conn:
                pass
 
-    def soft_delete_systematic_review(self, db_conn_str: str, sr_id: str, requester_id: str) -> Dict[str, Any]:
+    def soft_delete_systematic_review(self, sr_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Soft-delete (set visible=False). Only owner may delete.
         """
-        return self.set_visibility(db_conn_str, sr_id, False, requester_id)
+        return self.set_visibility(sr_id, False, requester_id)
 
-    def undelete_systematic_review(self, db_conn_str: str, sr_id: str, requester_id: str) -> Dict[str, Any]:
+    def undelete_systematic_review(self, sr_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Undelete (set visible=True). Only owner may undelete.
         """
-        return self.set_visibility(db_conn_str, sr_id, True, requester_id)
+        return self.set_visibility(sr_id, True, requester_id)
 
-    def hard_delete_systematic_review(self, db_conn_str: str, sr_id: str, requester_id: str) -> Dict[str, Any]:
+    def hard_delete_systematic_review(self, sr_id: str, requester_id: str) -> Dict[str, Any]:
         """
         Permanently remove the SR document. Only owner may hard delete.
         Returns deletion metadata (deleted_count).
         """
         
 
-        sr = self.get_systematic_review(db_conn_str, sr_id, ignore_visibility=True)
+        sr = self.get_systematic_review(sr_id, ignore_visibility=True)
         if not sr:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
 
@@ -618,7 +615,7 @@ class SRDBService:
                 pass
 
 
-    def update_screening_db_info(self, db_conn_str: str, sr_id: str, screening_db: Dict[str, Any]) -> None:
+    def update_screening_db_info(self, sr_id: str, screening_db: Dict[str, Any]) -> None:
         """
         Update the screening_db field in the SR document with screening database metadata.
         """
@@ -645,7 +642,7 @@ class SRDBService:
             if conn:
                 pass
 
-    def clear_screening_db_info(self, db_conn_str: str, sr_id: str) -> None:
+    def clear_screening_db_info(self, sr_id: str) -> None:
         """
         Remove the screening_db field from the SR document.
         """

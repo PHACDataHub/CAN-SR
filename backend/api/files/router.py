@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional
 import os
 import logging
 from datetime import datetime, timezone
-from azure.core.exceptions import ResourceNotFoundError
 
 from fastapi import (
     APIRouter,
@@ -206,9 +205,10 @@ async def download_by_path(
     path: str,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ):
-    """
-    Stream a blob directly by storage path in the form 'container/blob_path'
-    Example storage_path: "container/users/123/docid_filename.pdf"
+    """Download directly by storage path in the form 'container/blob_path'.
+
+    This works for both Azure and local storage backends.
+    Example: "users/users/123/documents/<docid>_<filename>.pdf"
     """
     try:
         if not storage_service:
@@ -217,29 +217,14 @@ async def download_by_path(
                 detail="Storage service not available",
             )
 
-        # Basic validation: expect "container/blob"
-        if not path or "/" not in path:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Invalid storage path"
-            )
-
-        container, blob = path.split("/", 1)
-        logger.info(f"Downloading blob: container={container}, blob={blob}")
-
         try:
-            blob_client = storage_service.blob_service_client.get_blob_client(
-                container=container, blob=blob
-            )
-            stream = blob_client.download_blob()
-            content = stream.readall()
-        except ResourceNotFoundError:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="Blob not found"
-            )
-
-        filename = os.path.basename(blob) or "download"
+            content, filename = await storage_service.get_bytes_by_path(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download: {e}")
         
         def gen():
             yield content

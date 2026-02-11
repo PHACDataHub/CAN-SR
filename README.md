@@ -221,11 +221,53 @@ AZURE_OPENAI_ENDPOINT=your-endpoint
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
 # Storage
-AZURE_STORAGE_CONNECTION_STRING=your-connection-string
+# STORAGE_MODE is strict: local | azure | entra
+STORAGE_MODE=local
+
+# Storage container name
+# - local: folder name under LOCAL_STORAGE_BASE_PATH
+# - azure/entra: blob container name
+STORAGE_CONTAINER_NAME=can-sr-storage
+
+# local storage
+LOCAL_STORAGE_BASE_PATH=uploads
+
+# azure storage (account name + key)
+# STORAGE_MODE=azure
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
+AZURE_STORAGE_ACCOUNT_KEY=your-key
+
+# entra storage (Managed Identity / DefaultAzureCredential)
+# STORAGE_MODE=entra
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
 
 # Databases
-MONGODB_URI=mongodb://localhost:27017/mongodb-sr
-POSTGRES_URI=postgres://admin:password@localhost:5432/postgres-cits
+MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
+
+# Postgres configuration
+POSTGRES_MODE=docker  # docker | local | azure
+
+# Canonical Postgres connection settings (single set)
+# - docker/local: POSTGRES_PASSWORD is required
+# - azure: POSTGRES_PASSWORD is ignored (Entra token auth via DefaultAzureCredential)
+POSTGRES_HOST=pgdb-service
+POSTGRES_DATABASE=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=password
+
+# Local Postgres (developer machine)
+# POSTGRES_MODE=local
+# POSTGRES_HOST=localhost
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=123
+
+# Azure Database for PostgreSQL (Entra auth)
+# POSTGRES_MODE=azure
+# POSTGRES_HOST=...postgres.database.azure.com
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=<entra-upn-or-role>
+# POSTGRES_PASSWORD=  # not used in azure mode
 
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-instance

@@ -9,7 +9,7 @@ WORKDIR /app
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y \
     gcc \
     g++ \
     git \
@@ -17,6 +17,8 @@ RUN apt-get clean && \
     curl \
     make \
     libc6-dev \
+    dialog \
+    openssh-server \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -26,7 +28,7 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt --no-cache-dir
 
 # Copy application code
 COPY . .
@@ -41,10 +43,7 @@ RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
 COPY sshd_config /etc/ssh/
 COPY entrypoint.sh /entrypoint.sh
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends dialog \
-    && apt-get install -y --no-install-recommends openssh-server \
-    && echo "root:Docker!" | chpasswd \
+RUN echo "root:Docker!" | chpasswd \
     && chmod u+x /entrypoint.sh
 
 USER root

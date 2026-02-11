@@ -15,7 +15,7 @@ CAN-SR Backend provides a production-ready REST API for managing systematic revi
 - **PDF Processing** - Full-text extraction using GROBID
 - **Azure OpenAI Integration** - GPT-4o, GPT-4o-mini, GPT-3.5-turbo for AI features
 - **JWT Authentication** - Secure user authentication
-- **Azure Blob Storage** - Scalable document storage
+- **Storage** - Local filesystem or Azure Blob Storage (connection string or Entra)
 
 ## Architecture
 
@@ -51,12 +51,54 @@ AZURE_OPENAI_API_KEY=your-azure-openai-api-key
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 
-# Azure Storage (Required)
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
+# Storage
+# STORAGE_MODE is strict: local | azure | entra
+STORAGE_MODE=local
+
+# Storage container name
+# - local: folder name under LOCAL_STORAGE_BASE_PATH
+# - azure/entra: blob container name
+STORAGE_CONTAINER_NAME=can-sr-storage
+
+# local storage
+LOCAL_STORAGE_BASE_PATH=uploads
+
+# azure storage (account name + key)
+# STORAGE_MODE=azure
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
+AZURE_STORAGE_ACCOUNT_KEY=your-key
+
+# entra storage (Managed Identity / DefaultAzureCredential)
+# STORAGE_MODE=entra
+AZURE_STORAGE_ACCOUNT_NAME=youraccount
 
 # Databases (Docker defaults - change for production)
-MONGODB_URI=mongodb://sr-mongodb-service:27017/mongodb-sr
-POSTGRES_URI=postgres://admin:password@cit-pgdb-service:5432/postgres-cits
+
+
+# Postgres configuration
+POSTGRES_MODE=docker  # docker | local | azure
+
+# Canonical Postgres connection settings (single set)
+# - docker/local: POSTGRES_PASSWORD is required
+# - azure: POSTGRES_PASSWORD is ignored (Entra token auth via DefaultAzureCredential)
+POSTGRES_HOST=pgdb-service
+POSTGRES_DATABASE=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=password
+
+# Local Postgres (developer machine)
+# POSTGRES_MODE=local
+# POSTGRES_HOST=localhost
+# POSTGRES_DATABASE=grep
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=123
+
+# Azure Database for PostgreSQL (Entra auth)
+# POSTGRES_MODE=azure
+# POSTGRES_HOST=<your-azure-postgres-hostname>
+# POSTGRES_DATABASE=<db>
+# POSTGRES_USER=<your-entra-upn>
+# POSTGRES_PASSWORD=  # not used in azure mode
 
 # GROBID Service
 GROBID_SERVICE_URL=http://grobid-service:8070
@@ -215,14 +257,21 @@ docker compose restart api
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | `abc123...` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com` |
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-4o` |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob Storage connection | `DefaultEndpointsProtocol=https;...` |
+| `STORAGE_MODE` | Storage backend selector | `local` |
+| `LOCAL_STORAGE_BASE_PATH` | Local storage base path (when local) | `uploads` |
+| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob (when STORAGE_MODE=azure) | `DefaultEndpointsProtocol=https;...` |
+| `ENTRA_AZURE_STORAGE_ACCOUNT_NAME` | Azure account (when STORAGE_MODE=entra) | `mystorageacct` |
 | `SECRET_KEY` | JWT token signing key | `your-secure-secret-key` |
 
 ### Optional Variables
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MONGODB_URI` | MongoDB connection string | `mongodb://sr-mongodb-service:27017/mongodb-sr` |
-| `POSTGRES_URI` | PostgreSQL connection string | `postgres://admin:password@cit-pgdb-service:5432/postgres-cits` |
+| `POSTGRES_MODE` | Postgres connection mode: `docker` \| `local` \| `azure` | `docker` |
+| `POSTGRES_HOST` | Postgres host (docker: service name; local: localhost; azure: FQDN) | `pgdb-service` |
+| `POSTGRES_DATABASE` | Postgres database name | `postgres` |
+| `POSTGRES_USER` | Postgres user (azure: Entra UPN or role) | `admin` |
+| `POSTGRES_PASSWORD` | Postgres password (ignored when POSTGRES_MODE=azure) | `password` |
 | `GROBID_SERVICE_URL` | GROBID service URL | `http://grobid-service:8070` |
 | `DATABRICKS_INSTANCE` | Databricks workspace URL | - |
 | `DATABRICKS_TOKEN` | Databricks access token | - |
