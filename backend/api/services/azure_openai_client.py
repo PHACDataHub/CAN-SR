@@ -198,7 +198,7 @@ class AzureOpenAIClient:
             if self._auth_type == "entra":
                 if not self._token_provider:
                     raise ValueError(self._config_error or "Azure AD token provider not configured")
-                azure_openai_kwargs["entra_token_provider"] = self._token_provider
+                azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
             else:
                 # key auth
                 if not self._api_key:
