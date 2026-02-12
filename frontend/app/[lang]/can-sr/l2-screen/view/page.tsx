@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
 import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
@@ -538,6 +538,9 @@ export default function CanSrL2ScreenViewPage() {
     return null
   }
 
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
@@ -732,7 +735,7 @@ export default function CanSrL2ScreenViewPage() {
                     setPanelOpen({})
                     await fetchCitationById(target)
                     router.push(
-                      `/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                      `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}`,
                     )
@@ -753,7 +756,7 @@ export default function CanSrL2ScreenViewPage() {
                     setPanelOpen({})
                     await fetchCitationById(target)
                     router.push(
-                      `/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                      `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}`,
                     )

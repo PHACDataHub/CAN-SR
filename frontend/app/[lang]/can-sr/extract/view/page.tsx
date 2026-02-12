@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useState, useEffect, useRef } from 'react'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
@@ -429,6 +429,9 @@ export default function CanSrL2ScreenPage() {
     return
   }
 
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
@@ -686,7 +689,7 @@ export default function CanSrL2ScreenPage() {
                     if (Number.isNaN(cur)) return
                     const target = String(cur - 1)
                     router.push(
-                      `/can-sr/extract/view?sr_id=${encodeURIComponent(
+                      `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )
@@ -702,7 +705,7 @@ export default function CanSrL2ScreenPage() {
                     if (Number.isNaN(cur)) return
                     const target = String(cur + 1)
                     router.push(
-                      `/can-sr/extract/view?sr_id=${encodeURIComponent(
+                      `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )

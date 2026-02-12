@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
 import { getAuthToken, getTokenType } from '@/lib/auth'
@@ -20,7 +20,7 @@ import { useDictionary } from '@/app/[lang]/DictionaryProvider'
       - Default selection set to AI answer from the citation row (column name computed via snake_case_column)
       - "Classify" button that calls the backend screen classify endpoint and updates the AI panel
   - If an AI answer exists for that question, show a collapsible panel containing the parsed LLM JSON
-    (expected fields: selected, explanation, confidence, llm_raw)
+    (expected fields: selected, explanation, confidence, llm_raw/)
   - Keep the code simple and add short comments to make future componentization straightforward.
 */
 
@@ -370,6 +370,9 @@ export default function CanSrL1ScreenPage() {
     return null
   }
 
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
@@ -528,7 +531,7 @@ export default function CanSrL1ScreenPage() {
               setPanelOpen({})
               await fetchCitationById(target)
               router.push(
-                `/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
                 )}`,
               )
@@ -549,7 +552,7 @@ export default function CanSrL1ScreenPage() {
               setPanelOpen({})
               await fetchCitationById(target)
               router.push(
-                `/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
                 )}`,
               )

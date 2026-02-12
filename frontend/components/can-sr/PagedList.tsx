@@ -1,7 +1,7 @@
 import { GET } from '@/app/api/search/route'
 import { Citation } from '@/components/chat/types'
 import { getAuthToken, getTokenType } from '@/lib/auth'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { Bot, Check } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
@@ -202,6 +202,9 @@ export default function PagedList({
     }
   }
 
+  // Get current language to prepend to href links
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="flex flex-col items-center space-y-4">
       <ul className="space-y-2">
@@ -221,7 +224,7 @@ export default function PagedList({
               <button
                 onClick={() =>
                   router.push(
-                    `/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(
+                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(
                       srId || '',
                     )}&citation_id=${data.id}&screening=${screeningStep}`,
                   )
