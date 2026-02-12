@@ -81,7 +81,12 @@
     "reviewDescription": "Description (facultatif)",
     "creating": "Création...",
     "reviewNameRequired": "Veuillez fournir un nom pour la revue.",
-    "manageUsers": "Gérer les utilisateurs"
+    "manageUsers": "Gérer les utilisateurs",
+    "viewDetails": "Ouvrez pour afficher les détails et passer à l'étape suivante.",
+    "models": "Modèles",
+    "recommended": "Recommandé",
+    "modelDescription1": "Nouveau modèle mini, le plus rapide en raisonnement avancé",
+    "modelDescription2": "Ancien modèle mini, le plus rapide en raisonnement avancé"
   },
   "sr": {
     "databaseSearch": "Recherche dans la base de données",

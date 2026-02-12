@@ -81,7 +81,12 @@
     "reviewDescription": "Description (optional)",
     "creating": "Creating...",
     "reviewNameRequired": "Please provide a name for the review.",
-    "manageUsers": "Manage Users"
+    "manageUsers": "Manage Users",
+    "viewDetails": "Open to view details and continue to the next step.",
+    "models": "Models",
+    "recommended": "Recommended",
+    "modelDescription1": "Newer mini model, fastest at advanced reasoning",
+    "modelDescription2": "Older mini model, fastest at advanced reasoning"
   },
   "sr": {
     "databaseSearch": "Database Search",

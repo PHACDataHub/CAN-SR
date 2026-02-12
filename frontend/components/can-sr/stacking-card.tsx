@@ -53,7 +53,7 @@ export default function StackingCard({ title, description, href, className }: St
         <CollapsibleContent>
           <div className="rounded-b-lg border border-t-0 border-gray-200 bg-white/95 p-4 text-sm text-gray-700">
             <p className="mb-3">
-              {description || 'Open to view details and continue to the next step.'}
+              {description || dict.cansr.viewDetails}
             </p>
             {/* <div className="flex justify-end">
               <Link href={href}>
