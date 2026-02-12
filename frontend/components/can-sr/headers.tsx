@@ -13,7 +13,7 @@ export function GCHeader() {
   const router = useRouter()
   const dict = useDictionary()
 
-  // Get current language to prepend to href links
+  // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
 
   return (
@@ -124,7 +124,7 @@ export function SRHeader({
     }
   }
 
-  // Get current language to prepend to href links
+  // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
 
   return (

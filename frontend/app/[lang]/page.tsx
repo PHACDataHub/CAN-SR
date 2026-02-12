@@ -8,7 +8,7 @@ export default function HomePage() {
   const router = useRouter()
   const dict = useDictionary()
 
-  // Get current language to prepend to href links
+  // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
 
   useEffect(() => {
@@ -17,10 +17,10 @@ export default function HomePage() {
 
     if (isLoggedIn) {
       // If logged in, redirect to portal
-      router.push(`${lang}/can-sr`)
+      router.push(`/${lang}/can-sr`)
     } else {
       // If not logged in, redirect to login
-      router.push(`${lang}/login`)
+      router.push(`/${lang}/login`)
     }
   }, [router])
 

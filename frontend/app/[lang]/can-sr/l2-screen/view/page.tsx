@@ -538,7 +538,7 @@ export default function CanSrL2ScreenViewPage() {
     return null
   }
 
-  // Get current language to prepend to href links
+  // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
 
   return (

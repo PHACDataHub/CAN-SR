@@ -18,7 +18,7 @@ export default function StackingCard({ title, description, href, className }: St
   const [open, setOpen] = useState(false)
   const dict = useDictionary()
 
-  // Get current language to prepend to href links
+  // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
 
   return (
