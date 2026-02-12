@@ -138,7 +138,7 @@ class CitsDPService:
     # -----------------------
     # Generic column ops
     # -----------------------
-    def create_column(self, db_conn_str: str, col: str, col_type: str, table_name: str = "citations") -> None:
+    def create_column(self, col: str, col_type: str, table_name: str = "citations") -> None:
         """
         Create column on citations table if it doesn't already exist.
         col should be the exact column name to use (caller may pass snake_case(col)).
@@ -165,7 +165,6 @@ class CitsDPService:
 
     def update_jsonb_column(
         self,
-        db_conn_str: str,
         citation_id: int,
         col: str,
         data: Any,
@@ -197,7 +196,6 @@ class CitsDPService:
 
     def update_text_column(
         self,
-        db_conn_str: str,
         citation_id: int,
         col: str,
         text_value: str,
@@ -230,7 +228,7 @@ class CitsDPService:
     # -----------------------
     # Citation row helpers
     # -----------------------
-    def dump_citations_csv(self, db_conn_str: str, table_name: str = "citations") -> bytes:
+    def dump_citations_csv(self, table_name: str = "citations") -> bytes:
         """Dump the entire `citations` table as CSV bytes.
 
         Intended to be called from async FastAPI routes via
@@ -259,7 +257,7 @@ class CitsDPService:
             if conn:
                 pass
 
-    def get_citation_by_id(self, db_conn_str: str, citation_id: int, table_name: str = "citations") -> Optional[Dict[str, Any]]:
+    def get_citation_by_id(self, citation_id: int, table_name: str = "citations") -> Optional[Dict[str, Any]]:
         """
         Return a dict mapping column -> value for the citation row, or None.
         """
@@ -286,7 +284,7 @@ class CitsDPService:
             if conn:
                 pass
 
-    def list_citation_ids(self, db_conn_str: str, filter_step=None, table_name: str = "citations") -> List[int]:
+    def list_citation_ids(self, filter_step=None, table_name: str = "citations") -> List[int]:
         """
         Return list of integer primary keys (id) from citations table ordered by id.
         """
@@ -333,7 +331,7 @@ class CitsDPService:
             if conn:
                 pass
 
-    def list_fulltext_urls(self, db_conn_str: str, table_name: str = "citations") -> List[str]:
+    def list_fulltext_urls(self, table_name: str = "citations") -> List[str]:
         """
         Return list of fulltext_url values (non-null) from citations table.
         """
@@ -350,18 +348,17 @@ class CitsDPService:
             if conn:
                 pass
 
-    def update_citation_fulltext(self, db_conn_str: str, citation_id: int, fulltext_path: str) -> int:
+    def update_citation_fulltext(self, citation_id: int, fulltext_path: str) -> int:
         """
         Backwards-compatible helper used by some routers. Sets `fulltext_url`.
         """
-        return self.update_text_column(db_conn_str, citation_id, "fulltext_url", fulltext_path)
+        return self.update_text_column(citation_id, "fulltext_url", fulltext_path)
 
     # -----------------------
     # Upload fulltext and compute md5
     # -----------------------
     def attach_fulltext(
         self,
-        db_conn_str: str,
         citation_id: int,
         azure_path: str,
         file_bytes: bytes,
@@ -373,7 +370,7 @@ class CitsDPService:
         """
         table_name = _validate_ident(table_name, kind="table_name")
         # create columns if missing
-        self.create_column(db_conn_str, "fulltext_url", "TEXT", table_name=table_name)
+        self.create_column("fulltext_url", "TEXT", table_name=table_name)
         # compute md5
         md5 = hashlib.md5(file_bytes).hexdigest() if file_bytes is not None else ""
         
@@ -383,15 +380,13 @@ class CitsDPService:
         cur.execute(f'UPDATE "{table_name}" SET "fulltext_url" = %s WHERE id = %s', (azure_path, int(citation_id)))
         rows = cur.rowcount
         conn.commit()
-
-
         
         return rows
 
     # -----------------------
     # Column get/set helpers
     # -----------------------
-    def get_column_value(self, db_conn_str: str, citation_id: int, column: str, table_name: str = "citations") -> Any:
+    def get_column_value(self, citation_id: int, column: str, table_name: str = "citations") -> Any:
         """
         Return the value stored in `column` for the citation row (or None).
         """
@@ -418,18 +413,18 @@ class CitsDPService:
             if conn:
                 pass
 
-    def set_column_value(self, db_conn_str: str, citation_id: int, column: str, value: Any, table_name: str = "citations") -> int:
+    def set_column_value(self, citation_id: int, column: str, value: Any, table_name: str = "citations") -> int:
         """
         Generic setter for a citation row column. Will create a TEXT column if it doesn't exist.
         """
         # For simplicity, create a TEXT column. Callers that need JSONB should use update_jsonb_column.
-        self.create_column(db_conn_str, column, "TEXT", table_name=table_name)
-        return self.update_text_column(db_conn_str, citation_id, column, value if value is not None else None, table_name=table_name)
+        self.create_column(column, "TEXT", table_name=table_name)
+        return self.update_text_column(citation_id, column, value if value is not None else None, table_name=table_name)
 
     # -----------------------
     # Per-upload table lifecycle helpers
     # -----------------------
-    def drop_table(self, db_conn_str: str, table_name: str, cascade: bool = True) -> None:
+    def drop_table(self, table_name: str, cascade: bool = True) -> None:
         """Drop a screening table in the shared database."""
         table_name = _validate_ident(table_name, kind="table_name")
         conn = None
@@ -445,7 +440,6 @@ class CitsDPService:
 
     def create_table_and_insert_sync(
         self,
-        db_conn_str: str,
         table_name: str,
         columns: List[str],
         rows: List[Dict[str, Any]],

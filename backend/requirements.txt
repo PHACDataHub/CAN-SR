@@ -3,6 +3,7 @@ fastapi>=0.104.1
 uvicorn>=0.23.2
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
+PyYAML==6.0.2
 email-validator>=2.0.0
 python-multipart==0.0.22
 python-dotenv>=1.0.1

@@ -83,9 +83,8 @@ async def extract_parameter_endpoint(
     derived from the parameter name (prefixed with 'llm_param_').
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -98,7 +97,7 @@ async def extract_parameter_endpoint(
     row = None
     if not fulltext:
         try:
-            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
         except RuntimeError as rexc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
         except Exception as e:
@@ -229,7 +228,7 @@ async def extract_parameter_endpoint(
     col_name = snake_case_param(payload.parameter_name)
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored, table_name)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -256,9 +255,8 @@ async def human_extract_parameter(
     and does not call any LLM.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -268,7 +266,7 @@ async def human_extract_parameter(
 
     # Ensure citation exists (we won't require full_text for human input but check row presence)
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -323,7 +321,7 @@ async def human_extract_parameter(
         col_name = f"human_param_{core}" if core else "human_param_param"
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, stored, table_name)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -347,9 +345,8 @@ async def extract_fulltext_from_storage(
     under column "fulltext", and return the generated fulltext_str.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -359,7 +356,7 @@ async def extract_fulltext_from_storage(
 
     # fetch citation row
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -373,16 +370,14 @@ async def extract_fulltext_from_storage(
     if not storage_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No fulltext storage path found on citation row")
 
-    if "/" not in storage_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
-
-    container, blob = storage_path.split("/", 1)
-
     try:
-        blob_client = storage_service.blob_service_client.get_blob_client(container=container, blob=blob)
-        content = blob_client.download_blob().readall()
+        content, _filename = await storage_service.get_bytes_by_path(storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fulltext file not found in storage")
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download blob: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download from storage: {e}")
 
     # If the citation row already contains an extracted full text in the "fulltext" column,
     # only use it if the stored md5 matches the pdf we just downloaded.
@@ -430,10 +425,10 @@ async def extract_fulltext_from_storage(
 
     # persist full_text_str and coordinates/pages into citation row
     try:
-        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext", full_text_str, table_name)
-        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, "fulltext_md5", current_md5, table_name)
-        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_coords", annotations, table_name)
-        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, "fulltext_pages", pages, table_name)
+        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext", full_text_str, table_name)
+        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext_md5", current_md5, table_name)
+        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_coords", annotations, table_name)
+        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_pages", pages, table_name)
         updated = updated1 or updated2 or updated3 or updated4
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))

@@ -60,7 +60,7 @@ async def create_user(user_data: UserCreate) -> Optional[UserRead]:
     if not user_db_service:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="User registration is not available without Azure Storage configuration",
+            detail="User registration is not available without configured storage",
         )
 
     return await user_db_service.create_user(user_data)
@@ -71,7 +71,7 @@ async def update_user(user_id: str, user_in: UserUpdate) -> Optional[UserRead]:
     if not user_db_service:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="User operations are not available without Azure Storage configuration",
+            detail="User operations are not available without configured storage",
         )
 
     update_data = user_in.model_dump(exclude_unset=True)

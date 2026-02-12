@@ -16,19 +16,33 @@ from fastapi.concurrency import run_in_threadpool
 from .config import settings
 
 
-def _is_postgres_configured(db_conn_str: Optional[str] = None) -> bool:
+def _is_postgres_configured() -> bool:
     """
-    Check if PostgreSQL is configured via Entra ID env vars or connection string.
+    Check if PostgreSQL is configured via the POSTGRES_MODE profile.
     """
-    has_entra_config = settings.POSTGRES_HOST and settings.POSTGRES_DATABASE and settings.POSTGRES_USER
-    has_uri_config = db_conn_str or settings.POSTGRES_URI
-    return bool(has_entra_config or has_uri_config)
+    try:
+        prof = settings.postgres_profile()
+    except Exception:
+        return False
+
+    # minimal requirements
+    if not (prof.get("database") and prof.get("user")):
+        return False
+
+    # password required for local/docker
+    if prof.get("mode") in ("local", "docker") and not prof.get("password"):
+        return False
+
+    # azure requires host
+    if prof.get("mode") == "azure" and not prof.get("host"):
+        return False
+
+    return True
 
 
 async def load_sr_and_check(
     sr_id: str,
     current_user: Dict[str, Any],
-    db_conn_str: Optional[str],
     srdb_service,
     require_screening: bool = True,
     require_visible: bool = True,
@@ -39,20 +53,19 @@ async def load_sr_and_check(
     Args:
       sr_id: SR id string
       current_user: current user dict (must contain "id" and "email")
-      db_conn_str: PostgreSQL connection string (can be None if using Entra ID auth)
       srdb_service: SR DB service instance (must implement get_systematic_review and user_has_sr_permission)
       require_screening: if True, also ensure the SR has a configured screening_db and return its connection string
       require_visible: if True, require the SR 'visible' flag to be True; set False for endpoints like hard-delete
 
     Returns:
-      (sr_doc, screening_obj or None, db_conn_string or None)
+      (sr_doc, screening_obj or None)
 
     Raises HTTPException with appropriate status codes on failure so routers can just propagate.
     """
 
     # fetch SR
     try:
-        sr = await run_in_threadpool(srdb_service.get_systematic_review, db_conn_str, sr_id, not require_visible)
+        sr = await run_in_threadpool(srdb_service.get_systematic_review, sr_id, not require_visible)
     except HTTPException:
         raise
     except Exception as e:
@@ -67,7 +80,7 @@ async def load_sr_and_check(
     # permission check (user must be member or owner)
     user_id = current_user.get("email")
     try:
-        has_perm = await run_in_threadpool(srdb_service.user_has_sr_permission, db_conn_str, sr_id, user_id)
+        has_perm = await run_in_threadpool(srdb_service.user_has_sr_permission, sr_id, user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -77,10 +90,9 @@ async def load_sr_and_check(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view/modify this systematic review")
 
     screening = sr.get("screening_db") if isinstance(sr, dict) else None
-    db_conn = None
     if require_screening:
         if not screening:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
-        db_conn = None
 
-    return sr, screening, db_conn
+
+    return sr, screening

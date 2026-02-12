@@ -79,9 +79,8 @@ async def classify_citation(
     The 'selected' field in the returned JSON is validated against the provided `options`.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -91,7 +90,7 @@ async def classify_citation(
 
     # Load citation row (needed for l2 fulltext and for building citation_text)
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -196,7 +195,7 @@ async def classify_citation(
     col_name = snake_case_column(payload.question)
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, classification_json, table_name)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -205,7 +204,7 @@ async def classify_citation(
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
     
-    await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm", db_conn)
+    await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm")
 
     return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
 
@@ -223,9 +222,8 @@ async def human_classify_citation(
     The column name is prefixed with 'human_' to distinguish from automated classifications.
     """
 
-    db_conn_str = settings.POSTGRES_URI
     try:
-        sr, screening, db_conn = await load_sr_and_check(sr_id, current_user, db_conn_str, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -235,7 +233,7 @@ async def human_classify_citation(
 
     # Ensure citation exists and optionally build combined citation text
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -263,7 +261,7 @@ async def human_classify_citation(
     col_name = f"human_{col_core}" if col_core else f"human_col" 
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, db_conn, citation_id, col_name, classification_json, table_name)
+        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -272,7 +270,7 @@ async def human_classify_citation(
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
     
-    await update_inclusion_decision(sr, citation_id, payload.screening_step, "human", db_conn)
+    await update_inclusion_decision(sr, citation_id, payload.screening_step, "human")
 
     return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
 
@@ -281,13 +279,11 @@ async def update_inclusion_decision(
     citation_id: int,
     screening_step: str,
     decision_maker: str,
-    db_conn: str,
-
 ):  
     table_name = (sr.get("screening_db") or {}).get("table_name") or "citations"
 
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, db_conn, int(citation_id), table_name)
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -312,7 +308,7 @@ async def update_inclusion_decision(
     
     col_name = f"{decision_maker}_{screening_step}_decision"
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_text_column, db_conn, citation_id, col_name, decision, table_name)
+        updated = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, col_name, decision, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
