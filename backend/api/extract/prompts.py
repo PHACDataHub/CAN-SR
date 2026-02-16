@@ -19,6 +19,7 @@ Requirements:
 - If the parameter is not present and cannot be deduced, set "found": false, "value": null, "explanation": briefly state why not found, and "evidence_sentences": [].
 - If a calculation is defined for the parameter, with a description of variables to be computed, find those variables and walk through the computation in the explanation.
 - Do NOT include any extra keys, XML, or human commentary. The output must be parseable by json.loads.
+- If a table or figure is referenced, ensure the explanation references the table/figure number and what was extracted from it.
 
 Inputs available for formatting:
 - {parameter_name}  (a short name for the parameter)

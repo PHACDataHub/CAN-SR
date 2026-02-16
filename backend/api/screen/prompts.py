@@ -54,6 +54,7 @@ Respond with a JSON object containing these keys:
 - "evidence_sentences": an array of integers indicating the sentence indices you used as evidence (e.g. [2, 5]). If there is low confidence, return an empty array [].
 - "evidence_tables": an array of integers indicating the table numbers you used (e.g. [1, 3]) or [] if none.
 - "evidence_figures": an array of integers indicating the figure numbers you used (e.g. [2]) or [] if none.
+- If a table or figure is referenced, ensure the explanation references the table/figure number and what was extracted from it.
 
 JSON object format:
 {{
