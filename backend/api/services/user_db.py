@@ -78,7 +78,7 @@ class UserDatabaseService:
             user_id = str(uuid.uuid4())
             user_record = {
                 "id": user_id,
-                "email": user_data.email,
+                "email": user_data.email.lower(),
                 "full_name": user_data.full_name,
                 "hashed_password": self._get_password_hash(user_data.password),
                 "is_active": True,
@@ -89,7 +89,7 @@ class UserDatabaseService:
             }
 
             registry["users"][user_id] = user_record
-            registry["email_index"][user_data.email] = user_id
+            registry["email_index"][user_data.email.lower()] = user_id
 
             if not await self._save_user_registry(registry):
                 return None
