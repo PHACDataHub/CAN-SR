@@ -1,12 +1,15 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useDictionary } from '../DictionaryProvider'
 
 export default function LoginPage() {
   const router = useRouter()
   const dict = useDictionary()
+
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -18,14 +21,14 @@ export default function LoginPage() {
       localStorage.setItem('token_type', tokenType)
       localStorage.setItem('isLoggedIn', 'true')
       setTimeout(() => {
-        router.push('/can-sr')
+        router.push(`/${lang}/can-sr`)
       }, 100)
       return
     }
 
     const token = localStorage.getItem('access_token')
     if (token) {
-      router.push('/can-sr')
+      router.push(`/${lang}/can-sr`)
     }
   }, [router])
  

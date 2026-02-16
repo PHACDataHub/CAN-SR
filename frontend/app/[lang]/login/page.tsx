@@ -20,12 +20,15 @@ export default function LoginPage() {
   const router = useRouter()
   const dict = useDictionary()
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   // Check if user is already logged in
   useEffect(() => {
     const token = localStorage.getItem('access_token')
     if (token) {
       console.log('Login page: Token found, redirecting to CAN-SR')
-      router.push('/can-sr')
+      router.push(`/${lang}/can-sr`)
     }
   }, [router])
 
@@ -69,9 +72,6 @@ export default function LoginPage() {
       setIsLoading(false)
     }
   }
-
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="flex min-h-screen overflow-hidden">

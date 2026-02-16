@@ -25,6 +25,9 @@ export default function RegisterPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const router = useRouter()
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({
@@ -88,7 +91,7 @@ export default function RegisterPage() {
 
       // Redirect to login page after 2 seconds
       setTimeout(() => {
-        router.push('/login')
+        router.push(`/${lang}/login`)
       }, 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
@@ -96,9 +99,6 @@ export default function RegisterPage() {
       setIsLoading(false)
     }
   }
-
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="flex min-h-screen overflow-hidden">

@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import StackingCard from '@/components/can-sr/stacking-card'
 import { getAuthToken, getTokenType, type User } from '@/lib/auth'
@@ -40,6 +40,9 @@ export default function CanSrIndexPage() {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
 
   async function fetchReviews() {
     setLoading(true)
@@ -125,7 +128,7 @@ export default function CanSrIndexPage() {
       try {
         const token = getAuthToken()
         if (!token) {
-          router.push('/login')
+          router.push(`/${lang}/login`)
           return
         }
 
@@ -141,7 +144,7 @@ export default function CanSrIndexPage() {
         setUser(data.user)
       } catch (error) {
         console.error('Error fetching user data:', error)
-        router.push('/login')
+        router.push(`/${lang}/login`)
       } finally {
         setIsUserLoading(false)
       }
