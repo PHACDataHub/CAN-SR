@@ -88,7 +88,7 @@ async def login_microsoft_sso(request: StarletteRequest):
     """
     Start Microsoft OAuth2 flow by redirecting the user to Microsoft login.
     """
-    return await oauth.microsoft.authorize_redirect(request, "/api/auth/sso-authorize")
+    return await oauth.microsoft.authorize_redirect(request, f"{settings.API_URL}/api/auth/sso-authorize")
 
 @router.get("/sso-authorize")
 async def microsoft_authorize(request: StarletteRequest):

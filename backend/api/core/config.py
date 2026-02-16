@@ -155,6 +155,7 @@ class Settings(BaseSettings):
     OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID", "")
     OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET", "")
     WEB_APP_URL: str = os.getenv("WEB_APP_URL", "")
+    API_URL: str = os.getenv("API_URL", "")
 
     # Entra
     USE_ENTRA_AUTH: bool = os.getenv("USE_ENTRA_AUTH", "false").lower() == "true"
