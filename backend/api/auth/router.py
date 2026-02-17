@@ -84,10 +84,11 @@ async def login(login_data: LoginRequest) -> Any:
     return {"access_token": access_token, "token_type": "Bearer"}
 
 @router.get("/microsoft-sso")
-async def login_microsoft_sso(request: StarletteRequest):
+async def login_microsoft_sso(request: StarletteRequest, lang: str):
     """
     Start Microsoft OAuth2 flow by redirecting the user to Microsoft login.
     """
+    request.session["lang"] = lang
     return await oauth.microsoft.authorize_redirect(request, f"{settings.API_URL}/api/auth/sso-authorize")
 
 @router.get("/sso-authorize")
@@ -98,6 +99,7 @@ async def microsoft_authorize(request: StarletteRequest):
     try:
         token = await oauth.microsoft.authorize_access_token(request)
         userinfo = token.get("userinfo")
+        lang = request.session.get("lang", "en")
 
         user = await authenticate_user(userinfo.get("email").lower(), "", sso=True)
         if not user:
@@ -111,7 +113,7 @@ async def microsoft_authorize(request: StarletteRequest):
         )
 
         return RedirectResponse(
-            url=f"{settings.WEB_APP_URL}/sso-login?access_token={access_token}&token_type=Bearer"
+            url=f"{settings.WEB_APP_URL}/{lang}/sso-login?access_token={access_token}&token_type=Bearer"
         )
     except Exception:
         # Fallback for any unexpected errors during the OAuth callback

@@ -170,7 +170,7 @@ export default function LoginPage() {
 
               <Button
                 className="flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
-                onClick={() => { window.location.href = API_ENDPOINTS.AUTH.MICROSOFT_SSO}}
+                onClick={() => { window.location.href = `${API_ENDPOINTS.AUTH.MICROSOFT_SSO}?lang=${lang}`}}
                 type="button"
               >
                 <div className='flex items-center gap-1'>
