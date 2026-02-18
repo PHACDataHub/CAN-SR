@@ -1,13 +1,14 @@
 'use client'
 
 import Image from 'next/image'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import BackButton from '@/components/ui/backbutton'
 import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-button'
 import { Settings, Download } from 'lucide-react'
 import React from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import Link from 'next/link'
 
 export function GCHeader() {
   const router = useRouter()
@@ -15,6 +16,12 @@ export function GCHeader() {
 
   // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
+
+  // For language swaps
+  const currentPathname = usePathname()
+  const nextLang = lang === 'en' ? 'fr' : 'en'
+  const nextLangPath = currentPathname.replace(`/${lang}`, `/${nextLang}`)
+  const currentSearchParams = useSearchParams()
 
   return (
     <header className="relative z-20 w-full py-4 bg-white shadow-sm">
@@ -34,17 +41,30 @@ export function GCHeader() {
             </div>
           </div>
 
-          <InteractiveHoverButton
-            onClick={() => {
-              try {
-                localStorage.removeItem('access_token')
-              } catch {}
-              router.push(`/${lang}/login`)
-            }}
-            className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
-          >
-            {dict.common.signOut}
-          </InteractiveHoverButton>
+
+          <div className="space-x-5">
+            <InteractiveHoverButton
+              onClick={() => {
+                try {
+                  localStorage.removeItem('access_token')
+                } catch {}
+                router.push(`/${lang}/login`)
+              }}
+              className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
+            >
+              {dict.common.signOut}
+            </InteractiveHoverButton>
+            
+            <Link
+              href={{
+                pathname: nextLangPath,
+                query: Object.fromEntries(currentSearchParams.entries())
+              }}
+              className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+            >
+              {dict.common.languageSwitch}
+            </Link>
+          </div>
         </div>
       </div>
     </header>

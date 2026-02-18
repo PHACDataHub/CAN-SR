@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -22,6 +22,11 @@ export default function LoginPage() {
 
   // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
+
+  // For language swaps
+  const currentPathname = usePathname()
+  const nextLang = lang === 'en' ? 'fr' : 'en'
+  const nextLangPath = currentPathname.replace(`/${lang}`, `/${nextLang}`)
 
   // Check if user is already logged in
   useEffect(() => {
@@ -88,7 +93,16 @@ export default function LoginPage() {
       </div>
 
       {/* Right side - Login Form */}
-      <div className="flex w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
+      <div className="flex relative w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
+        <div className="absolute top-5 right-5">
+          <Link
+            href={nextLangPath}
+            className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+          >
+            {dict.common.languageSwitch}
+          </Link>
+        </div>
+
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-3xl font-bold text-gray-900">

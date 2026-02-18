@@ -1,5 +1,6 @@
 {
   "common": {
+    "languageSwitch": "English",
     "governmentOfCanada": "Gouvernement du Canada",
     "aiAssistantPortal": "Portail de l'assistant IA",
     "signOut": "Déconnexion",
