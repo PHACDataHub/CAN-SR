@@ -3,13 +3,15 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
+import { useDictionary } from '../DictionaryProvider'
 
 export default function RegisterPage() {
+  const dict = useDictionary()
   const [formData, setFormData] = useState({
     email: '',
     full_name: '',
@@ -23,6 +25,9 @@ export default function RegisterPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const router = useRouter()
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({
@@ -35,13 +40,13 @@ export default function RegisterPage() {
 
   const validatePassword = (password: string): string | null => {
     if (password.length < 8) {
-      return 'Password must be at least 8 characters long'
+      return dict.register.passwordMinLength
     }
     if (!/[A-Z]/.test(password)) {
-      return 'Password must contain at least one uppercase letter'
+      return dict.register.passwordUppercase
     }
     if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-      return 'Password must contain at least one special character'
+      return dict.register.passwordSpecialChar
     }
     return null
   }
@@ -62,7 +67,7 @@ export default function RegisterPage() {
 
     // Validate passwords match
     if (formData.password !== formData.confirm_password) {
-      setError('Passwords do not match')
+      setError(dict.register.passwordsNoMatch)
       setIsLoading(false)
       return
     }
@@ -82,11 +87,11 @@ export default function RegisterPage() {
         throw new Error(data.error || 'Registration failed')
       }
 
-      setSuccess('Registration successful! You can now log in.')
+      setSuccess(dict.register.successMessage)
 
       // Redirect to login page after 2 seconds
       setTimeout(() => {
-        router.push('/login')
+        router.push(`/${lang}/login`)
       }, 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
@@ -114,10 +119,10 @@ export default function RegisterPage() {
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-3xl font-bold text-gray-900">
-              Create your account
+              {dict.register.formTitle}
             </h2>
             <p className="mt-2 text-gray-600">
-              Register for the Government of Canada AI Assistant Portal
+              {dict.register.formSubtitle}
             </p>
           </div>
 
@@ -139,14 +144,14 @@ export default function RegisterPage() {
                 htmlFor="email"
                 className="text-sm font-medium text-gray-700"
               >
-                Email Address
+                {dict.common.email}
               </Label>
               <Input
                 id="email"
                 name="email"
                 type="email"
                 className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                placeholder="your.email@canada.ca"
+                placeholder={dict.login.emailPlaceholder}
                 value={formData.email}
                 onChange={handleInputChange}
                 required
@@ -158,14 +163,14 @@ export default function RegisterPage() {
                 htmlFor="full_name"
                 className="text-sm font-medium text-gray-700"
               >
-                Full Name
+                {dict.register.fullName}
               </Label>
               <Input
                 id="full_name"
                 name="full_name"
                 type="text"
                 className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                placeholder="Your Full Name"
+                placeholder={dict.register.fullNamePlaceholder}
                 value={formData.full_name}
                 onChange={handleInputChange}
                 required
@@ -177,7 +182,7 @@ export default function RegisterPage() {
                 htmlFor="password"
                 className="text-sm font-medium text-gray-700"
               >
-                Password
+                {dict.common.password}
               </Label>
               <div className="relative">
                 <Input
@@ -185,7 +190,7 @@ export default function RegisterPage() {
                   name="password"
                   type={showPassword ? 'text' : 'password'}
                   className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 pr-10 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                  placeholder="••••••••"
+                  placeholder={dict.login.passwordPlaceholder}
                   value={formData.password}
                   onChange={handleInputChange}
                   required
@@ -204,8 +209,7 @@ export default function RegisterPage() {
                 </button>
               </div>
               <p className="mt-1 text-xs text-gray-500">
-                Password must be at least 8 characters with 1 uppercase letter
-                and 1 special character
+                {dict.register.passwordRequirements}
               </p>
             </div>
 
@@ -214,7 +218,7 @@ export default function RegisterPage() {
                 htmlFor="confirm_password"
                 className="text-sm font-medium text-gray-700"
               >
-                Confirm Password
+                {dict.register.confirmPassword}
               </Label>
               <div className="relative">
                 <Input
@@ -222,7 +226,7 @@ export default function RegisterPage() {
                   name="confirm_password"
                   type={showConfirmPassword ? 'text' : 'password'}
                   className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 pr-10 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                  placeholder="••••••••"
+                  placeholder={dict.login.passwordPlaceholder}
                   value={formData.confirm_password}
                   onChange={handleInputChange}
                   required
@@ -246,26 +250,25 @@ export default function RegisterPage() {
               className="w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
               disabled={isLoading}
             >
-              {isLoading ? 'Creating Account...' : 'Create Account'}
+              {isLoading ? dict.register.creatingAccount : dict.register.createAccount}
             </Button>
           </form>
 
           <div className="mt-8 text-center">
             <p className="text-sm text-gray-600">
-              Already have an account?{' '}
+              {dict.register.haveAccount}{' '}
               <Link
-                href="/login"
+                href={`/${lang}/login`}
                 className="font-medium text-blue-600 transition-colors hover:text-blue-800"
               >
-                Sign in here
+                {dict.register.signInHere}
               </Link>
             </p>
           </div>
 
           <div className="mt-10 text-center text-xs text-gray-500">
             <p>
-              © {new Date().getFullYear()} Government of Canada. All rights
-              reserved.
+              © {new Date().getFullYear()} {dict.common.copyright}
             </p>
           </div>
         </div>

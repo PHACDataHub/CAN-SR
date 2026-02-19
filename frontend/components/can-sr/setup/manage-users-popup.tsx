@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useState, useRef } from 'react'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 type Props = {
   open: boolean
@@ -21,6 +22,7 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
   const [loadingEmail, setLoadingEmail] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const dict = useDictionary()
 
   useEffect(() => {
     setEmails(Array.isArray(initialEmails) ? initialEmails.slice() : [])
@@ -38,11 +40,11 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
     const email = emailRaw.trim().toLowerCase()
     if (!email) return
     if (!isValidEmail(email)) {
-      setError('Invalid email address')
+      setError(dict.users.invalidEmail)
       return
     }
     if (emails.includes(email)) {
-      setError('Email already present')
+      setError(dict.users.emailExists)
       return
     }
     setError(null)
@@ -58,7 +60,7 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
 
   async function addEmailRemote(email: string) {
     if (!srId) {
-      setError('Missing review id')
+      setError(dict.users.missingReviewId)
       return
     }
     setLoadingEmail(email)
@@ -87,7 +89,7 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
 
   async function removeEmailRemote(email: string) {
     if (!srId) {
-      setError('Missing review id')
+      setError(dict.users.missingReviewId)
       return
     }
     setLoadingEmail(email)
@@ -140,13 +142,13 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
       <div className="relative z-10 w-full max-w-2xl rounded-lg bg-white p-6 shadow-lg">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Manage users</h3>
-            <p className="mt-1 text-sm text-gray-600">Add or remove emails who can access this systematic review.</p>
+            <h3 className="text-lg font-semibold text-gray-900">{dict.users.manageTitle}</h3>
+            <p className="mt-1 text-sm text-gray-600">{dict.users.manageDesc}</p>
           </div>
         </div>
 
         <div className="mt-4">
-          <label className="mb-2 block text-sm font-medium text-gray-700">Users</label>
+          <label className="mb-2 block text-sm font-medium text-gray-700">{dict.users.usersLabel}</label>
 
           <div className="flex flex-wrap gap-2">
             {emails.map((e) => (
@@ -179,7 +181,7 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               onPaste={handlePaste}
-              placeholder="Type an email and press Enter"
+              placeholder={dict.users.emailPlaceholder}
               className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-300"
             />
             <button
@@ -188,12 +190,12 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
               }}
               className="rounded-md bg-indigo-600 px-3 py-2 text-sm text-white hover:bg-indigo-700"
             >
-              Add
+              {dict.common.add}
             </button>
           </div>
 
           {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-          {loadingEmail ? <div className="mt-2 text-sm text-gray-600">Processing {loadingEmail}...</div> : null}
+          {loadingEmail ? <div className="mt-2 text-sm text-gray-600">{dict.users.processing} {loadingEmail}...</div> : null}
         </div>
 
         <div className="mt-6 flex justify-end">
@@ -201,7 +203,7 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
             onClick={onClose}
             className="rounded-md border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
           >
-            Done
+            {dict.common.done}
           </button>
         </div>
       </div>

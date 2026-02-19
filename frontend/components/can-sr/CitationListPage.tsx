@@ -6,6 +6,7 @@ import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import PagedList from '@/components/can-sr/PagedList'
 import { Bot, Check } from 'lucide-react'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
@@ -30,6 +31,7 @@ export default function CitationsListPage({ screeningStep, pageview }: CitationL
   const searchParams = useSearchParams()
   const router = useRouter()
   const srId = searchParams?.get('sr_id')
+  const dict = useDictionary()
 
   const [citationIds, setCitationIds] = useState<number[] | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
@@ -37,9 +39,9 @@ export default function CitationsListPage({ screeningStep, pageview }: CitationL
   const [criteriaData, setCriteriaData] = useState<CriteriaData | null>()
 
   const displayMap: Record<string, string> = {
-    l1: 'Title and Abstract Screening',
-    l2: 'Full Text Review',
-    extract: 'Extraction',
+    l1: dict.screening.titleAbstract,
+    l2: dict.screening.fullText,
+    extract: dict.screening.parameterExtraction,
   }
 
   useEffect(() => {
@@ -133,37 +135,37 @@ export default function CitationsListPage({ screeningStep, pageview }: CitationL
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-semibold text-gray-900">
-                Citations List
+                {dict.screening.citationsList}
               </h3>
               <p className="mt-1 text-sm text-gray-600">
-                Listing citation ids for screening database.
+                {dict.screening.citationsListDesc}
               </p>
             </div>
             <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
               <div className="flex items-center space-x-2">
                 <Bot className="h-5 w-5 text-green-600" />
-                <span className="text-sm text-gray-700">LLM Classified</span>
+                <span className="text-sm text-gray-700">{dict.screening.llmClassified}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <Check className="h-5 w-5 text-green-600" />
-                <span className="text-sm text-gray-700">Human Verified</span>
+                <span className="text-sm text-gray-700">{dict.screening.humanVerified}</span>
               </div>
             </div>
           </div>
 
           <div className="mt-6">
             {loading ? (
-              <div className="text-sm text-gray-600">Loading citations...</div>
+              <div className="text-sm text-gray-600">{dict.screening.loadingCitations}</div>
             ) : error ? (
               <div className="text-sm text-red-600">{error}</div>
             ) : citationIds && citationIds.length === 0 ? (
               <div className="text-sm text-gray-600">
-                No citations found for this review.
+                {dict.screening.noCitations}
               </div>
             ) : (
               <div>
                 <div className="mb-3 text-sm text-gray-700">
-                  Total citations: {citationIds ? citationIds.length : 0}
+                  {dict.screening.totalCitations} {citationIds ? citationIds.length : 0}
                 </div>
 
                 <PagedList

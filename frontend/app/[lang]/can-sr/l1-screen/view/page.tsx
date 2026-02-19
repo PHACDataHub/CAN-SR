@@ -1,11 +1,12 @@
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -19,7 +20,7 @@ import { Wand2 } from 'lucide-react'
       - Default selection set to AI answer from the citation row (column name computed via snake_case_column)
       - "Classify" button that calls the backend screen classify endpoint and updates the AI panel
   - If an AI answer exists for that question, show a collapsible panel containing the parsed LLM JSON
-    (expected fields: selected, explanation, confidence, llm_raw)
+    (expected fields: selected, explanation, confidence, llm_raw/)
   - Keep the code simple and add short comments to make future componentization straightforward.
 */
 
@@ -57,6 +58,7 @@ export default function CanSrL1ScreenPage() {
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const dict = useDictionary()
 
   // Data states
   const [citation, setCitation] = useState<Record<string, any> | null>(null)
@@ -340,9 +342,9 @@ export default function CanSrL1ScreenPage() {
   // Render helpers
   const workspace = useMemo(() => {
     if (loadingCitation)
-      return <div className="text-sm text-gray-600">Loading citation...</div>
+      return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
     if (!citation)
-      return <div className="text-sm text-gray-600">Citation not found.</div>
+      return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
 
     return (
       <div className="space-y-3">
@@ -354,27 +356,30 @@ export default function CanSrL1ScreenPage() {
         </div>
 
         <div className="rounded-md border border-gray-200 bg-white p-4">
-          <h3 className="text-sm font-medium text-gray-800">Abstract</h3>
+          <h3 className="text-sm font-medium text-gray-800">{dict.screening.abstract}</h3>
           <p className="mt-2 text-sm whitespace-pre-wrap text-gray-800">
-            {citation.abstract || '(no abstract)'}
+            {citation.abstract || dict.screening.noAbstract}
           </p>
         </div>
       </div>
     )
-  }, [citation, loadingCitation])
+  }, [citation, loadingCitation, dict])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
     return null
   }
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
       <SRHeader
-        title="Title & Abstract Screening"
+        title={dict.screening.titleAbstract}
         backHref={`/can-sr/l1-screen?sr_id=${encodeURIComponent(srId || '')}`}
-        backLabel="Back to Citations"
+        backLabel={dict.cansr.backToCitations}
         right={
           <ModelSelector
             selectedModel={selectedModel}
@@ -395,17 +400,16 @@ export default function CanSrL1ScreenPage() {
           {/* Selection sidebar (right) */}
           <aside className="col-span-5">
             <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h4 className="text-md font-semibold text-gray-900">Selection</h4>
+              <h4 className="text-md font-semibold text-gray-900">{dict.screening.selection}</h4>
               <p className="text-sm text-gray-600">
-                Choose the human answer for each screening question. The AI
-                selection is shown as default when available.
+                {dict.screening.selectionDesc}
               </p>
 
               {loadingCriteria ? (
-                <div className="text-sm text-gray-600">Loading criteria...</div>
+                <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
                 <div className="text-sm text-gray-600">
-                  No screening criteria found for this review.
+                  {dict.screening.noCriteria}
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -469,7 +473,7 @@ export default function CanSrL1ScreenPage() {
                               className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
                             >
                               <div className="text-sm">
-                                AI suggests {' '}
+                                {dict.screening.aiSuggests}{' '}
                                 <span
                                   className={
                                     'ml-1 text-sm font-medium ' +
@@ -480,26 +484,26 @@ export default function CanSrL1ScreenPage() {
                                       : 'text-emerald-600')
                                   }
                                 >
-                                  {aiData.selected ?? '(no selection)'}
+                                  {aiData.selected ?? dict.screening.noSelection}
                                 </span>
                               </div>
                               <div className="text-xs text-gray-500">
-                                {panelOpen[idx] ? 'Minimize' : 'Maximize'}
+                                {panelOpen[idx] ? dict.screening.minimize : dict.screening.maximize}
                               </div>
                             </div>
 
                             {panelOpen[idx] ? (
                               <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
                                 <div className="mt-2">
-                                  <strong>Confidence:</strong>{' '}
+                                  <strong>{dict.screening.confidence}</strong>{' '}
                                   {String(aiData.confidence ?? '')}
                                 </div>
                                 <div className="mt-2">
-                                  <strong>Explanation:</strong>
+                                  <strong>{dict.screening.explanation}</strong>
                                   <div className="mt-1 text-sm text-gray-700">
                                     {aiData.explanation ??
                                       aiData.llm_raw ??
-                                      '(no explanation)'}
+                                      dict.screening.noExplanation}
                                   </div>
                                 </div>
                               </div>
@@ -527,14 +531,14 @@ export default function CanSrL1ScreenPage() {
               setPanelOpen({})
               await fetchCitationById(target)
               router.push(
-                `/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
                 )}`,
               )
             }}
             className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
           >
-            Previous Citation
+            {dict.screening.previousCitation}
           </button>
           <button
             onClick={async () => {
@@ -548,14 +552,14 @@ export default function CanSrL1ScreenPage() {
               setPanelOpen({})
               await fetchCitationById(target)
               router.push(
-                `/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
                 )}`,
               )
             }}
             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
           >
-            Next Citation
+            {dict.screening.nextCitation}
           </button>
         </div>
       </main>
