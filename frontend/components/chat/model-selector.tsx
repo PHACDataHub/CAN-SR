@@ -11,6 +11,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Cpu } from 'lucide-react'
 import { getAuthToken } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 // The ModelInfo type is simple and only used in one place, so we define it here
 // to avoid cluttering the main types file.
@@ -26,28 +27,31 @@ interface ModelSelectorProps {
   onModelChange: (model: string) => void
 }
 
-// Azure OpenAI model configurations with descriptions
-const MODEL_INFO: Record<string, ModelInfo> = {
-  'gpt-5-mini': {
-    id: 'gpt-5-mini',
-    name: 'GPT-5 mini',
-    description: 'Newer mini model, fastest at advanced reasoning',
-    recommended: true,
-  },
-  'gpt-4.1-mini': {
-    id: 'gpt-4.1-mini',
-    name: 'GPT-4.1 mini',
-    description: 'Older mini model, fastest at advanced reasoning'
-  },
-}
-
 export function ModelSelector({
   selectedModel,
   onModelChange,
 }: ModelSelectorProps) {
+
+  const dict = useDictionary()
+
+  // Azure OpenAI model configurations with descriptions
+  const modelInfo: Record<string, ModelInfo> = {
+    'gpt-5-mini': {
+      id: 'gpt-5-mini',
+      name: 'GPT-5 mini',
+      description: dict.cansr.modelDescription1,
+      recommended: true,
+    },
+    'gpt-4.1-mini': {
+      id: 'gpt-4.1-mini',
+      name: 'GPT-4.1 mini',
+      description: dict.cansr.modelDescription2,
+    },
+  }
+
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([
-    MODEL_INFO['gpt-5-mini'],
-    MODEL_INFO['gpt-4.1-mini'],
+    modelInfo['gpt-5-mini'],
+    modelInfo['gpt-4.1-mini'],
   ])
 
   useEffect(() => {
@@ -70,8 +74,8 @@ export function ModelSelector({
 
         // Filter to only show models we have info for (your configured Azure OpenAI models)
         const filteredModels = modelIds
-          .filter((id: string) => MODEL_INFO[id])
-          .map((id: string) => MODEL_INFO[id])
+          .filter((id: string) => modelInfo[id])
+          .map((id: string) => modelInfo[id])
 
         if (filteredModels.length > 0) {
           setAvailableModels(filteredModels)
@@ -107,7 +111,7 @@ export function ModelSelector({
       </SelectTrigger>
       <SelectContent className="w-72 border-gray-200 bg-white shadow-lg">
         <div className="border-b border-gray-100 px-3 py-2 text-xs font-medium tracking-wide text-gray-500 uppercase">
-          Models
+          {dict.cansr.models}
         </div>
         {availableModels.map((model) => (
           <SelectItem
@@ -127,7 +131,7 @@ export function ModelSelector({
                   </span>
                   {model.recommended && (
                     <Badge className="border-0 bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                      Recommended
+                      {dict.cansr.recommended}
                     </Badge>
                   )}
                 </div>

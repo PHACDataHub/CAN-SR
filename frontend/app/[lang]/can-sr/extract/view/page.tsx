@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useState, useEffect, useRef } from 'react'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
@@ -8,6 +8,7 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { ModelSelector } from '@/components/chat'
 import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 export default function CanSrL2ScreenPage() {
   const router = useRouter()
@@ -15,6 +16,7 @@ export default function CanSrL2ScreenPage() {
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const dict = useDictionary()
 
   type ParametersParsed = {
     categories: string[]
@@ -455,12 +457,15 @@ export default function CanSrL2ScreenPage() {
     return
   }
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
       <SRHeader 
-        title="Parameter Extraction"
+        title={dict.screening.parameterExtraction}
         srName=""
         backHref={`/can-sr/extract?sr_id=${encodeURIComponent(srId || '')}`}
         right={
@@ -505,24 +510,24 @@ export default function CanSrL2ScreenPage() {
             <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-xl font-semibold text-gray-900">Parameters</h4>
+                  <h4 className="text-xl font-semibold text-gray-900">{dict.extract.parameters}</h4>
                   <button
                     type="button"
                     onClick={runAllAI}
                     disabled={!parametersParsed || runningAllAI}
                     className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
-                    title="Run AI suggestion for all parameters"
+                    title={dict.extract.runAllAI}
                   >
                     <span className="inline-flex items-center gap-1">
-                      Run all AI <Wand2 className="h-3 w-3" />
+                      {dict.extract.runAllAI} <Wand2 className="h-3 w-3" />
                     </span>
                   </button>
                 </div>
                 {runAllProgress && runAllProgress.total > 0 ? (
                   <div className="mt-1 text-xs text-gray-500">
                     {runningAllAI
-                      ? `Running ${runAllProgress.done}/${runAllProgress.total}`
-                      : `Ran ${runAllProgress.done}/${runAllProgress.total}`}
+                      ? `${dict.extract.running} ${runAllProgress.done}/${runAllProgress.total}`
+                      : `${dict.extract.ran} ${runAllProgress.done}/${runAllProgress.total}`}
                   </div>
                 ) : null}
                 {/* <p className="mt-2 text-sm text-gray-600 text-center">
@@ -551,8 +556,8 @@ export default function CanSrL2ScreenPage() {
                                         type="button"
                                         onClick={() => toggleDesc(paramName)}
                                         className="ml-1 inline-flex items-center text-gray-400 hover:text-gray-600"
-                                        aria-label={descOpen[paramName] ? 'Hide description' : 'Show description'}
-                                        title={descOpen[paramName] ? 'Hide description' : 'Show description'}
+                                        aria-label={descOpen[paramName] ? dict.extract.hideDescription : dict.extract.showDescription}
+                                        title={descOpen[paramName] ? dict.extract.hideDescription : dict.extract.showDescription}
                                       >
                                         {descOpen[paramName] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                       </button>
@@ -561,22 +566,22 @@ export default function CanSrL2ScreenPage() {
                                   <div className="flex items-center gap-2">
                                     <span className="text-xs text-gray-500">
                                       {saveStatus[paramName] === 'saved'
-                                        ? 'Saved'
+                                        ? dict.extract.saved
                                         : saveStatus[paramName] === 'error'
-                                        ? 'Error'
+                                        ? dict.extract.error
                                         : saveStatus[paramName] === 'saving'
-                                        ? 'Saving...'
+                                        ? dict.extract.saving
                                         : ''}
                                     </span>
                                     <span className="text-xs text-gray-500">
                                       {aiStatus[paramName] === 'extracting'
-                                        ? 'Extracting full text...'
+                                        ? dict.extract.extractingFullText
                                         : aiStatus[paramName] === 'suggesting' || aiStatus[paramName] === 'loading'
-                                        ? 'Suggesting...'
+                                        ? dict.extract.suggesting
                                         : aiStatus[paramName] === 'suggested'
-                                        ? 'Finished'
+                                        ? dict.extract.finished
                                         : aiStatus[paramName] === 'error'
-                                        ? 'AI Error'
+                                        ? dict.extract.aiError
                                         : ''}
                                     </span>
                                     <button
@@ -598,7 +603,7 @@ export default function CanSrL2ScreenPage() {
                                       disabled={savingParam === paramName}
                                       className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                                     >
-                                      Save
+                                      {dict.common.save}
                                     </button>
                                   </div>
                                 </div>
@@ -609,7 +614,7 @@ export default function CanSrL2ScreenPage() {
                                   type="text"
                                   value={paramValues[paramName] || ''}
                                   onChange={(e) => updateValue(paramName, e.target.value)}
-                                  placeholder="Enter value (free text)"
+                                  placeholder={dict.extract.enterValue}
                                   className="mt-2 w-full rounded-md border px-2 py-1 text-sm"
                                 />
 
@@ -628,38 +633,38 @@ export default function CanSrL2ScreenPage() {
                                       <div className="text-xs">
                                         {typeof aiPanels[paramName]?.value === 'string' && aiPanels[paramName]?.value.trim().length > 0 ? (
                                           <>
-                                            AI suggested{' '}
+                                            {dict.extract.aiSuggested}{' '}
                                             <span className="ml-1 text-xs font-medium text-emerald-600">
                                               {aiPanels[paramName]?.value}
                                             </span>
                                           </>
                                         ) : (
-                                          <span className="text-xs text-gray-600">No AI Suggestion</span>
+                                          <span className="text-xs text-gray-600">{dict.extract.noAISuggestion}</span>
                                         )}
                                       </div>
                                       <div className="text-xs text-gray-500">
-                                        {panelOpen[paramName] ? 'Minimize' : 'Maximize'}
+                                        {panelOpen[paramName] ? dict.screening.minimize : dict.screening.maximize}
                                       </div>
                                     </div>
                                     {panelOpen[paramName] ? (
                                       <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-xs whitespace-pre-wrap text-gray-800">
                                         <div className="mt-2">
-                                          <strong>Explanation:</strong>
+                                          <strong>{dict.screening.explanation}</strong>
                                           <div className="mt-1 text-xs text-gray-700">
                                             {aiPanels[paramName]?.explanation ??
                                               aiPanels[paramName]?.llm_raw ??
-                                              '(no explanation)'}
+                                              dict.screening.noExplanation}
                                           </div>
                                         </div>
 {Array.isArray(aiPanels[paramName]?.evidence_sentences) ? (
   <div className="mt-2">
-    <strong>Evidence:</strong>
+    <strong>{dict.screening.evidence}</strong>
     <div className="mt-1 flex flex-wrap gap-1">
       {aiPanels[paramName].evidence_sentences.map((item: any, k: number) => {
         const isCoord = item && typeof item === 'object'
         const label = isCoord
-          ? `Page ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
-          : `Sentence ${String(item)}`
+          ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
+          : `${dict.screening.sentence} ${String(item)}`
         const onClick = () => {
           if (!viewerRef.current) return
           if (isCoord) {
@@ -743,7 +748,7 @@ export default function CanSrL2ScreenPage() {
                   </div>
                 ) : (
                   <div className="text-sm text-gray-600 text-center py-6">
-                    No parameters found for this review or failed to load criteria.
+                    {dict.extract.noParameters}
                   </div>
                 )}
               </div>
@@ -756,14 +761,14 @@ export default function CanSrL2ScreenPage() {
                     if (Number.isNaN(cur)) return
                     const target = String(cur - 1)
                     router.push(
-                      `/can-sr/extract/view?sr_id=${encodeURIComponent(
+                      `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )
                   }}
                   className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
                 >
-                  Previous Citation
+                  {dict.screening.previousCitation}
                 </button>
                 <button
                   onClick={async () => {
@@ -772,14 +777,14 @@ export default function CanSrL2ScreenPage() {
                     if (Number.isNaN(cur)) return
                     const target = String(cur + 1)
                     router.push(
-                      `/can-sr/extract/view?sr_id=${encodeURIComponent(
+                      `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )
                   }}
                   className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
                 >
-                  Next Citation
+                  {dict.screening.nextCitation}
                 </button>
               </div>
             </div>

@@ -1,10 +1,11 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import StackingCard from '@/components/can-sr/stacking-card'
 import { getAuthToken, getTokenType, type User } from '@/lib/auth'
+import { useDictionary } from '../DictionaryProvider'
 
 type SRItem = {
   id?: string
@@ -32,12 +33,16 @@ export default function CanSrIndexPage() {
   const [isUserLoading, setIsUserLoading] = useState(true)
 
   const router = useRouter()
+  const dict = useDictionary()
 
   // Modal state
   const [showCreate, setShowCreate] = useState(false)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
 
   async function fetchReviews() {
     setLoading(true)
@@ -53,7 +58,7 @@ export default function CanSrIndexPage() {
       setReviews(list)
     } catch (err: any) {
       console.error('Error fetching SRs', err)
-      setError('Unable to load reviews')
+      setError(dict.errors.unableToLoadReviews)
     } finally {
       setLoading(false)
     }
@@ -66,7 +71,7 @@ export default function CanSrIndexPage() {
   async function handleCreate(e?: React.FormEvent) {
     if (e) e.preventDefault()
     if (!name.trim()) {
-      setError('Please provide a name for the review.')
+      setError(dict.cansr.reviewNameRequired)
       return
     }
     setCreating(true)
@@ -123,7 +128,7 @@ export default function CanSrIndexPage() {
       try {
         const token = getAuthToken()
         if (!token) {
-          router.push('/login')
+          router.push(`/${lang}/login`)
           return
         }
 
@@ -139,7 +144,7 @@ export default function CanSrIndexPage() {
         setUser(data.user)
       } catch (error) {
         console.error('Error fetching user data:', error)
-        router.push('/login')
+        router.push(`/${lang}/login`)
       } finally {
         setIsUserLoading(false)
       }
@@ -155,7 +160,7 @@ export default function CanSrIndexPage() {
         onClick={() => setShowCreate(true)}
         className="rounded-md border border-gray-200 bg-white px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50"
       >
-        Create review
+        {dict.cansr.createReview}
       </button>
     </div>
   )
@@ -164,40 +169,39 @@ export default function CanSrIndexPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
       <SRHeader
-        title="CAN‑SR"
+        title={dict.cansr.title}
         showSettings={false}
         showExport={false}
         showBack={true}
         backHref='/'
-        backLabel='Back to Home'
+        backLabel={dict.cansr.backToHome}
         right={rightNode}
       />
 
       <main className="mx-auto max-w-4xl px-6 py-10">
         <div className="mb-6">
-          <h3 className="text-2xl font-bold text-gray-900">Your Systematic Reviews</h3>
+          <h3 className="text-2xl font-bold text-gray-900">{dict.cansr.yourReviews}</h3>
           <p className="mt-1 text-sm text-gray-600">
-            View and manage the systematic reviews you are a member of. Create a new review using the
-            "Create review" button.
+            {dict.cansr.yourReviewsDesc}
           </p>
         </div>
 
         {loading ? (
-          <div className="rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-700">Loading reviews...</div>
+          <div className="rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-700">{dict.cansr.loadingReviews}</div>
         ) : error ? (
           <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
         ) : reviews.length === 0 ? (
           <div className="space-y-4">
             
             <div className="rounded-md border border-gray-200 bg-white p-6 text-sm text-gray-700">
-              You are not part of any reviews yet.
+              {dict.cansr.noReviews}
             </div>
             <div>
               <button
                 onClick={() => setShowCreate(true)}
                 className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
               >
-                Create your first review
+                {dict.cansr.createFirstReview}
               </button>
             </div>
           </div>
@@ -230,22 +234,22 @@ export default function CanSrIndexPage() {
             }}
           />
           <div className="relative z-10 w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-            <h4 className="text-lg font-semibold text-gray-900">Create new review</h4>
+            <h4 className="text-lg font-semibold text-gray-900">{dict.cansr.createNewReview}</h4>
             <form className="mt-4 space-y-4" onSubmit={(e) => handleCreate(e)}>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Name</label>
+                <label className="block text-sm font-medium text-gray-700">{dict.cansr.reviewName}</label>
                 <input
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  placeholder="e.g., Effects of X on Y"
+                  placeholder={dict.cansr.reviewNamePlaceholder}
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Description (optional)</label>
+                <label className="block text-sm font-medium text-gray-700">{dict.cansr.reviewDescription}</label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -267,7 +271,7 @@ export default function CanSrIndexPage() {
                   }}
                   className="rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50"
                 >
-                  Cancel
+                  {dict.common.cancel}
                 </button>
 
                 <button
@@ -275,7 +279,7 @@ export default function CanSrIndexPage() {
                   disabled={creating}
                   className={`rounded-md px-4 py-1 text-sm font-medium text-white ${creating ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                 >
-                  {creating ? 'Creating...' : 'Create'}
+                  {creating ? dict.cansr.creating : dict.common.create}
                 </button>
               </div>
             </form>

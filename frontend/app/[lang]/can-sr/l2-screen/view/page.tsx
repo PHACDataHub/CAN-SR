@@ -1,12 +1,13 @@
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
 import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
 import { Wand2 } from 'lucide-react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 /*
   Full-text single-citation viewer for L2 screening.
@@ -69,6 +70,7 @@ export default function CanSrL2ScreenViewPage() {
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const dict = useDictionary()
 
   // Data states
   const [citation, setCitation] = useState<Record<string, any> | null>(null)
@@ -548,9 +550,9 @@ export default function CanSrL2ScreenViewPage() {
 
   const workspace = useMemo(() => {
     if (loadingCitation)
-      return <div className="text-sm text-gray-600">Loading citation...</div>
+      return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
     if (!citation)
-      return <div className="text-sm text-gray-600">Citation not found.</div>
+      return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
 
     return (
       <PDFBoundingBoxViewer
@@ -574,11 +576,14 @@ export default function CanSrL2ScreenViewPage() {
     return null
   }
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
       <SRHeader
-        title="Full Text Screening"
+        title={dict.screening.fullText}
         backHref={`/can-sr/l2-screen?sr_id=${encodeURIComponent(srId || '')}`}
         right={
           <ModelSelector
@@ -599,14 +604,14 @@ export default function CanSrL2ScreenViewPage() {
           <aside className="col-span-3">
             <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900 text-center">Screening Questions</h4>
+                <h4 className="text-xl font-semibold text-gray-900 text-center">{dict.screening.screeningQuestions}</h4>
               </div>
 
               {loadingCriteria ? (
-                <div className="text-sm text-gray-600">Loading criteria...</div>
+                <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
                 <div className="text-sm text-gray-600">
-                  No L2 screening criteria found for this review.
+                  {dict.screening.noL2Criteria}
                 </div>
               ) : (
                 <div className="rounded-md border border-gray-100 p-3 h-[680px] overflow-y-auto">
@@ -631,7 +636,7 @@ export default function CanSrL2ScreenViewPage() {
 
                             {sourceFlags[idx] === 'l1' ? (
                               <p className="mt-1 text-xs text-gray-500">
-                                Title/Abstract screening answer: {hintByIndex[idx] ?? '(none)'}
+                                {dict.screening.titleAbstractAnswer} {hintByIndex[idx] ?? dict.screening.none}
                               </p>
                             ) : null}
 
@@ -677,7 +682,7 @@ export default function CanSrL2ScreenViewPage() {
                               className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
                             >
                               <div className="text-sm">
-                                AI suggests{' '}
+                                {dict.screening.aiSuggests}{' '}
                                 <span
                                   className={
                                     'ml-1 text-sm font-medium ' +
@@ -688,37 +693,37 @@ export default function CanSrL2ScreenViewPage() {
                                       : 'text-emerald-600')
                                   }
                                 >
-                                  {aiData.selected ?? '(no selection)'}
+                                  {aiData.selected ?? dict.screening.noSelection}
                                 </span>
                               </div>
                               <div className="text-xs text-gray-500">
-                                {panelOpen[idx] ? 'Minimize' : 'Maximize'}
+                                {panelOpen[idx] ? dict.screening.minimize : dict.screening.maximize}
                               </div>
                             </div>
 
                             {panelOpen[idx] ? (
                               <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
                                 <div className="mt-2">
-                                  <strong>Confidence:</strong>{' '}
+                                  <strong>{dict.screening.confidence}</strong>{' '}
                                   {String(aiData.confidence ?? '')}
                                 </div>
                                 <div className="mt-2">
-                                  <strong>Explanation:</strong>
+                                  <strong>{dict.screening.explanation}</strong>
                                   <div className="mt-1 text-sm text-gray-700">
                                     {aiData.explanation ??
                                       aiData.llm_raw ??
-                                      '(no explanation)'}
+                                      dict.screening.noExplanation}
                                   </div>
                                 </div>
                                 {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
                                   <div className="mt-2">
-                                    <strong>Evidence:</strong>
+                                    <strong>{dict.screening.evidence}</strong>
                                     <div className="mt-1 flex flex-wrap gap-1">
                                       {aiData.evidence_sentences.map((item: any, k: number) => {
                                         const isCoord = item && typeof item === 'object'
                                         const label = isCoord
-                                          ? `Page ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
-                                          : `Sentence ${String(item)}`
+                                          ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
+                                          : `${dict.screening.sentence} ${String(item)}`
                                         const onClick = () => {
                                           if (!viewerRef.current) return
                                           if (isCoord) {
@@ -812,14 +817,14 @@ export default function CanSrL2ScreenViewPage() {
                     setPanelOpen({})
                     await fetchCitationById(target)
                     router.push(
-                      `/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                      `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}`,
                     )
                   }}
                   className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
                 >
-                  Previous Citation
+                  {dict.screening.previousCitation}
                 </button>
                 <button
                   onClick={async () => {
@@ -833,14 +838,14 @@ export default function CanSrL2ScreenViewPage() {
                     setPanelOpen({})
                     await fetchCitationById(target)
                     router.push(
-                      `/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                      `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}`,
                     )
                   }}
                   className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
                 >
-                  Next Citation
+                  {dict.screening.nextCitation}
                 </button>
               </div>
             </div>

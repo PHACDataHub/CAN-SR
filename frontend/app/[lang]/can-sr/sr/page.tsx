@@ -9,11 +9,13 @@ import StackingCard from '@/components/can-sr/stacking-card'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
+import { useDictionary } from '../../DictionaryProvider'
 
 export default function CanSrLandingPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
+  const dict = useDictionary()
 
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const [manageOpen, setManageOpen] = useState(false)
@@ -68,13 +70,13 @@ export default function CanSrLandingPage() {
       <GCHeader />
 
       <SRHeader
-        title="CAN-SR"
+        title={dict.cansr.title}
         srName={loading ? "" : sr.name}
         showSettings={false}
         showExport={true}
         showBack={true}
         backHref="/can-sr"
-        backLabel="Back to SRs"
+        backLabel={dict.cansr.backToSRs}
         right={
           <div className="flex items-center">
             <button
@@ -83,7 +85,7 @@ export default function CanSrLandingPage() {
               className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
             >
               <Settings className="h-4 w-4 text-gray-600" />
-              <span>Manage Users</span>
+              <span>{dict.cansr.manageUsers}</span>
             </button>
           </div>
         }
@@ -94,7 +96,7 @@ export default function CanSrLandingPage() {
         <div className="mb-6">
           {loading ? (
             <div className="rounded-md border border-gray-200 bg-white p-6 text-sm text-gray-700">
-              Loading review...
+              {dict.sr.loadingReview}
             </div>
           ) : error ? (
             <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -110,8 +112,8 @@ export default function CanSrLandingPage() {
 
         <div className="space-y-3">
           <StackingCard
-            title="Database Search"
-            description="Select database and define search criteria"
+            title={dict.sr.databaseSearch}
+            description={dict.sr.databaseSearchDesc}
             href={
               srId
                 ? `/can-sr/search?sr_id=${encodeURIComponent(srId)}`
@@ -119,8 +121,8 @@ export default function CanSrLandingPage() {
             }
           />
           <StackingCard
-            title="Import references and criteria"
-            description="Upload citation files, define eligibility criteria and review settings."
+            title={dict.sr.importReferences}
+            description={dict.sr.importReferencesDesc}
             href={
               srId
                 ? `/can-sr/setup?sr_id=${encodeURIComponent(srId)}`
@@ -129,8 +131,8 @@ export default function CanSrLandingPage() {
           />
 
           <StackingCard
-            title="Title and abstract screening"
-            description="Screen titles and abstracts to identify potentially relevant citations."
+            title={dict.sr.titleAbstractScreening}
+            description={dict.sr.titleAbstractScreeningDesc}
             href={
               srId
                 ? `/can-sr/l1-screen?sr_id=${encodeURIComponent(srId)}`
@@ -139,8 +141,8 @@ export default function CanSrLandingPage() {
           />
 
           <StackingCard
-            title="Full text review"
-            description="Review full text articles and make inclusion/exclusion decisions."
+            title={dict.sr.fullTextReview}
+            description={dict.sr.fullTextReviewDesc}
             href={
               srId
                 ? `/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}`
@@ -149,8 +151,8 @@ export default function CanSrLandingPage() {
           />
 
           <StackingCard
-            title="Extraction"
-            description="Extract outcome and study parameters for included studies."
+            title={dict.sr.extraction}
+            description={dict.sr.extractionDesc}
             href={
               srId
                 ? `/can-sr/extract?sr_id=${encodeURIComponent(srId)}`

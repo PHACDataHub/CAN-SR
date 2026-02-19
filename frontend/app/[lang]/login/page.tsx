@@ -3,12 +3,13 @@
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
 import { API_ENDPOINTS } from '@/lib/config'
+import { useDictionary } from '../DictionaryProvider'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -17,13 +18,22 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
+  const dict = useDictionary()
+
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
+  // For language swaps
+  const currentPathname = usePathname()
+  const nextLang = lang === 'en' ? 'fr' : 'en'
+  const nextLangPath = currentPathname.replace(`/${lang}`, `/${nextLang}`)
 
   // Check if user is already logged in
   useEffect(() => {
     const token = localStorage.getItem('access_token')
     if (token) {
       console.log('Login page: Token found, redirecting to CAN-SR')
-      router.push('/can-sr')
+      router.push(`/${lang}/can-sr`)
     }
   }, [router])
 
@@ -59,7 +69,7 @@ export default function LoginPage() {
 
       // Small delay to ensure localStorage is written
       setTimeout(() => {
-        router.push('/can-sr')
+        router.push(`/${lang}/can-sr`)
       }, 100)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
@@ -83,11 +93,20 @@ export default function LoginPage() {
       </div>
 
       {/* Right side - Login Form */}
-      <div className="flex w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
+      <div className="flex relative w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
+        <div className="absolute top-5 right-5">
+          <Link
+            href={nextLangPath}
+            className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+          >
+            {dict.common.languageSwitch}
+          </Link>
+        </div>
+
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-3xl font-bold text-gray-900">
-              Access the Government of Canada AI Assistant Portal
+              { dict.login.formTitle }
             </h2>
           </div>
 
@@ -103,13 +122,13 @@ export default function LoginPage() {
                 htmlFor="email"
                 className="text-sm font-medium text-gray-700"
               >
-                Email Address
+                {dict.common.email}
               </Label>
               <Input
                 id="email"
                 type="email"
                 className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                placeholder="your.email@canada.ca"
+                placeholder={dict.login.emailPlaceholder}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -122,13 +141,13 @@ export default function LoginPage() {
                   htmlFor="password"
                   className="text-sm font-medium text-gray-700"
                 >
-                  Password
+                  {dict.common.password}
                 </Label>
                 <Link
                   href="#"
                   className="text-sm font-medium text-blue-600 transition-colors hover:text-blue-800"
                 >
-                  Forgot password?
+                  {dict.common.forgotPassword}
                 </Link>
               </div>
               <div className="relative">
@@ -136,7 +155,7 @@ export default function LoginPage() {
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   className="focus:ring-opacity-50 w-full rounded-lg border border-gray-300 bg-white p-3 pr-10 shadow-sm transition-all duration-200 focus:border-blue-500 focus:ring focus:ring-blue-200"
-                  placeholder="••••••••"
+                  placeholder={dict.login.passwordPlaceholder}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -160,17 +179,17 @@ export default function LoginPage() {
                 className="flex-1 w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
                 disabled={isLoading}
               >
-                {isLoading ? 'Signing in...' : 'Sign in'}
+                {isLoading ? dict.login.signingIn : dict.common.signIn}
               </Button>
 
               <Button
                 className="flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
-                onClick={() => { window.location.href = API_ENDPOINTS.AUTH.MICROSOFT_SSO}}
+                onClick={() => { window.location.href = `${API_ENDPOINTS.AUTH.MICROSOFT_SSO}?lang=${lang}`}}
                 type="button"
               >
                 <div className='flex items-center gap-1'>
                   <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><title>MS-SymbolLockup</title><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
-                  <p>Sign in with Microsoft</p>
+                  <p>{dict.common.signInWith}</p>
                 </div>
               </Button>
             </div>
@@ -178,20 +197,19 @@ export default function LoginPage() {
 
           <div className="mt-8 text-center">
             <p className="text-sm text-gray-600">
-              Don&apos;t have an account?{' '}
+              {dict.login.noAccount}{' '}
               <Link
-                href="/register"
+                href={`/${lang}/register`}
                 className="font-medium text-blue-600 transition-colors hover:text-blue-800"
               >
-                Register here
+                {dict.login.registerHere}
               </Link>
             </p>
           </div>
 
           <div className="mt-10 text-center text-xs text-gray-500">
             <p>
-              © {new Date().getFullYear()} Government of Canada. All rights
-              reserved.
+              © {new Date().getFullYear()} {dict.common.copyright}
             </p>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 interface PDFBoundingBoxViewerProps {
   srId: string
@@ -105,6 +106,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   }: PDFBoundingBoxViewerProps,
   ref
 ) {
+  const dict = useDictionary()
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
   const [analysisResult, setAnalysisResult] = useState<any | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -755,7 +757,7 @@ useImperativeHandle(ref, () => ({
       <div className="mb-3 flex items-center justify-between">
         <div>
           <div className="text-xs text-gray-600">Citation #{citationId}</div>
-          <div className="text-lg font-semibold text-gray-900">{fileName || 'Full text'}</div>
+          <div className="text-lg font-semibold text-gray-900">{fileName || dict.pdf.fullText}</div>
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center text-sm">
@@ -765,7 +767,7 @@ useImperativeHandle(ref, () => ({
               onChange={(e) => setShowBoundingBoxes(e.target.checked)}
               className="mr-2"
             />
-            Show Evidence Highlights
+            {dict.pdf.showEvidenceHighlights}
           </label>
           <div className="ml-3 text-xs text-gray-500">{Math.round(scale * 100)}%</div>
         </div>
@@ -802,7 +804,7 @@ useImperativeHandle(ref, () => ({
               100%
             </button>
             <button onClick={() => setFitToWidth((v) => !v)} className="rounded-md border px-2 py-1 text-sm">
-              Fit
+              {dict.pdf.fit}
             </button>
           </div>
         </div>
@@ -813,7 +815,7 @@ useImperativeHandle(ref, () => ({
             className="h-[680px] overflow-auto border rounded p-4 bg-gray-50 flex justify-center items-start"
           >
             {loading ? (
-              <div className="text-sm text-gray-600">Loading PDF...</div>
+              <div className="text-sm text-gray-600">{dict.pdf.loadingPDF}</div>
             ) : error ? (
               <div className="text-sm text-red-600">{error}</div>
             ) : (
@@ -822,7 +824,7 @@ useImperativeHandle(ref, () => ({
                   const vp = pageViewports[pageNum]
                   return (
                     <div key={pageNum} className="w-full flex flex-col items-center">
-                      <div className="mb-2 text-sm text-gray-700 font-medium">Page {pageNum}</div>
+                      <div className="mb-2 text-sm text-gray-700 font-medium">{dict.screening.page} {pageNum}</div>
                       <div
                         ref={(el) => {
                           wrapperRefs.current[pageNum] = el
@@ -859,7 +861,7 @@ useImperativeHandle(ref, () => ({
 
         <div className="flex items-center justify-between">
           <div className="text-xs text-gray-500">{fileName}</div>
-          <div className="text-xs text-gray-400">Keyboard: ← → Home/End</div>
+          <div className="text-xs text-gray-400">{dict.pdf.keyboardHint}</div>
         </div>
       </div>
     </div>
