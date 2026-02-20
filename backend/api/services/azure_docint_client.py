@@ -25,9 +25,10 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-
+from api.core.config import settings
 from bs4 import BeautifulSoup
 from typing import TYPE_CHECKING
+from azure.identity import DefaultAzureCredential
 
 try:
     from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -62,20 +63,34 @@ class AzureDocIntelligenceService:
         """Initialize Azure Document Intelligence client"""
         if not AZURE_DOC_INTELLIGENCE_AVAILABLE:
             return None
-
-        endpoint = os.getenv("AZURE_DOC_INTELLIGENCE_ENDPOINT")
-        key = os.getenv("AZURE_DOC_INTELLIGENCE_KEY")
-
-        if not endpoint or not key:
+        
+        if settings.AZURE_DOC_INT_MODE not in ["key", "entra"]:
             print(
-                "Azure Document Intelligence credentials not found. Set AZURE_DOC_INTELLIGENCE_ENDPOINT and AZURE_DOC_INTELLIGENCE_KEY"
+                f"Invalid AZURE_DOC_INT_MODE: {settings.AZURE_DOC_INT_MODE}. Must be 'key' or 'entra'."
+            )
+            return None
+        
+        if not settings.AZURE_DOC_INT_ENDPOINT:
+            print(
+                "Azure Document Intelligence endpoint not found. Set AZURE_DOC_INT_ENDPOINT environment variable."
             )
             return None
 
-        try:
-            return DocumentIntelligenceClient(
-                endpoint=endpoint, credential=AzureKeyCredential(key)
+        if settings.AZURE_DOC_INT_MODE == "key" and not settings.AZURE_DOC_INT_API_KEY:
+            print(
+                "Azure Document Intelligence API key not found. Set AZURE_DOC_INT_API_KEY for key-based auth."
             )
+            return None
+        
+        doc_int_kwargs = {"endpoint": settings.AZURE_DOC_INT_ENDPOINT}
+
+        if settings.AZURE_DOC_INT_MODE == "key":
+            doc_int_kwargs["credential"] = AzureKeyCredential(settings.AZURE_DOC_INT_API_KEY)
+        elif settings.AZURE_DOC_INT_MODE == "entra":
+            doc_int_kwargs["credential"] = DefaultAzureCredential()
+
+        try:
+            return DocumentIntelligenceClient(**doc_int_kwargs)
         except Exception as e:
             print(f"Failed to initialize Azure Document Intelligence client: {e}")
             return None
