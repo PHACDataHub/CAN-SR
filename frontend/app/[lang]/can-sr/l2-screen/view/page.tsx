@@ -510,6 +510,44 @@ export default function CanSrL2ScreenViewPage() {
     return { panels: mappedPanels, open: mappedOpen }
   }, [criteriaData, aiPanels, panelOpen])
 
+  // Helpers for table/figure evidence -> viewer highlight
+  const parsedTables = useMemo(() => {
+    if (!citation) return [] as any[]
+    let v: any = (citation as any).fulltext_tables
+    if (!v) return []
+    try {
+      if (typeof v === 'string') v = JSON.parse(v)
+    } catch {
+      // ignore
+    }
+    return Array.isArray(v) ? v : []
+  }, [citation])
+
+  const parsedFigures = useMemo(() => {
+    if (!citation) return [] as any[]
+    let v: any = (citation as any).fulltext_figures
+    if (!v) return []
+    try {
+      if (typeof v === 'string') v = JSON.parse(v)
+    } catch {
+      // ignore
+    }
+    return Array.isArray(v) ? v : []
+  }, [citation])
+
+  const scrollToArtifact = (kind: 'table' | 'figure', idx: number) => {
+    const list = kind === 'table' ? parsedTables : parsedFigures
+    const item = list.find((x: any) => Number(x?.index) === Number(idx))
+    console.log('[artifact-click]', { kind, idx, hasViewer: !!viewerRef.current, item })
+    if (!item || !viewerRef.current) return
+    const bbox = item?.bounding_box
+    // We store normalized boxes as an array of {page,x,y,width,height}
+    const first = Array.isArray(bbox) ? bbox[0] : null
+    console.log('[artifact-bbox]', { kind, idx, bbox, first })
+    if (!first) return
+    viewerRef.current.scrollToCoord(first)
+  }
+
   const workspace = useMemo(() => {
     if (loadingCitation)
       return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
@@ -704,6 +742,50 @@ export default function CanSrL2ScreenViewPage() {
                                             className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
                                             title={label}
                                             type="button"
+                                          >
+                                            {label}
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {Array.isArray(aiData?.evidence_tables) && aiData.evidence_tables.length > 0 ? (
+                                  <div className="mt-2">
+                                    <strong>Evidence tables:</strong>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {aiData.evidence_tables.map((t: any, k: number) => {
+                                        const label = `Table T${String(t)}`
+                                        return (
+                                          <button
+                                            key={k}
+                                            type="button"
+                                            onClick={() => scrollToArtifact('table', Number(t))}
+                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
+                                            title={label}
+                                          >
+                                            {label}
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {Array.isArray(aiData?.evidence_figures) && aiData.evidence_figures.length > 0 ? (
+                                  <div className="mt-2">
+                                    <strong>Evidence figures:</strong>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {aiData.evidence_figures.map((f: any, k: number) => {
+                                        const label = `Figure F${String(f)}`
+                                        return (
+                                          <button
+                                            key={k}
+                                            type="button"
+                                            onClick={() => scrollToArtifact('figure', Number(f))}
+                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
+                                            title={label}
                                           >
                                             {label}
                                           </button>

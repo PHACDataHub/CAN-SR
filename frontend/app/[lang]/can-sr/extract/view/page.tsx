@@ -68,6 +68,22 @@ export default function CanSrL2ScreenPage() {
   const [fulltextStr, setFulltextStr] = useState<string | null>(null)
   const viewerRef = useRef<PDFBoundingBoxViewerHandle | null>(null)
 
+  // Table/Figure artifacts (for evidence chips -> click to highlight)
+  const [fulltextTables, setFulltextTables] = useState<any[] | null>(null)
+  const [fulltextFigures, setFulltextFigures] = useState<any[] | null>(null)
+
+  const scrollToArtifact = (kind: 'table' | 'figure', idx: number) => {
+    const list = kind === 'table' ? (fulltextTables || []) : (fulltextFigures || [])
+    const item = list.find((x: any) => Number(x?.index) === Number(idx))
+    console.log('[artifact-click]', { kind, idx, hasViewer: !!viewerRef.current, item })
+    if (!item || !viewerRef.current) return
+    const bbox = item?.bounding_box
+    const first = Array.isArray(bbox) ? bbox[0] : null
+    console.log('[artifact-bbox]', { kind, idx, bbox, first })
+    if (!first) return
+    viewerRef.current.scrollToCoord(first)
+  }
+
   const [runningAllAI, setRunningAllAI] = useState(false)
   const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
 
@@ -299,9 +315,15 @@ export default function CanSrL2ScreenPage() {
           setAiPanels(prev => ({ ...prev, ...nextAIPanels }))
         }
 
-        // extract coords/pages/fulltext for PDF overlay
+        // extract coords/pages/fulltext and artifacts for PDF overlay
         const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
         if (ft) setFulltextStr(ft)
+
+        const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
+        if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
+
+        const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
+        if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
 
         const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
         if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
@@ -340,6 +362,12 @@ export default function CanSrL2ScreenPage() {
 
         const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
         if (ft) setFulltextStr(ft)
+
+        const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
+        if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
+
+        const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
+        if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
 
         const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
         if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
@@ -655,6 +683,50 @@ export default function CanSrL2ScreenPage() {
             className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
             title={label}
             type="button"
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  </div>
+) : null}
+
+{Array.isArray(aiPanels[paramName]?.evidence_tables) && aiPanels[paramName].evidence_tables.length > 0 ? (
+  <div className="mt-2">
+    <strong>Evidence tables:</strong>
+    <div className="mt-1 flex flex-wrap gap-1">
+      {aiPanels[paramName].evidence_tables.map((t: any, k: number) => {
+        const label = `Table T${String(t)}`
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => scrollToArtifact('table', Number(t))}
+            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
+            title={label}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  </div>
+) : null}
+
+{Array.isArray(aiPanels[paramName]?.evidence_figures) && aiPanels[paramName].evidence_figures.length > 0 ? (
+  <div className="mt-2">
+    <strong>Evidence figures:</strong>
+    <div className="mt-1 flex flex-wrap gap-1">
+      {aiPanels[paramName].evidence_figures.map((f: any, k: number) => {
+        const label = `Figure F${String(f)}`
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => scrollToArtifact('figure', Number(f))}
+            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
+            title={label}
           >
             {label}
           </button>
