@@ -37,7 +37,14 @@
     "abstract": "Abstract",
     "citationsPerPage": "Citations per page",
     "pageOf": "Page {page} of {total}",
-    "invalidPDF": "Please upload a valid PDF file."
+    "invalidPDF": "Please upload a valid PDF file.",
+    "first": "First",
+    "last": "Last",
+    "jumpToPage": "Jump to page",
+    "go": "Go",
+    "downloading": "Downloading...",
+    "uploadWillReset": "Uploading a different PDF will clear Full Text screening and Extraction answers for this citation.",
+    "continue": "Continue"
   },
   "login": {
     "formTitle": "Access the Government of Canada AI Assistant Portal",

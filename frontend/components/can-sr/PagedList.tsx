@@ -1,10 +1,8 @@
-import { GET } from '@/app/api/search/route'
-import { Citation } from '@/components/chat/types'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { Bot, Check } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
-import { Bot, Check } from 'lucide-react'
-import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 type CitationInfo = {
   citationIds: number[]
@@ -16,22 +14,14 @@ type CitationInfo = {
   pageview: string
 }
 
-type decisionPayload = {
-  decision_maker: string
-  screening_step: string
-  decision: string
-}
-
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
   const tokenType = getTokenType()
-  return token
-    ? { Authorization: `${tokenType} ${token}` }
-    : ({} as Record<string, string>)
+  return token ? { Authorization: `${tokenType} ${token}` } : {}
 }
 
 function snakeCaseColumn(name: string, llm: boolean) {
-  if (!name) return 'llm_col'
+  if (!name) return llm ? 'llm_col' : 'human_col'
   let s = name.trim().toLowerCase()
   s = s.replace(/[^\w]+/g, '_')
   s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
@@ -46,129 +36,127 @@ export default function PagedList({
   screeningStep,
   pageview,
 }: CitationInfo) {
+  const router = useRouter()
+  const { lang } = useParams<{ lang: string }>()
+  const dict = useDictionary()
+
   const [citationData, setCitationData] = useState<any[]>([])
   const [page, setpage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
-  const [lastPage, setLastpage] = useState(
-    Math.ceil(citationIds.length / pageSize),
-  )
+  const [pageSize, setPageSize] = useState(25)
+  const [lastPage, setLastpage] = useState(1)
+
   const [llmClassified, setLlmClassified] = useState<Record<number, boolean>>(
     {},
   )
   const [humanVerified, setHumanVerified] = useState<Record<number, boolean>>(
     {},
   )
-  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
   const [showClassify, setShowClassify] = useState<Record<number, boolean>>({})
-  const router = useRouter()
-  const dict = useDictionary()
+
+  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+
+  // --- paging ---
+  useEffect(() => {
+    const lp = Math.max(1, Math.ceil((citationIds?.length || 0) / pageSize))
+    setLastpage(lp)
+    setpage((prev) => Math.min(Math.max(1, prev), lp))
+  }, [citationIds, pageSize])
 
   useEffect(() => {
     const fetchCitations = async () => {
-      if (!citationIds) return
+      if (!citationIds?.length) {
+        setCitationData([])
+        return
+      }
       const startIndex = (page - 1) * pageSize
       const endIndex = page * pageSize
-      const results = await Promise.all(
-        citationIds
-          .slice(startIndex, endIndex)
-          .map((id) => getCitationById(id)),
-      )
-      setCitationData(results)
-      setLastpage(Math.ceil(citationIds.length / pageSize))
-    }
 
-    fetchCitations()
-  }, [citationIds, page, pageSize])
+      const pageIds = citationIds.slice(startIndex, endIndex)
+      if (!pageIds.length) {
+        setCitationData([])
+        return
+      }
 
-  const getCitationById = async (id: number) => {
-    if (!srId) return
-    try {
       const headers = getAuthHeaders()
       const res = await fetch(
-        `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-        {
-          method: 'GET',
-          headers,
-        },
+        `/api/can-sr/citations/batch?sr_id=${encodeURIComponent(srId)}&ids=${encodeURIComponent(pageIds.join(','))}`,
+        { method: 'GET', headers },
       )
       const data = await res.json().catch(() => ({}))
-      checkCitationStatus(data)
-      return { id: data.id, title: data.title, abstract: data.abstract }
-    } finally {
-    }
-  }
-  const checkCitationStatus = async (data: any) => {
-    let classified = true
-    let verified = true
-    questions.forEach((question) => {
-      const llmQuestion = snakeCaseColumn(question, true)
-      const humanQuestion = snakeCaseColumn(question, false)
+      const rows: any[] = Array.isArray(data?.citations) ? data.citations : []
 
-      if (!data[llmQuestion]) {
-        classified = false
-      }
-      if (!data[humanQuestion]) {
-        verified = false
-      }
-    })
-    if (classified) {
-      setLlmClassified((prev) => ({
-        ...prev,
-        [data.id]: true,
-      }))
-    }
-    if (verified) {
-      setHumanVerified((prev) => ({
-        ...prev,
-        [data.id]: true,
-      }))
-    }
-    if (data['fulltext_url']) {
-      setShowClassify((prev) => ({
-        ...prev,
-        [data.id]: true,
-      }))
-    }
-  }
+      // Update UI rows
+      setCitationData(rows)
 
-  const changePageSize = (e: ChangeEvent<HTMLInputElement>) => {
-    const target = e.target as HTMLInputElement
-    let newPageSize = Number(target.value)
-    if (newPageSize < 1) {
-      newPageSize = 1
-    } else if (newPageSize > citationIds.length) {
-      newPageSize = citationIds.length
+      // Compute status maps in a single pass to avoid N state updates
+      const nextLlm: Record<number, boolean> = {}
+      const nextHuman: Record<number, boolean> = {}
+      const nextShow: Record<number, boolean> = {}
+
+      for (const row of rows) {
+        if (!row?.id) continue
+        const id = Number(row.id)
+        if (!Number.isFinite(id)) continue
+
+        let classified = true
+        let verified = true
+        for (const question of questions) {
+          const llmQuestion = snakeCaseColumn(question, true)
+          const humanQuestion = snakeCaseColumn(question, false)
+          if (!row?.[llmQuestion]) classified = false
+          if (!row?.[humanQuestion]) verified = false
+        }
+
+        if (classified) nextLlm[id] = true
+        if (verified) nextHuman[id] = true
+        if (row?.fulltext_url) nextShow[id] = true
+      }
+
+      setLlmClassified((prev) => ({ ...prev, ...nextLlm }))
+      setHumanVerified((prev) => ({ ...prev, ...nextHuman }))
+      setShowClassify((prev) => ({ ...prev, ...nextShow }))
     }
+    fetchCitations()
+  }, [citationIds, page, pageSize, questions, srId])
+
+  // NOTE: Previously we fetched each citation via /citations/get.
+  // This is now replaced by a single /citations/batch call per page.
+
+  const changePageSize = (e: ChangeEvent<HTMLSelectElement>) => {
+    const v = Number(e.target.value)
+    const newPageSize = [10, 25, 50, 100].includes(v) ? v : 25
     setPageSize(newPageSize)
+    setpage(1)
+  }
+
+  const [jumpPageInput, setJumpPageInput] = useState<string>('')
+  const jumpToPage = () => {
+    const n = Number(jumpPageInput)
+    if (Number.isNaN(n)) return
+    const clamped = Math.min(Math.max(1, n), lastPage)
+    setpage(clamped)
   }
 
   const classifyCitationById = async (id: number) => {
-    try {
-      const headers = getAuthHeaders()
-      if (!srId) return
-      for (let i = 0; i < questions.length; i++) {
-        const bodyPayload = {
-          question: questions[i],
-          options: possible_answers[i],
-          include_columns: ['title', 'abstract'],
-          screening_step: screeningStep,
-        }
-        const classifyRes = await fetch(
-          `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(bodyPayload),
-          },
-        )
-        const classifyData = await classifyRes.json().catch(() => ({}))
-      }
-      setLlmClassified((prev) => ({
-        ...prev,
-        [id]: true,
-      }))
-    } finally {
+    const headers = {
+      ...getAuthHeaders(),
+      'Content-Type': 'application/json',
     }
+    if (!srId) return
+
+    for (let i = 0; i < questions.length; i++) {
+      const bodyPayload = {
+        question: questions[i],
+        options: possible_answers[i],
+        include_columns: ['title', 'abstract'],
+        screening_step: screeningStep,
+      }
+      await fetch(
+        `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
+        { method: 'POST', headers, body: JSON.stringify(bodyPayload) },
+      )
+    }
+    setLlmClassified((prev) => ({ ...prev, [id]: true }))
   }
 
   const onChooseFile = (id: number) => {
@@ -179,140 +167,184 @@ export default function PagedList({
     event: React.ChangeEvent<HTMLInputElement>,
     id: number,
   ) => {
-    const headers = getAuthHeaders()
     if (!event.target.files) return
     const file = event.target.files[0]
+    if (!file) return
+
+    if (file.type !== 'application/pdf') {
+      alert(dict.common.invalidPDF)
+      return
+    }
+
+    // Only warn about re-upload/reset if a PDF already exists for this citation.
+    // (We treat `showClassify[id]` as the “has existing fulltext” flag, since it
+    // is set when `fulltext_url` is present.)
+    if (showClassify[id]) {
+      const ok = window.confirm(dict.common.uploadWillReset)
+      if (!ok) {
+        event.target.value = ''
+        return
+      }
+    }
+
+    const headers = getAuthHeaders()
     const fd = new FormData()
     fd.append('file', file)
-    if (file && file.type === 'application/pdf') {
-      const res = await fetch(
-        `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-        {
-          method: 'POST',
-          headers,
-          body: fd as any,
-        },
-      )
-      setShowClassify((prev) => ({
-        ...prev,
-        [id]: true,
-      }))
-    } else {
-      alert(dict.common.invalidPDF)
-    }
-  }
 
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+    await fetch(
+      `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
+      { method: 'POST', headers, body: fd as any },
+    )
+
+    setShowClassify((prev) => ({ ...prev, [id]: true }))
+  }
 
   return (
     <div className="flex flex-col items-center space-y-4">
-      <ul className="space-y-2">
+      <ul className="w-full space-y-2">
         {citationData.map((data) => (
           <li
             key={data.id}
             className="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-4 py-2"
           >
-            <div className="flex flex-col space-y-2">
-              <p className="text-xs text-gray-600"> Citation #{data.id} </p>
+            <div className="flex flex-col space-y-2 pr-4">
+              <p className="text-xs text-gray-600">Citation #{data.id}</p>
               <p className="text-semibold text">{data.title}</p>
-              <p className="line-clamp-5 overflow-hidden text-sm text-ellipsis text-gray-800">
+              <p className="line-clamp-5 overflow-hidden text-ellipsis text-sm text-gray-800">
                 {dict.common.abstract}: {data.abstract}
               </p>
             </div>
+
             <div className="flex flex-col items-center justify-center space-y-3">
               <button
                 onClick={() =>
                   router.push(
-                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(
-                      srId || '',
-                    )}&citation_id=${data.id}&screening=${screeningStep}`,
+                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}`,
                   )
                 }
-                className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
+                className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
               >
                 {dict.common.view}
               </button>
-              {screeningStep != 'l1' ? (
+
+              {screeningStep !== 'l1' ? (
+                <>
+                  <button
+                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
+                    onClick={() => onChooseFile(data.id)}
+                  >
+                    {dict.common.upload}
+                  </button>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    ref={(el: HTMLInputElement | null): void => {
+                      fileInputRefs.current[data.id] = el
+                    }}
+                    onChange={(event) => handleFileChange(event, data.id)}
+                    style={{ display: 'none' }}
+                  />
+                </>
+              ) : null}
+
+              {screeningStep !== 'l2' || showClassify[data.id] ? (
                 <button
-                  className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
-                  onClick={() => onChooseFile(data.id)}
-                >
-                  {dict.common.upload}
-                </button>
-              ) : (
-                <></>
-              )}
-              {screeningStep != 'l1' ? (
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  ref={(el: HTMLInputElement | null): void => {
-                    fileInputRefs.current[data.id] = el
-                  }}
-                  onChange={(event) => handleFileChange(event, data.id)}
-                  style={{ display: 'none' }}
-                />
-              ) : (
-                <></>
-              )}
-              {screeningStep != 'l2' || showClassify[data.id] ? (
-                <button
-                  onClick={() => {
-                    classifyCitationById(data.id)
-                  }}
-                  className="w-[80px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
+                  onClick={() => classifyCitationById(data.id)}
+                  className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
                 >
                   {dict.common.classify}
                 </button>
-              ) : (
-                <></>
-              )}
+              ) : null}
 
               <div className="align-center flex flex-row items-center space-x-4">
-                {llmClassified[data.id] && (
+                {llmClassified[data.id] ? (
                   <Bot className="h-6 w-6 text-green-600" />
-                )}
-                {humanVerified[data.id] && (
+                ) : null}
+                {humanVerified[data.id] ? (
                   <Check className="h-6 w-6 text-green-600" />
-                )}
+                ) : null}
               </div>
             </div>
           </li>
         ))}
       </ul>
-      <div className="flex flex-col items-center space-y-3">
-        <div className="flex flex-row items-center space-x-2">
-          <label htmlFor="pageInput" className="text-gray-700">
+
+      {/* Modern pagination footer */}
+      <div className="sticky bottom-0 flex w-full flex-wrap items-center justify-between gap-3 rounded-md border border-gray-100 bg-white p-3">
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-700">
             {dict.common.citationsPerPage}
           </label>
-          <input
-            name="pageInput"
-            type="number"
-            min="1"
-            max={citationIds.length}
-            onChange={changePageSize}
+          <select
             value={pageSize}
-            className="p-y-2 w-11 border p-1 text-gray-700"
-          />
+            onChange={changePageSize}
+            className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
         </div>
-        <div className="flex flex-row items-center space-x-8">
+
+        <div className="flex items-center gap-2">
           <button
-            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-300 disabled:opacity-50"
-            disabled={page === 1}
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+            disabled={page <= 1}
+            onClick={() => setpage(1)}
+            title={dict.common.first}
+            type="button"
+          >
+            {dict.common.first}
+          </button>
+          <button
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+            disabled={page <= 1}
             onClick={() => setpage(page - 1)}
+            type="button"
           >
             {dict.common.prev}
           </button>
-          <p className="text-gray-700">
-            {dict.common.pageOf.replace('{page}', String(page)).replace('{total}', String(lastPage))}
+          <p className="min-w-[140px] text-center text-sm text-gray-700">
+            {dict.common.pageOf
+              .replace('{page}', String(page))
+              .replace('{total}', String(lastPage))}
           </p>
           <button
-            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-300 disabled:opacity-50"
-            disabled={page === lastPage}
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+            disabled={page >= lastPage}
             onClick={() => setpage(page + 1)}
+            type="button"
           >
             {dict.common.next}
+          </button>
+          <button
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+            disabled={page >= lastPage}
+            onClick={() => setpage(lastPage)}
+            title={dict.common.last}
+            type="button"
+          >
+            {dict.common.last}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-700">{dict.common.jumpToPage}</label>
+          <input
+            value={jumpPageInput}
+            onChange={(e) => setJumpPageInput(e.target.value)}
+            className="w-20 rounded-md border border-gray-200 px-2 py-1 text-sm"
+            placeholder={String(page)}
+            inputMode="numeric"
+          />
+          <button
+            type="button"
+            onClick={jumpToPage}
+            className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            {dict.common.go}
           </button>
         </div>
       </div>

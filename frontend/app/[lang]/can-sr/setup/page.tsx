@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
-import { getAuthToken, getTokenType } from '@/lib/auth'
+import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
 import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
@@ -43,8 +43,8 @@ export default function CanSrSetupPage() {
   const authHeaders: Record<string, string> | undefined = token ? { Authorization: `${tokenType} ${token}` } : undefined
 
   const [sr, setSr] = useState<any>(null)
-  const [srLoading, setSrLoading] = useState<boolean>(true)
-  const [srError, setSrError] = useState<string | null>(null)
+  const [, setSrLoading] = useState<boolean>(true)
+  const [, setSrError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!srId) return
@@ -52,9 +52,9 @@ export default function CanSrSetupPage() {
       setSrLoading(true)
       setSrError(null)
       try {
-        const res = await fetch(`/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`, {
-          headers: authHeaders,
-        })
+        const res = await authenticatedFetch(
+          `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+        )
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}))
           throw new Error(errBody?.detail || errBody?.error || `Failed to fetch SR (${res.status})`)
@@ -81,7 +81,7 @@ export default function CanSrSetupPage() {
       setYamlLoading(true)
       try {
         const criteria_yaml = await getLastSavedYaml()
-        setYamlText(criteria_yaml)
+        setYamlText(criteria_yaml || '')
       } finally {
         setYamlLoading(false)
       }
@@ -113,7 +113,7 @@ export default function CanSrSetupPage() {
           // ignore
         }
       }
-    } catch (err: any) {
+    } catch {
       setYamlSaveMessage('Failed to read YAML file')
     } finally {
       setYamlLoading(false)
@@ -201,10 +201,11 @@ export default function CanSrSetupPage() {
   }
 
   const getLastSavedYaml = async () => {
-    if (!srId) return
-    const res = await fetch(`/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`, {
-        headers: authHeaders,
-      })
+    if (!srId) return SAMPLE_YAML
+
+    const res = await authenticatedFetch(
+      `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+    )
     const data = await res.json().catch(() => ({}))
     const criteria_yaml = data.criteria_yaml
     if(!criteria_yaml) {

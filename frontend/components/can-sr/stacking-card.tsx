@@ -2,8 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible'
-import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { useParams } from 'next/navigation'
 
@@ -19,7 +18,7 @@ export default function StackingCard({ title, description, href, className }: St
   const dict = useDictionary()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   return (
     <div className={`w-full ${className || ''}`}>
@@ -64,5 +63,5 @@ export default function StackingCard({ title, description, href, className }: St
         </CollapsibleContent>
       </Collapsible>
     </div>
-  );
+  )
 }

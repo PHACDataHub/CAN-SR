@@ -60,6 +60,11 @@ class SRDBService:
                 
             logger.info("Ensured systematic_reviews table exists")
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to ensure systematic_reviews table exists: {e}")
             raise
         finally:
@@ -227,6 +232,11 @@ class SRDBService:
             return sr_doc
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to insert SR document: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create systematic review: {e}")
         finally:
@@ -283,8 +293,18 @@ class SRDBService:
             return {"matched_count": 1, "modified_count": modified_count, "added_user_id": target_user_id}
             
         except HTTPException:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             raise
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to add user to SR: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}")
         finally:
@@ -343,8 +363,18 @@ class SRDBService:
             return {"matched_count": 1, "modified_count": modified_count, "removed_user_id": target_user_id}
             
         except HTTPException:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             raise
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to remove user from SR: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}")
         finally:
@@ -420,8 +450,18 @@ class SRDBService:
             return doc
             
         except HTTPException:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             raise
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to update SR criteria: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update criteria: {e}")
         finally:
@@ -475,6 +515,11 @@ class SRDBService:
             return results
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to list SRs for user: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list systematic reviews: {e}")
         finally:
@@ -526,8 +571,15 @@ class SRDBService:
             return doc
             
         except Exception as e:
+            # IMPORTANT: do not swallow DB errors as "not found".
+            # Roll back so this connection isn't poisoned for subsequent requests.
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to get SR: {e}")
-            return None
+            raise
         finally:
             if conn:
                 pass
@@ -564,6 +616,11 @@ class SRDBService:
             return {"matched_count": 1, "modified_count": modified_count, "visible": visible}
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to set visibility on SR: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to set visibility: {e}")
         finally:
@@ -608,6 +665,11 @@ class SRDBService:
             return {"deleted_count": deleted_count}
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to hard-delete SR: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to hard-delete systematic review: {e}")
         finally:
@@ -636,6 +698,11 @@ class SRDBService:
 
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to update screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update screening DB info: {e}")
         finally:
@@ -663,6 +730,11 @@ class SRDBService:
 
             
         except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             logger.exception(f"Failed to clear screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear screening DB info: {e}")
         finally:

@@ -1,7 +1,6 @@
 'use client'
 
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import Link from 'next/link'
 import { useState, useEffect, useRef } from 'react'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { getAuthToken, getTokenType } from '@/lib/auth'
@@ -15,8 +14,13 @@ export default function CanSrL2ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  // Get current language to keep language when navigating (must be unconditional hook call)
+  const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const dict = useDictionary()
+
+  // Navigation list (Extract is filtered by L2 pass)
+  const [citationIdList, setCitationIdList] = useState<number[]>([])
 
   type ParametersParsed = {
     categories: string[]
@@ -29,6 +33,29 @@ export default function CanSrL2ScreenPage() {
     const tokenType = getTokenType()
     return token ? { Authorization: `${tokenType} ${token}` } : {}
   }
+
+  // Load filtered citation ids for navigation (Extract is filtered by L2 pass)
+  useEffect(() => {
+    if (!srId) return
+    const loadIds = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent('l2')}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(data?.citation_ids)) {
+          setCitationIdList(data.citation_ids)
+        } else {
+          setCitationIdList([])
+        }
+      } catch {
+        setCitationIdList([])
+      }
+    }
+    loadIds()
+  }, [srId])
 
   // Column name helpers to mirror backend snake_case and column derivation
   const snakeCase = (name: string, maxLen = 63): string => {
@@ -182,7 +209,7 @@ export default function CanSrL2ScreenPage() {
       } else {
         setAiStatus(prev => ({ ...prev, [name]: 'error' }))
       }
-    } catch (e) {
+    } catch {
       setAiStatus(prev => ({ ...prev, [name]: 'error' }))
     }
   }
@@ -444,7 +471,7 @@ export default function CanSrL2ScreenPage() {
       )
       await res.json().catch(() => ({}))
       setSaveStatus(prev => ({ ...prev, [name]: res.ok ? 'saved' : 'error' }))
-    } catch (e) {
+    } catch {
       setSaveStatus(prev => ({ ...prev, [name]: 'error' }))
     } finally {
       setSavingParam(null)
@@ -456,9 +483,6 @@ export default function CanSrL2ScreenPage() {
     router.replace('/can-sr')
     return
   }
-
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -759,7 +783,9 @@ export default function CanSrL2ScreenPage() {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
-                    const target = String(cur - 1)
+                    const idx = citationIdList.indexOf(cur)
+                    if (idx <= 0) return
+                    const target = String(citationIdList[idx - 1])
                     router.push(
                       `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,
@@ -775,7 +801,9 @@ export default function CanSrL2ScreenPage() {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
-                    const target = String(cur + 1)
+                    const idx = citationIdList.indexOf(cur)
+                    if (idx === -1 || idx >= citationIdList.length - 1) return
+                    const target = String(citationIdList[idx + 1])
                     router.push(
                       `/${lang}/can-sr/extract/view?sr_id=${encodeURIComponent(
                         srId,

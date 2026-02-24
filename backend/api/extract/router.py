@@ -344,7 +344,7 @@ async def extract_parameter_endpoint(
         "evidence_sentences": evidence,
         "evidence_tables": evidence_tables,
         "evidence_figures": evidence_figures,
-        "llm_raw": llm_response[:4000]
+        "llm_raw": llm_response[:4000],
     }
 
     # Persist under dynamic column name derived from parameter name
@@ -359,6 +359,26 @@ async def extract_parameter_endpoint(
 
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+
+    # Auto-fill human_param_* from llm_param_* if missing (never overwrite)
+    try:
+        col_human = col_name.replace("llm_param_", "human_param_", 1)
+        human_payload = {
+            **stored,
+            "autofilled": True,
+            "source": "llm",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        await run_in_threadpool(
+            cits_dp_service.copy_jsonb_if_empty,
+            citation_id,
+            col_name,
+            col_human,
+            human_payload,
+            table_name,
+        )
+    except Exception:
+        pass
 
     return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "extraction": stored}
 

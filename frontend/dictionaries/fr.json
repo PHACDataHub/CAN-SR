@@ -37,7 +37,14 @@
     "abstract": "Résumé",
     "citationsPerPage": "Citations par page",
     "pageOf": "Page {page} de {total}",
-    "invalidPDF": "Veuillez téléverser un fichier PDF valide."
+    "invalidPDF": "Veuillez téléverser un fichier PDF valide.",
+    "first": "Premier",
+    "last": "Dernier",
+    "jumpToPage": "Aller à la page",
+    "go": "Aller",
+    "downloading": "Téléchargement...",
+    "uploadWillReset": "Le téléversement d’un PDF différent effacera les réponses de l’évaluation en texte intégral et de l’extraction pour cette citation.",
+    "continue": "Continuer"
   },
   "login": {
     "formTitle": "Accédez au portail de l'assistant IA du gouvernement du Canada",

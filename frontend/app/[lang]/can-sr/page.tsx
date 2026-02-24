@@ -29,8 +29,8 @@ export default function CanSrIndexPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [user, setUser] = useState<User | null>(null)
-  const [isUserLoading, setIsUserLoading] = useState(true)
+  const [, setUser] = useState<User | null>(null)
+  const [, setIsUserLoading] = useState(true)
 
   const router = useRouter()
   const dict = useDictionary()
@@ -42,7 +42,7 @@ export default function CanSrIndexPage() {
   const [description, setDescription] = useState('')
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   async function fetchReviews() {
     setLoading(true)
@@ -96,7 +96,7 @@ export default function CanSrIndexPage() {
         throw new Error(errBody?.detail || errBody?.error || `Create failed: ${res.status}`)
       }
 
-      const created = await res.json().catch(() => ({}))
+      await res.json().catch(() => ({}))
       // refresh the list and close modal
       await fetchReviews()
       setShowCreate(false)
@@ -151,7 +151,7 @@ export default function CanSrIndexPage() {
     }
 
     fetchUser()
-  }, [router])
+  }, [router, lang])
 
   const rightNode = (
     <div className="flex items-center space-x-2">
