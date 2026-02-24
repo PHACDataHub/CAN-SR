@@ -45,6 +45,15 @@ function snakeCaseColumn(name: string) {
   return `llm_${s}`.slice(0, 60)
 }
 
+/**
+ * Human classification column for screening (mirrors llm_ prefix but with human_).
+ * Example: question -> llm_question, human_question
+ */
+function humanScreenColumn(name: string) {
+  const base = snakeCaseColumn(name)
+  return base.replace(/^llm_/, 'human_')
+}
+
 /* Types for local clarity */
 type CriteriaData = {
   questions: string[]
@@ -57,6 +66,8 @@ export default function CanSrL1ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  // Get current language to keep language when navigating (must be unconditional hook call)
+  const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const dict = useDictionary()
 
@@ -66,6 +77,12 @@ export default function CanSrL1ScreenPage() {
   const [loadingCitation, setLoadingCitation] = useState(false)
   const [loadingCriteria, setLoadingCriteria] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Navigation list (to ensure Prev/Next follows the filtered list, not numeric id)
+  const [citationIdList, setCitationIdList] = useState<number[]>([])
+
+  // Autosave indicator per question
+  const [saveStatus, setSaveStatus] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({})
 
   // UI state: human selections keyed by question index
   const [selections, setSelections] = useState<Record<number, string>>({})
@@ -80,6 +97,29 @@ export default function CanSrL1ScreenPage() {
       return
     }
   }, [srId, citationId, router])
+
+  // Load the citation id list for navigation
+  useEffect(() => {
+    if (!srId) return
+    const loadIds = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(data?.citation_ids)) {
+          setCitationIdList(data.citation_ids)
+        } else {
+          setCitationIdList([])
+        }
+      } catch {
+        setCitationIdList([])
+      }
+    }
+    loadIds()
+  }, [srId])
 
   // Load citation row
   // Extracted fetch function so we can re-use it when navigating between citations
@@ -170,7 +210,11 @@ export default function CanSrL1ScreenPage() {
     load()
   }, [srId])
 
-  // When citation + criteria are loaded, initialize selection defaults from AI columns
+  // When citation + criteria are loaded, initialize selection defaults.
+  // IMPORTANT: Human selections must never be overwritten by AI. So:
+  // - Dropdown selection is initialized from human_* when present
+  // - AI panel is initialized from llm_* when present
+  // - If human_* missing, we may show llm_* as a suggested default (UI-only)
   useEffect(() => {
     if (!citation || !criteriaData) return
 
@@ -179,32 +223,51 @@ export default function CanSrL1ScreenPage() {
     const newPanelOpen: Record<number, boolean> = {}
 
     criteriaData.questions.forEach((q: string, idx: number) => {
-      const col = snakeCaseColumn(q)
-      const aiVal = citation[col]
-      // citation stored value may be JSON string or object depending on backend
-      if (aiVal !== undefined && aiVal !== null) {
-        // Try parse if string
-        let parsed = aiVal
-        if (typeof aiVal === 'string') {
+      const llmCol = snakeCaseColumn(q)
+      const humanCol = humanScreenColumn(q)
+
+      const humanRaw = (citation as any)?.[humanCol]
+      const llmRaw = (citation as any)?.[llmCol]
+
+      const parseMaybeJson = (v: any) => {
+        if (v === undefined || v === null) return null
+        if (typeof v === 'string') {
           try {
-            parsed = JSON.parse(aiVal)
+            return JSON.parse(v)
           } catch {
-            // not JSON — store raw string as selected if it matches an option
-            parsed = aiVal
+            return v
           }
         }
-        // If parsed is object and contains 'selected', default to that
-        if (
-          parsed &&
-          typeof parsed === 'object' &&
-          parsed.selected !== undefined
-        ) {
-          newSelections[idx] = parsed.selected
-          newAiPanels[idx] = parsed
-          newPanelOpen[idx] = false
-        } else if (typeof parsed === 'string') {
-          newSelections[idx] = parsed
-        }
+        return v
+      }
+
+      const humanParsed = parseMaybeJson(humanRaw)
+      const llmParsed = parseMaybeJson(llmRaw)
+
+      // 1) Prefer human_* for dropdown
+      if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
+        newSelections[idx] = (humanParsed as any).selected
+      } else if (typeof humanParsed === 'string' && humanParsed) {
+        newSelections[idx] = humanParsed
+      }
+
+      // 2) Always populate AI panel from llm_* when available
+      if (llmParsed && typeof llmParsed === 'object') {
+        newAiPanels[idx] = llmParsed
+        newPanelOpen[idx] = false
+      } else if (typeof llmParsed === 'string' && llmParsed) {
+        newAiPanels[idx] = { selected: llmParsed }
+        newPanelOpen[idx] = false
+      }
+
+      // 3) If no human selection exists, allow llm_* to prefill the dropdown (UI-only).
+      const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
+      if (!hasSelection) {
+        const aiSelected =
+          newAiPanels[idx] && typeof (newAiPanels[idx] as any).selected === 'string'
+            ? (newAiPanels[idx] as any).selected
+            : null
+        if (aiSelected) newSelections[idx] = aiSelected
       }
     })
 
@@ -246,8 +309,10 @@ export default function CanSrL1ScreenPage() {
           body: JSON.stringify(payload),
         },
       )
+      return res.ok
     } catch (err) {
       console.error('human_classify post error', err)
+      return false
     }
   }
 
@@ -255,10 +320,13 @@ export default function CanSrL1ScreenPage() {
     // Update UI immediately
     setSelections((prev) => ({ ...prev, [questionIndex]: value }))
 
+    setSaveStatus((prev) => ({ ...prev, [questionIndex]: 'saving' }))
+
     // Persist human selection in background (fire-and-forget)
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
-    postHumanClassifyPayload(question, value)
+    const ok = await postHumanClassifyPayload(question, value)
+    setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
   }
 
   // Handler: call backend classify endpoint for a single question
@@ -297,35 +365,17 @@ export default function CanSrL1ScreenPage() {
         data?.llm_classification ||
         data
       if (classification && typeof classification === 'object') {
-        // If classification.selected present, set as default selection
-        if (classification.selected !== undefined) {
-          setSelections((prev) => ({
-            ...prev,
-            [questionIndex]: classification.selected,
-          }))
+        // Always show AI panel.
+        // IMPORTANT: do NOT overwrite an existing human selection in the UI.
+        if ((classification as any).selected !== undefined) {
+          setSelections((prev) => {
+            const already = prev?.[questionIndex]
+            if (already !== undefined && String(already).trim() !== '') return prev
+            return { ...prev, [questionIndex]: (classification as any).selected }
+          })
         }
         setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
         setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-
-        // Persist the (model-chosen) selection as a human_classify entry so the selected answer is saved.
-        // We include explanation/confidence when available to aid auditability.
-        try {
-          if (classification.selected !== undefined && criteriaData) {
-            const qText = criteriaData.questions[questionIndex]
-            // await so we ensure persistence attempt before returning control (but failures are non-fatal)
-            await postHumanClassifyPayload(
-              qText,
-              classification.selected,
-              classification.explanation,
-              classification.confidence,
-            )
-          }
-        } catch (err) {
-          console.error(
-            'Failed to persist classification as human_classify',
-            err,
-          )
-        }
       } else {
         // If server returned a simple string, set it as selection
         if (typeof data === 'string') {
@@ -341,6 +391,8 @@ export default function CanSrL1ScreenPage() {
 
   // Render helpers
   const workspace = useMemo(() => {
+    if (error)
+      return <div className="text-sm text-red-600">{error}</div>
     if (loadingCitation)
       return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
     if (!citation)
@@ -363,15 +415,12 @@ export default function CanSrL1ScreenPage() {
         </div>
       </div>
     )
-  }, [citation, loadingCitation, dict])
+  }, [citation, loadingCitation, dict, error])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
     return null
   }
-
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -456,6 +505,14 @@ export default function CanSrL1ScreenPage() {
                                 AI <Wand2 className="h-3 w-3" />
                               </span>
                             </button>
+
+                            {saveStatus[idx] === 'saving' ? (
+                              <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
+                            ) : saveStatus[idx] === 'saved' ? (
+                              <span className="text-[10px] text-emerald-600">{dict.common.done}</span>
+                            ) : saveStatus[idx] === 'error' ? (
+                              <span className="text-[10px] text-red-600">{dict.common.error}</span>
+                            ) : null}
                           </div>
                         </div>
 
@@ -524,7 +581,9 @@ export default function CanSrL1ScreenPage() {
               if (!citationId || !srId) return
               const cur = Number(citationId)
               if (Number.isNaN(cur)) return
-              const target = String(cur - 1)
+              const idx = citationIdList.indexOf(cur)
+              if (idx <= 0) return
+              const target = String(citationIdList[idx - 1])
               // proactively fetch and reset selection state so UI updates immediately
               setSelections({})
               setAiPanels({})
@@ -545,7 +604,9 @@ export default function CanSrL1ScreenPage() {
               if (!citationId || !srId) return
               const cur = Number(citationId)
               if (Number.isNaN(cur)) return
-              const target = String(cur + 1)
+              const idx = citationIdList.indexOf(cur)
+              if (idx === -1 || idx >= citationIdList.length - 1) return
+              const target = String(citationIdList[idx + 1])
               // proactively fetch and reset selection state so UI updates immediately
               setSelections({})
               setAiPanels({})

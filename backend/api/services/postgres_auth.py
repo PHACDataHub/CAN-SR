@@ -25,6 +25,7 @@ import os
 from typing import Optional, Dict, Any
 
 import psycopg2
+import psycopg2.extensions
 from ..core.config import settings
 import logging
 import datetime
@@ -55,10 +56,28 @@ class PostgresServer:
         """Return an open connection, reconnecting only when necessary."""
         if self._conn is None or self._conn.closed:
             self._conn = self._connect()
-        elif self._mode() == "azure" and self._is_token_expired():
+
+        # Azure token refresh handling
+        if self._mode() == "azure" and self._is_token_expired():
             logger.info("Azure token expired — reconnecting to PostgreSQL")
             self.close()
             self._conn = self._connect()
+
+        # If a previous request hit a SQL error and did not rollback, the connection
+        # stays in an aborted transaction state. Any subsequent query will fail with:
+        #   psycopg2.errors.InFailedSqlTransaction
+        # Heal it proactively so one bad request cannot poison the process.
+        try:
+            if self._conn and self._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
+                logger.warning("Postgres connection in aborted transaction; rolling back")
+                self._conn.rollback()
+        except Exception:
+            # If rollback fails, reconnect.
+            try:
+                self.close()
+            finally:
+                self._conn = self._connect()
+
         return self._conn
 
     def close(self):

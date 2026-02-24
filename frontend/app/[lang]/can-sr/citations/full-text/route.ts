@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
     }
 
     let fileFetchUrl: string | null = null
-    let fetchOptions: Record<string, any> = {
+    const fetchOptions: Record<string, any> = {
       method: 'GET',
       headers: {
         Authorization: authHeader,

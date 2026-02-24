@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '../../DictionaryProvider'
 
@@ -42,7 +42,7 @@ export default function Search() {
       database: selectedDatabase,
       search_term: searchStrings[selectedDatabase],
     }
-    const res = await fetch(
+    await fetch(
       `/api/can-sr/search?sr_id=${encodeURIComponent(srId)}`,
       {
         method: 'POST',
