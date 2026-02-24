@@ -155,6 +155,9 @@ export async function GET(request: NextRequest) {
       headers: fetchOptions.headers,
     })
 
+    
+
+
     if (!backendRes.ok) {
       // Read the backend response body for diagnostics and return it raw to the client
       const bodyText = await backendRes.text().catch(() => null)
@@ -175,16 +178,19 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const { url: signedUrl } = await backendRes.json()
+    const fileRes = await fetch(signedUrl)
+
     // Stream response back to client preserving content headers
-    const headers = copyHeaders(backendRes.headers)
+    const headers = copyHeaders(fileRes.headers)
 
     // Ensure content-type defaults to application/pdf if not set
     if (!headers['content-type']) {
       headers['content-type'] = 'application/pdf'
     }
 
-    return new Response(backendRes.body, {
-      status: backendRes.status,
+    return new Response(fileRes.body, {
+      status: fileRes.status,
       headers,
     })
   } catch (err: any) {
