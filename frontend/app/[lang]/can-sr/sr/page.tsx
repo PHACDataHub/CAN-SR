@@ -1,9 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ModelSelector } from '@/components/chat'
 import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
 import StackingCard from '@/components/can-sr/stacking-card'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
@@ -17,7 +15,6 @@ export default function CanSrLandingPage() {
   const srId = searchParams?.get('sr_id')
   const dict = useDictionary()
 
-  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const [manageOpen, setManageOpen] = useState(false)
   const token = getAuthToken()
   const tokenType = getTokenType()
@@ -63,7 +60,7 @@ export default function CanSrLandingPage() {
     fetchSr()
   }, [srId, router])
 
-  console.log(sr)
+  // console.log(sr)
 
   return (
     <div className="min-h-screen bg-gray-50">

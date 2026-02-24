@@ -194,14 +194,7 @@ docker compose up -d grobid-service sr-mongodb-service cit-pgdb-service
 uvicorn main:app --reload --port 8000
 ```
 
-### Running Tests
-```bash
-# Run tests (when test suite is implemented)
-pytest
 
-# With coverage
-pytest --cov=api
-```
 
 ## Deployment Options
 

@@ -69,6 +69,8 @@ export default function CanSrL2ScreenViewPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  // Get current language to keep language when navigating (must be unconditional hook call)
+  const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
   const dict = useDictionary()
 
@@ -78,6 +80,12 @@ export default function CanSrL2ScreenViewPage() {
   const [loadingCitation, setLoadingCitation] = useState(false)
   const [loadingCriteria, setLoadingCriteria] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Navigation list (must follow filtered list, not numeric id)
+  const [citationIdList, setCitationIdList] = useState<number[]>([])
+
+  // Autosave indicator per question
+  const [saveStatus, setSaveStatus] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({})
 
   // UI state: human selections keyed by question index
   const [selections, setSelections] = useState<Record<number, string>>({})
@@ -102,6 +110,29 @@ export default function CanSrL2ScreenViewPage() {
       return
     }
   }, [srId, citationId, router])
+
+  // Load filtered citation ids for navigation (L2 is filtered by L1 pass)
+  useEffect(() => {
+    if (!srId) return
+    const loadIds = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent('l1')}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(data?.citation_ids)) {
+          setCitationIdList(data.citation_ids)
+        } else {
+          setCitationIdList([])
+        }
+      } catch {
+        setCitationIdList([])
+      }
+    }
+    loadIds()
+  }, [srId])
 
   // Load citation row (and ensure fulltext is extracted if missing)
   async function fetchCitationById(id: string) {
@@ -401,8 +432,10 @@ export default function CanSrL2ScreenViewPage() {
         },
       )
       await res.json().catch(() => ({}))
+      return res.ok
     } catch (err) {
       console.error('human_classify post error', err)
+      return false
     }
   }
 
@@ -410,10 +443,13 @@ export default function CanSrL2ScreenViewPage() {
     // Update UI immediately
     setSelections((prev) => ({ ...prev, [questionIndex]: value }))
 
+    setSaveStatus((prev) => ({ ...prev, [questionIndex]: 'saving' }))
+
     // Persist human selection in background
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
-    postHumanClassifyPayload(question, value)
+    const ok = await postHumanClassifyPayload(question, value)
+    setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
   }
 
   // Call backend classify for a single question using fulltext template (screening_step='l2')
@@ -460,30 +496,17 @@ export default function CanSrL2ScreenViewPage() {
         data?.llm_classification ||
         data
       if (classification && typeof classification === 'object') {
-        // If classification.selected present, set as default selection
+        // Always show AI panel.
+        // IMPORTANT: do NOT overwrite an existing human selection in the UI.
         if ((classification as any).selected !== undefined) {
-          setSelections((prev) => ({
-            ...prev,
-            [questionIndex]: (classification as any).selected,
-          }))
+          setSelections((prev) => {
+            const already = prev?.[questionIndex]
+            if (already !== undefined && String(already).trim() !== '') return prev
+            return { ...prev, [questionIndex]: (classification as any).selected }
+          })
         }
         setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
         setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-
-        // Persist the model-chosen selection for auditability
-        try {
-          if ((classification as any).selected !== undefined && criteriaData) {
-            const qText = criteriaData.questions[questionIndex]
-            await postHumanClassifyPayload(
-              qText,
-              (classification as any).selected,
-              (classification as any).explanation,
-              (classification as any).confidence,
-            )
-          }
-        } catch (err) {
-          console.error('Failed to persist classification as human_classify', err)
-        }
       } else {
         if (typeof data === 'string') {
           setSelections((prev) => ({ ...prev, [questionIndex]: data }))
@@ -549,6 +572,8 @@ export default function CanSrL2ScreenViewPage() {
   }
 
   const workspace = useMemo(() => {
+    if (error)
+      return <div className="text-sm text-red-600">{error}</div>
     if (loadingCitation)
       return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
     if (!citation)
@@ -569,15 +594,12 @@ export default function CanSrL2ScreenViewPage() {
         ref={viewerRef}
       />
     )
-  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed])
+  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, dict, error])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
     return null
   }
-
-  // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -665,6 +687,14 @@ export default function CanSrL2ScreenViewPage() {
                                   AI <Wand2 className="h-3 w-3" />
                                 </span>
                               </button>
+
+                              {saveStatus[idx] === 'saving' ? (
+                                <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
+                              ) : saveStatus[idx] === 'saved' ? (
+                                <span className="text-[10px] text-emerald-600">{dict.common.done}</span>
+                              ) : saveStatus[idx] === 'error' ? (
+                                <span className="text-[10px] text-red-600">{dict.common.error}</span>
+                              ) : null}
                           </div>
                         </div>
 
@@ -810,7 +840,9 @@ export default function CanSrL2ScreenViewPage() {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
-                    const target = String(cur - 1)
+                    const idx = citationIdList.indexOf(cur)
+                    if (idx <= 0) return
+                    const target = String(citationIdList[idx - 1])
                     // proactively fetch and reset selection state so UI updates immediately
                     setSelections({})
                     setAiPanels({})
@@ -831,7 +863,9 @@ export default function CanSrL2ScreenViewPage() {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
-                    const target = String(cur + 1)
+                    const idx = citationIdList.indexOf(cur)
+                    if (idx === -1 || idx >= citationIdList.length - 1) return
+                    const target = String(citationIdList[idx + 1])
                     // proactively fetch and reset selection state so UI updates immediately
                     setSelections({})
                     setAiPanels({})

@@ -21,6 +21,7 @@ import io
 import re
 from datetime import datetime
 import pandas as pd
+import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import Response
@@ -31,10 +32,25 @@ from ..services.sr_db_service import srdb_service
 
 from ..core.security import get_current_active_user
 from ..core.config import settings
-from ..services.cit_db_service import cits_dp_service, snake_case, parse_dsn
+from ..services.cit_db_service import cits_dp_service, snake_case, snake_case_column, parse_dsn
 from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
+
+
+def _is_undefined_table_error(exc: Exception) -> bool:
+    """Best-effort detection for missing Postgres table errors."""
+    try:
+        # psycopg2 raises UndefinedTable for missing relations.
+        import psycopg2
+
+        if isinstance(exc, psycopg2.errors.UndefinedTable):
+            return True
+        # Some errors come wrapped; fall back to message sniffing.
+        msg = str(exc).lower()
+        return "does not exist" in msg and "relation" in msg
+    except Exception:
+        return False
 
 
 def _is_postgres_configured() -> bool:
@@ -199,14 +215,94 @@ async def list_citation_ids(
 
     table_name = (screening or {}).get("table_name") or "citations"
 
+    # Ensure decision columns are never stale before filtering.
+    # Validation strategy: UI filters by human_l1_decision / human_l2_decision.
+    try:
+        cp = (sr or {}).get("criteria_parsed") or (sr or {}).get("criteria") or {}
+        await run_in_threadpool(cits_dp_service.backfill_human_decisions, cp, table_name)
+    except Exception:
+        # best-effort; listing should still work even if backfill fails
+        pass
+
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
+        # If the SR points at a screening table that no longer exists (e.g. dropped),
+        # treat it as "no citations" instead of poisoning the shared connection.
+        if _is_undefined_table_error(e):
+            return {"citation_ids": []}
+    except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
 
     return {"citation_ids": ids}
+
+
+@router.get("/{sr_id}/citations/batch")
+async def get_citations_batch(
+    sr_id: str,
+    ids: str,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    fields: Optional[str] = None,
+):
+    """Get many citation rows for a given SR in a single request.
+
+    IMPORTANT: This route MUST be registered before `/{citation_id}`.
+    Otherwise FastAPI may match "batch" as the citation_id path param and
+    raise a 422.
+
+    Query params:
+      - ids: comma-separated citation ids (required)
+      - fields: optional comma-separated list of columns to return
+
+    Returns:
+      {"citations": [ { ..row.. }, ... ]}
+    """
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Parse ids
+    raw_ids = [p.strip() for p in (ids or "").split(",") if p.strip()]
+    if not raw_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids is required")
+    parsed_ids: List[int] = []
+    for p in raw_ids:
+        try:
+            parsed_ids.append(int(p))
+        except Exception:
+            continue
+    if not parsed_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids must be a comma-separated list of integers")
+
+    parsed_fields: Optional[List[str]] = None
+    if fields is not None:
+        f = [x.strip() for x in fields.split(",") if x.strip()]
+        parsed_fields = f if f else []
+
+    try:
+        rows = await run_in_threadpool(
+            cits_dp_service.get_citations_by_ids,
+            parsed_ids,
+            table_name,
+            parsed_fields,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+
+    return {"citations": rows}
 
 
 # Helper to get citation row by id - delegated to backend.api.core.postgres.get_citation_by_id
@@ -349,6 +445,7 @@ async def upload_citation_fulltext(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are accepted for full text upload")
 
     content = await file.read()
+    new_md5 = hashlib.md5(content).hexdigest() if content is not None else ""
     # Verify citation exists BEFORE uploading blob to storage
     table_name = (screening or {}).get("table_name") or "citations"
 
@@ -361,6 +458,75 @@ async def upload_citation_fulltext(
 
     if not existing_row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+
+    # If the PDF changed (md5 differs), clear L2 screening answers + parameter extractions + fulltext artifacts.
+    # (Do NOT clear L1 answers.)
+    try:
+        existing_md5 = (existing_row or {}).get("fulltext_md5") or ""
+        existing_url = (existing_row or {}).get("fulltext_url") or ""
+
+        pdf_changed = False
+        if existing_md5 and new_md5 and existing_md5 != new_md5:
+            pdf_changed = True
+        # Legacy: if we had a PDF but no md5 recorded, treat upload as replacement.
+        if not existing_md5 and existing_url:
+            pdf_changed = True
+
+        if pdf_changed:
+            # Clear fulltext extraction columns (they will be regenerated later)
+            await run_in_threadpool(
+                cits_dp_service.clear_columns,
+                citation_id,
+                [
+                    "fulltext",
+                    "fulltext_coords",
+                    "fulltext_pages",
+                    "fulltext_figures",
+                    "fulltext_tables",
+                    "fulltext_md5",
+                ],
+                table_name,
+            )
+
+            # Clear all parameter extraction columns
+            await run_in_threadpool(
+                cits_dp_service.clear_columns_by_prefix,
+                citation_id,
+                ["llm_param_", "human_param_"],
+                table_name,
+            )
+
+            # Clear L2 screening columns only
+            # NOTE (validation): we do not use l2_screen for filtering; keep it untouched/non-authoritative.
+            cols_to_clear = ["llm_l2_decision", "human_l2_decision"]
+            try:
+                cp = (sr or {}).get("criteria_parsed") or (sr or {}).get("criteria") or {}
+                l2 = cp.get("l2") if isinstance(cp, dict) else None
+                l2_questions = (l2 or {}).get("questions") if isinstance(l2, dict) else None
+                if isinstance(l2_questions, list):
+                    for q in l2_questions:
+                        try:
+                            llm_col = snake_case_column(q)
+                        except Exception:
+                            llm_col = None
+                        try:
+                            core = snake_case(q, max_len=56)
+                            human_col = f"human_{core}" if core else "human_col"
+                        except Exception:
+                            human_col = None
+
+                        if llm_col:
+                            cols_to_clear.append(llm_col)
+                        if human_col:
+                            cols_to_clear.append(human_col)
+            except Exception:
+                # best-effort
+                pass
+
+            await run_in_threadpool(cits_dp_service.clear_columns, citation_id, cols_to_clear, table_name)
+    except Exception:
+        # Best-effort; do not block upload.
+        pass
 
     # Upload to storage service (reuse storage logic from files.router)
     try:
@@ -585,7 +751,8 @@ async def export_citations_csv(
     table_name = (screening or {}).get("table_name") or "citations"
 
     try:
-        csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv, table_name)
+        # Validation-friendly export: exclude fulltext/artifacts and flatten JSON columns.
+        csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv_filtered, table_name)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:

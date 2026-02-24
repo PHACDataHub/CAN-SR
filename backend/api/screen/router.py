@@ -290,6 +290,13 @@ async def classify_citation(
     # Persist into Postgres under a dynamic column name derived from question
     col_name = snake_case_column(payload.question)
 
+    # Human mirror column name (same slug as llm_, but prefixed human_)
+    try:
+        col_core_h = snake_case(payload.question, max_len=56) if snake_case else ""
+    except Exception:
+        col_core_h = ""
+    human_col_name = f"human_{col_core_h}" if col_core_h else "human_col"
+
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
@@ -299,6 +306,26 @@ async def classify_citation(
 
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+
+    # Auto-fill human_* from llm_* if missing (never overwrite)
+    try:
+        human_payload = {
+            **classification_json,
+            "autofilled": True,
+            "source": "llm",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        await run_in_threadpool(
+            cits_dp_service.copy_jsonb_if_empty,
+            citation_id,
+            col_name,
+            human_col_name,
+            human_payload,
+            table_name,
+        )
+    except Exception:
+        # best-effort
+        pass
     
     await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm")
 
@@ -378,8 +405,15 @@ async def update_inclusion_decision(
 ):  
     table_name = (sr.get("screening_db") or {}).get("table_name") or "citations"
 
+    # IMPORTANT: decision/pass computation must not be stale.
+    # Always re-fetch the citation row when computing decisions, because callers may
+    # have just written human/llm columns earlier in the request.
+    def _get_row_fresh() -> Dict[str, Any]:
+        r = cits_dp_service.get_citation_by_id(int(citation_id), table_name)
+        return r or {}
+
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+        row = await run_in_threadpool(_get_row_fresh)
     except RuntimeError as rexc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
     except Exception as e:
@@ -396,7 +430,7 @@ async def update_inclusion_decision(
             classified = False
             break
         selected = result["selected"]
-        if "exclude" in selected:
+        if "exclude" in str(selected).lower():
             decision = "exclude"
 
     if classified and decision == "undecided":
@@ -412,3 +446,61 @@ async def update_inclusion_decision(
     print(updated)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+
+    # Validation rule (B1/B2): do NOT use l1_screen/l2_screen for filtering.
+    # Ensure human_l1_decision / human_l2_decision are always correct and derived
+    # from the current DB state.
+    try:
+        fresh = await run_in_threadpool(_get_row_fresh)
+
+        def _compute_human_decision(step: str) -> str:
+            """Compute derived human decisions used for filtering.
+
+            Rules:
+            - human_l1_decision is derived ONLY from L1 questions.
+            - human_l2_decision represents "passed to L2/extract" and must consider
+              BOTH L1 + L2 criteria questions.
+            """
+            cp = sr.get("criteria_parsed") or {}
+
+            # L1: only L1 questions
+            if step == "l1":
+                qs = (cp.get("l1") or {}).get("questions") or []
+            # L2: union of L1 + L2 questions
+            elif step == "l2":
+                l1_qs = (cp.get("l1") or {}).get("questions") or []
+                l2_qs = (cp.get("l2") or {}).get("questions") or []
+                qs = list(l1_qs) + list(l2_qs)
+            else:
+                qs = (cp.get(step) or {}).get("questions") or []
+
+            if not isinstance(qs, list) or not qs:
+                return "undecided"
+
+            for q in qs:
+                core = snake_case(q, max_len=56) if snake_case else ""
+                hcol = f"human_{core}" if core else "human_col"
+                hval = fresh.get(hcol)
+                if hval is None:
+                    return "undecided"
+                try:
+                    hobj = json.loads(hval) if isinstance(hval, str) else hval
+                    selected = (hobj or {}).get("selected")
+                except Exception:
+                    selected = None
+                # Treat empty/whitespace as unanswered (UI shows "-- select --")
+                if selected is None or (isinstance(selected, str) and selected.strip() == ""):
+                    return "undecided"
+                if "exclude" in str(selected).lower():
+                    return "exclude"
+
+            return "include"
+
+        # Always set both human decisions on any update, so the list filters never go stale.
+        h1 = _compute_human_decision("l1")
+        h2 = _compute_human_decision("l2")
+        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l1_decision", h1, table_name)
+        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l2_decision", h2, table_name)
+    except Exception:
+        # best-effort; do not block response
+        pass

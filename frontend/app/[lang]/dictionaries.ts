@@ -1,7 +1,9 @@
 // Might want to add server-only to dependencies
 // import 'server-only'
 
-const dictionaries = {
+type SupportedLocale = 'en' | 'fr'
+
+const dictionaries: Record<SupportedLocale, () => Promise<any>> = {
   en: () => import('@/dictionaries/en.json').then((module) => module.default),
   fr: () => import('@/dictionaries/fr.json').then((module) => module.default),
 }
@@ -36,11 +38,15 @@ function fillWithKey(
 
 
 export const getDictionary = async (locale: 'en' | 'fr') => {
-  const dict = await dictionaries[locale]();
+  // [lang] is a catch-all segment at runtime; guard against unexpected values
+  // (e.g., when middleware/rewrites accidentally hit this layout).
+  const safeLocale: SupportedLocale = locale in dictionaries ? (locale as SupportedLocale) : 'en'
 
-  if (locale === 'en') return dict;
+  const dict = await dictionaries[safeLocale]()
+
+  if (safeLocale === 'en') return dict
 
   // Compare and fill with keys if French
-  const reference = await dictionaries.en();
-  return fillWithKey(dict, reference);
+  const reference = await dictionaries.en()
+  return fillWithKey(dict, reference)
 }
