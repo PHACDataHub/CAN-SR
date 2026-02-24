@@ -78,11 +78,7 @@ class AzureStorageService:
 
         if connection_string:
             self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-            # Extract account key for SAS generation
-            for part in connection_string.split(";"):
-                if part.startswith("AccountKey="):
-                    self._account_key = part[len("AccountKey="):]
-                    break
+            self._account_key = self._get_account_key_from_connection_str(connection_string)
         else:
             if not DefaultAzureCredential:
                 raise RuntimeError(
@@ -93,6 +89,12 @@ class AzureStorageService:
 
         self.container_name = container_name
         self._ensure_container_exists()
+    
+    def _get_account_key_from_connection_str(self, connection_str):
+        for part in connection_str.split(";"):
+            if part.startswith("AccountKey="):
+                return part[len("AccountKey="):]
+        return None
 
     def _ensure_container_exists(self):
         try:

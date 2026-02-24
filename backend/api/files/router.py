@@ -228,7 +228,6 @@ async def download_by_path(
             signed_url = None
 
         if signed_url:
-            logger.info("Generated signed URL: %s", signed_url)
             return {"url": signed_url}
 
         # Fallback: stream bytes (local storage)
