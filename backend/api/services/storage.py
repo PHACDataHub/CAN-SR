@@ -315,28 +315,21 @@ class AzureStorageService:
         expiry = datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)
         account_name = self.blob_service_client.account_name
 
+        blob_sas_kwargs = {
+            "account_name": account_name,
+            "container_name": container,
+            "blob_name": blob,
+            "permission": BlobSasPermissions(read=True),
+            "expiry": expiry,
+        }
         if self._account_key:
-            sas_token = generate_blob_sas(
-                account_name=account_name,
-                container_name=container,
-                blob_name=blob,
-                account_key=self._account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=expiry,
-            )
+            sas_token = generate_blob_sas(**blob_sas_kwargs, account_key=self._account_key)
         elif self._credential:
             delegation_key = self.blob_service_client.get_user_delegation_key(
                 key_start_time=datetime.now(timezone.utc) - timedelta(minutes=1),
                 key_expiry_time=expiry,
             )
-            sas_token = generate_blob_sas(
-                account_name=account_name,
-                container_name=container,
-                blob_name=blob,
-                user_delegation_key=delegation_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=expiry,
-            )
+            sas_token = generate_blob_sas(**blob_sas_kwargs, user_delegation_key=delegation_key)
         else:
             raise RuntimeError("No credentials available for SAS generation")
 
