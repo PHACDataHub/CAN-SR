@@ -178,19 +178,50 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const { url: signedUrl } = await backendRes.json()
-    const fileRes = await fetch(signedUrl)
+    // Azure mode returns JSON { url }, local mode streams bytes directly.
+    const contentType = backendRes.headers.get('content-type') || ''
 
-    // Stream response back to client preserving content headers
-    const headers = copyHeaders(fileRes.headers)
+    // Case 1: backend returned JSON -> it should be { url: string }
+    if (contentType.includes('application/json')) {
+      try {
+        const body = (await backendRes.json()) as any
+        const signedUrl = body?.url
+
+        if (typeof signedUrl === 'string' && signedUrl.length > 0) {
+          const fileRes = await fetch(signedUrl)
+
+          // Stream response back to client preserving content headers
+          const headers = copyHeaders(fileRes.headers)
+
+          // Ensure content-type defaults to application/pdf if not set
+          if (!headers['content-type']) {
+            headers['content-type'] = 'application/pdf'
+          }
+
+          return new Response(fileRes.body, {
+            status: fileRes.status,
+            headers,
+          })
+        }
+      } catch (e) {
+        // If JSON parsing fails, fall through to streaming backendRes
+        console.warn(
+          'download-by-path returned non-JSON despite application/json content-type; streaming response instead',
+          e,
+        )
+      }
+    }
+
+    // Case 2: backend streamed the file already -> proxy the stream back to browser
+    const headers = copyHeaders(backendRes.headers)
 
     // Ensure content-type defaults to application/pdf if not set
     if (!headers['content-type']) {
       headers['content-type'] = 'application/pdf'
     }
 
-    return new Response(fileRes.body, {
-      status: fileRes.status,
+    return new Response(backendRes.body, {
+      status: backendRes.status,
       headers,
     })
   } catch (err: any) {
