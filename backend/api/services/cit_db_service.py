@@ -621,6 +621,64 @@ class CitsDPService:
             if conn:
                 pass
 
+    def get_citations_by_ids(
+        self,
+        citation_ids: List[int],
+        table_name: str = "citations",
+        fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch multiple citation rows in one query.
+
+        Args:
+            citation_ids: list of ids to fetch
+            table_name: screening table name
+            fields: optional list of columns to return. If None, returns all columns.
+
+        Returns:
+            List[dict] rows. Missing ids are omitted.
+        """
+        table_name = _validate_ident(table_name, kind="table_name")
+        ids: List[int] = []
+        for i in citation_ids or []:
+            try:
+                ids.append(int(i))
+            except Exception:
+                continue
+        if not ids:
+            return []
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+
+            # Optional field selection (defensive): only allow existing columns
+            select_sql = "*"
+            if fields:
+                try:
+                    existing_cols = {c.get("column_name") for c in self.get_table_columns(table_name)}
+                except Exception:
+                    existing_cols = set()
+                safe_fields = [f for f in fields if isinstance(f, str) and f in existing_cols]
+                if safe_fields:
+                    select_sql = ", ".join([f'"{c}"' for c in safe_fields])
+
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            # Preserve input ordering as much as possible for stable paging.
+            # (We still ORDER BY id, which is fine for our UI; if we need strict
+            # input order later we can use array_position.)
+            cur.execute(
+                f'SELECT {select_sql} FROM "{table_name}" WHERE id = ANY(%s) ORDER BY id',
+                (ids,),
+            )
+            rows = cur.fetchall() or []
+            return [dict(r) for r in rows if r]
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
     def backfill_human_decisions(self, criteria_parsed: Dict[str, Any], table_name: str = "citations") -> int:
         """Recompute and persist human_l1_decision / human_l2_decision for all rows.
 

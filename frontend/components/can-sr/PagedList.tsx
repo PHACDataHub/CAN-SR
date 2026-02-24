@@ -59,14 +59,8 @@ export default function PagedList({
   useEffect(() => {
     const lp = Math.max(1, Math.ceil((citationIds?.length || 0) / pageSize))
     setLastpage(lp)
-    if (page > lp) setpage(lp)
-    if (page < 1) setpage(1)
+    setpage((prev) => Math.min(Math.max(1, prev), lp))
   }, [citationIds, pageSize])
-
-  // keep lastPage updated when page/pageSize changes too (defensive)
-  useEffect(() => {
-    setLastpage(Math.max(1, Math.ceil((citationIds?.length || 0) / pageSize)))
-  }, [citationIds, pageSize, page])
 
   useEffect(() => {
     const fetchCitations = async () => {
@@ -76,46 +70,57 @@ export default function PagedList({
       }
       const startIndex = (page - 1) * pageSize
       const endIndex = page * pageSize
-      const results = await Promise.all(
-        citationIds.slice(startIndex, endIndex).map((id) => getCitationById(id)),
+
+      const pageIds = citationIds.slice(startIndex, endIndex)
+      if (!pageIds.length) {
+        setCitationData([])
+        return
+      }
+
+      const headers = getAuthHeaders()
+      const res = await fetch(
+        `/api/can-sr/citations/batch?sr_id=${encodeURIComponent(srId)}&ids=${encodeURIComponent(pageIds.join(','))}`,
+        { method: 'GET', headers },
       )
-      setCitationData(results.filter(Boolean))
+      const data = await res.json().catch(() => ({}))
+      const rows: any[] = Array.isArray(data?.citations) ? data.citations : []
+
+      // Update UI rows
+      setCitationData(rows)
+
+      // Compute status maps in a single pass to avoid N state updates
+      const nextLlm: Record<number, boolean> = {}
+      const nextHuman: Record<number, boolean> = {}
+      const nextShow: Record<number, boolean> = {}
+
+      for (const row of rows) {
+        if (!row?.id) continue
+        const id = Number(row.id)
+        if (!Number.isFinite(id)) continue
+
+        let classified = true
+        let verified = true
+        for (const question of questions) {
+          const llmQuestion = snakeCaseColumn(question, true)
+          const humanQuestion = snakeCaseColumn(question, false)
+          if (!row?.[llmQuestion]) classified = false
+          if (!row?.[humanQuestion]) verified = false
+        }
+
+        if (classified) nextLlm[id] = true
+        if (verified) nextHuman[id] = true
+        if (row?.fulltext_url) nextShow[id] = true
+      }
+
+      setLlmClassified((prev) => ({ ...prev, ...nextLlm }))
+      setHumanVerified((prev) => ({ ...prev, ...nextHuman }))
+      setShowClassify((prev) => ({ ...prev, ...nextShow }))
     }
     fetchCitations()
-  }, [citationIds, page, pageSize])
+  }, [citationIds, page, pageSize, questions, srId])
 
-  const getCitationById = async (id: number) => {
-    if (!srId) return
-    const headers = getAuthHeaders()
-    const res = await fetch(
-      `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-      { method: 'GET', headers },
-    )
-    const data = await res.json().catch(() => ({}))
-    checkCitationStatus(data)
-    return { id: data.id, title: data.title, abstract: data.abstract }
-  }
-
-  const checkCitationStatus = (data: any) => {
-    let classified = true
-    let verified = true
-    questions.forEach((question) => {
-      const llmQuestion = snakeCaseColumn(question, true)
-      const humanQuestion = snakeCaseColumn(question, false)
-      if (!data?.[llmQuestion]) classified = false
-      if (!data?.[humanQuestion]) verified = false
-    })
-
-    if (classified) {
-      setLlmClassified((prev) => ({ ...prev, [data.id]: true }))
-    }
-    if (verified) {
-      setHumanVerified((prev) => ({ ...prev, [data.id]: true }))
-    }
-    if (data?.fulltext_url) {
-      setShowClassify((prev) => ({ ...prev, [data.id]: true }))
-    }
-  }
+  // NOTE: Previously we fetched each citation via /citations/get.
+  // This is now replaced by a single /citations/batch call per page.
 
   const changePageSize = (e: ChangeEvent<HTMLSelectElement>) => {
     const v = Number(e.target.value)

@@ -239,6 +239,72 @@ async def list_citation_ids(
     return {"citation_ids": ids}
 
 
+@router.get("/{sr_id}/citations/batch")
+async def get_citations_batch(
+    sr_id: str,
+    ids: str,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    fields: Optional[str] = None,
+):
+    """Get many citation rows for a given SR in a single request.
+
+    IMPORTANT: This route MUST be registered before `/{citation_id}`.
+    Otherwise FastAPI may match "batch" as the citation_id path param and
+    raise a 422.
+
+    Query params:
+      - ids: comma-separated citation ids (required)
+      - fields: optional comma-separated list of columns to return
+
+    Returns:
+      {"citations": [ { ..row.. }, ... ]}
+    """
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Parse ids
+    raw_ids = [p.strip() for p in (ids or "").split(",") if p.strip()]
+    if not raw_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids is required")
+    parsed_ids: List[int] = []
+    for p in raw_ids:
+        try:
+            parsed_ids.append(int(p))
+        except Exception:
+            continue
+    if not parsed_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids must be a comma-separated list of integers")
+
+    parsed_fields: Optional[List[str]] = None
+    if fields is not None:
+        f = [x.strip() for x in fields.split(",") if x.strip()]
+        parsed_fields = f if f else []
+
+    try:
+        rows = await run_in_threadpool(
+            cits_dp_service.get_citations_by_ids,
+            parsed_ids,
+            table_name,
+            parsed_fields,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+
+    return {"citations": rows}
+
+
 # Helper to get citation row by id - delegated to backend.api.core.postgres.get_citation_by_id
 
 
