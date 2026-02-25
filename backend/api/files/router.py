@@ -205,10 +205,11 @@ async def download_by_path(
     path: str,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ):
-    """Download directly by storage path in the form 'container/blob_path'.
+    """Return a short-lived signed URL for a blob, or stream bytes for local storage.
 
-    This works for both Azure and local storage backends.
-    Example: "users/users/123/documents/<docid>_<filename>.pdf"
+    For Azure backends a SAS URL (5 min expiry) is returned as JSON:
+        {"url": "https://..."}
+    For local storage the file bytes are streamed directly.
     """
     try:
         if not storage_service:
@@ -217,6 +218,19 @@ async def download_by_path(
                 detail="Storage service not available",
             )
 
+        # Try signed URL first (Azure); returns None for local storage.
+        try:
+            signed_url = await storage_service.generate_signed_url(path)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
+        except Exception as e:
+            logger.warning("Signed URL generation failed, falling back to streaming: %s", e)
+            signed_url = None
+
+        if signed_url:
+            return {"url": signed_url}
+
+        # Fallback: stream bytes (local storage)
         try:
             content, filename = await storage_service.get_bytes_by_path(path)
         except FileNotFoundError:
@@ -225,7 +239,6 @@ async def download_by_path(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download: {e}")
-        
         def gen():
             yield content
 

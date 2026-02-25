@@ -16,19 +16,21 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 try:
     from azure.core.exceptions import ResourceNotFoundError
     from azure.identity import DefaultAzureCredential
-    from azure.storage.blob import BlobServiceClient
+    from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
 except Exception:  # pragma: no cover
     # Allow local-storage deployments/environments to import without azure packages.
     ResourceNotFoundError = Exception  # type: ignore
     DefaultAzureCredential = None  # type: ignore
+    BlobSasPermissions = None  # type: ignore
     BlobServiceClient = None  # type: ignore
+    generate_blob_sas = None  # type: ignore
 
 from ..core.config import settings
 from ..utils.file_hash import create_file_metadata
@@ -51,6 +53,7 @@ class StorageService(Protocol):
     async def put_bytes_by_path(self, path: str, content: bytes, content_type: str = "application/octet-stream") -> bool: ...
     async def get_bytes_by_path(self, path: str) -> Tuple[bytes, str]: ...
     async def delete_by_path(self, path: str) -> bool: ...
+    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]: ...
 
 
 # =============================================================================
@@ -70,18 +73,28 @@ class AzureStorageService:
         if bool(account_url) == bool(connection_string):
             raise ValueError("Exactly one of account_url or connection_string must be provided")
 
+        self._account_key: str | None = None
+        self._credential: Any = None
+
         if connection_string:
             self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            self._account_key = self._get_account_key_from_connection_str(connection_string)
         else:
             if not DefaultAzureCredential:
                 raise RuntimeError(
                     "azure-identity is not installed. Install azure-identity, or use STORAGE_MODE=azure (connection string) or local."
                 )
-            credential = DefaultAzureCredential()
-            self.blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+            self._credential = DefaultAzureCredential()
+            self.blob_service_client = BlobServiceClient(account_url=account_url, credential=self._credential)
 
         self.container_name = container_name
         self._ensure_container_exists()
+    
+    def _get_account_key_from_connection_str(self, connection_str):
+        for part in connection_str.split(";"):
+            if part.startswith("AccountKey="):
+                return part[len("AccountKey="):]
+        return None
 
     def _ensure_container_exists(self):
         try:
@@ -292,6 +305,35 @@ class AzureStorageService:
         blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob)
         blob_client.delete_blob()
         return True
+
+    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]:
+        """Generate a read-only SAS URL for a blob. Path format: 'container/blob'."""
+        if not path or "/" not in path:
+            raise ValueError("Invalid storage path")
+        container, blob = path.split("/", 1)
+
+        expiry = datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)
+        account_name = self.blob_service_client.account_name
+
+        blob_sas_kwargs = {
+            "account_name": account_name,
+            "container_name": container,
+            "blob_name": blob,
+            "permission": BlobSasPermissions(read=True),
+            "expiry": expiry,
+        }
+        if self._account_key:
+            sas_token = generate_blob_sas(**blob_sas_kwargs, account_key=self._account_key)
+        elif self._credential:
+            delegation_key = self.blob_service_client.get_user_delegation_key(
+                key_start_time=datetime.now(timezone.utc) - timedelta(minutes=1),
+                key_expiry_time=expiry,
+            )
+            sas_token = generate_blob_sas(**blob_sas_kwargs, user_delegation_key=delegation_key)
+        else:
+            raise RuntimeError("No credentials available for SAS generation")
+
+        return f"https://{account_name}.blob.core.windows.net/{container}/{blob}?{sas_token}"
 
 
 # =============================================================================
@@ -542,6 +584,10 @@ class LocalStorageService:
             raise FileNotFoundError("File not found")
         p.unlink()
         return True
+
+    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]:
+        """Local storage cannot generate signed URLs; returns None to signal streaming fallback."""
+        return None
 
 
 # =============================================================================
