@@ -58,7 +58,7 @@ export function ModelSelector({
     async function loadModels() {
       try {
         const token = getAuthToken()
-        const response = await fetch('/api/chat/models', {
+        const response = await fetch('/api/config', {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -69,8 +69,8 @@ export function ModelSelector({
           throw new Error('Failed to fetch models')
         }
 
-        const data = await response.json()
-        const modelIds = data.available_models || []
+        const {config} = await response.json()
+        const modelIds = config.available_models.map((id: string) => id.toLowerCase()) || []
 
         // Filter to only show models we have info for (your configured Azure OpenAI models)
         const filteredModels = modelIds
