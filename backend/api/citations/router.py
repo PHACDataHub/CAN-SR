@@ -20,7 +20,6 @@ import csv
 import io
 import re
 from datetime import datetime
-import pandas as pd
 import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
@@ -128,9 +127,14 @@ async def upload_screening_csv(
     # Read CSV content
     include_columns = None
     try:
-        csv_reader = pd.read_csv(file.file)
-        normalized_rows = csv_reader.to_dict(orient='records')
-        include_columns = csv_reader.columns
+        # Reset cursor for safety
+        file.file.seek(0)
+
+        # Create reader for dict (TextIOWrapper for decoding from binary to text)
+        reader = csv.DictReader(io.TextIOWrapper(file.file, encoding="utf-8"))
+
+        normalized_rows = list(reader)
+        include_columns = reader.fieldnames
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to parse CSV: {e}")
 
