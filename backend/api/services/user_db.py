@@ -1,40 +1,60 @@
 """backend.api.services.user_db
 
-User database service.
+User database service — PostgreSQL implementation.
 
-Historically this project stored users inside Azure Blob Storage directly.
-To support multiple storage backends (local / azure / entra) we now build the
-user DB on top of the common `storage_service` abstraction.
+Replaces the previous Azure Storage JSON-based user registry.
+Uses the same public async interface so that callers (security.py,
+auth/router.py, sr/router.py) require no changes.
 
-Storage keys used:
-  system/user_registry.json
+Storage: PostgreSQL `users` table (created on startup via ensure_table_exists).
 
-This file intentionally avoids importing Azure SDK packages so that local
-deployments can run without them.
+Table schema:
+    id            TEXT PRIMARY KEY
+    email         TEXT UNIQUE NOT NULL
+    full_name     TEXT NOT NULL
+    hashed_password TEXT NOT NULL
+    is_active     BOOLEAN DEFAULT TRUE
+    is_superuser  BOOLEAN DEFAULT FALSE
+    created_at    TIMESTAMP WITH TIME ZONE DEFAULT now()
+    updated_at    TIMESTAMP WITH TIME ZONE DEFAULT now()
+    last_login    TIMESTAMP WITH TIME ZONE
+
+All blocking psycopg2 calls are synchronous (matching the pattern in
+sr_db_service.py) and are wrapped with asyncio.get_running_loop().run_in_executor
+so async callers can await them directly without a run_in_threadpool call-site.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+import logging
 
 from passlib.context import CryptContext
 
 from ..models.auth import UserCreate, UserRead
-from .storage import storage_service
+from .postgres_auth import postgres_server
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_row(row: tuple, cursor) -> Dict[str, Any]:
+    """Convert a psycopg2 row tuple into a dict, serialising datetimes to ISO strings."""
+    cols = [desc[0] for desc in cursor.description]
+    doc: Dict[str, Any] = {cols[i]: row[i] for i in range(len(cols))}
+    for field in ("created_at", "updated_at", "last_login"):
+        if doc.get(field) and isinstance(doc[field], datetime):
+            doc[field] = doc[field].isoformat()
+    return doc
 
 
 class UserDatabaseService:
-    """Service for managing user data in the configured storage backend."""
+    """Service for managing user data in PostgreSQL."""
 
     def __init__(self):
-        if not storage_service:
-            raise RuntimeError(
-                "Storage is not configured. User database is unavailable."
-            )
-        self.storage = storage_service
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
     def _get_password_hash(self, password: str) -> str:
@@ -43,139 +63,288 @@ class UserDatabaseService:
     def _verify_password(self, plain_password: str, hashed_password: str) -> bool:
         return self.pwd_context.verify(plain_password, hashed_password)
 
-    def _registry_path(self) -> str:
-        # Keep legacy layout: <container>/system/user_registry.json
-        return f"{self.storage.container_name}/system/user_registry.json"
+    # ------------------------------------------------------------------
+    # Table initialisation (called from FastAPI startup event)
+    # ------------------------------------------------------------------
 
-    async def _load_user_registry(self) -> Dict[str, Any]:
-        """Load the user registry from storage."""
+    def ensure_table_exists(self) -> None:
+        """Create the users table if it does not already exist."""
+        conn = None
         try:
-            content, _filename = await self.storage.get_bytes_by_path(self._registry_path())
-            return json.loads(content.decode("utf-8"))
-        except Exception:
-            # Create empty registry if it doesn't exist / cannot be read
-            return {"users": {}, "email_index": {}}
-
-    async def _save_user_registry(self, registry: Dict[str, Any]) -> bool:
-        """Save the user registry to storage."""
-        try:
-            payload = json.dumps(registry, indent=2).encode("utf-8")
-            return await self.storage.put_bytes_by_path(
-                self._registry_path(),
-                payload,
-                content_type="application/json",
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id              TEXT PRIMARY KEY,
+                    email           TEXT UNIQUE NOT NULL,
+                    full_name       TEXT NOT NULL,
+                    hashed_password TEXT NOT NULL,
+                    is_active       BOOLEAN DEFAULT TRUE,
+                    is_superuser    BOOLEAN DEFAULT FALSE,
+                    created_at      TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    last_login      TIMESTAMP WITH TIME ZONE
+                )
+                """
             )
-        except Exception:
-            return False
+            conn.commit()
+            logger.info("Ensured users table exists")
+        except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            logger.exception("Failed to ensure users table exists: %s", e)
+            raise
 
-    async def create_user(self, user_data: UserCreate) -> Optional[UserRead]:
+    # ------------------------------------------------------------------
+    # Synchronous DB helpers (run inside a thread-pool executor)
+    # ------------------------------------------------------------------
+
+    def _create_user_sync(self, user_data: UserCreate) -> Optional[UserRead]:
+        conn = None
         try:
-            registry = await self._load_user_registry()
+            conn = postgres_server.conn
+            cur = conn.cursor()
 
-            if user_data.email in registry["email_index"]:
-                return None
+            email = user_data.email.lower()
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            if cur.fetchone():
+                return None  # Duplicate email
 
             user_id = str(uuid.uuid4())
-            user_record = {
-                "id": user_id,
-                "email": user_data.email.lower(),
-                "full_name": user_data.full_name,
-                "hashed_password": self._get_password_hash(user_data.password),
-                "is_active": True,
-                "is_superuser": False,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-                "last_login": None,
-            }
+            now = datetime.now(timezone.utc)
+            hashed_password = self._get_password_hash(user_data.password)
 
-            registry["users"][user_id] = user_record
-            registry["email_index"][user_data.email.lower()] = user_id
-
-            if not await self._save_user_registry(registry):
-                return None
-
-            await self.storage.create_user_directory(user_id)
+            cur.execute(
+                """
+                INSERT INTO users
+                    (id, email, full_name, hashed_password, is_active, is_superuser,
+                     created_at, updated_at, last_login)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (user_id, email, user_data.full_name, hashed_password,
+                 True, False, now, now, None),
+            )
+            conn.commit()
 
             return UserRead(
                 id=user_id,
-                email=user_record["email"],
-                full_name=user_record["full_name"],
-                is_active=user_record["is_active"],
-                is_superuser=user_record["is_superuser"],
-                created_at=user_record["created_at"],
+                email=email,
+                full_name=user_data.full_name,
+                is_active=True,
+                is_superuser=False,
+                created_at=now,
+                last_login=None,
             )
         except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             return None
 
-    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    def _get_user_by_email_sync(self, email: str) -> Optional[Dict[str, Any]]:
+        conn = None
         try:
-            registry = await self._load_user_registry()
-            if email not in registry["email_index"]:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE email = %s", (email.lower(),))
+            row = cur.fetchone()
+            if not row:
                 return None
-            user_id = registry["email_index"][email]
-            return registry["users"].get(user_id)
+            return _parse_row(row, cur)
         except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             return None
 
-    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+    def _get_user_by_id_sync(self, user_id: str) -> Optional[Dict[str, Any]]:
+        conn = None
         try:
-            registry = await self._load_user_registry()
-            return registry["users"].get(user_id)
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return _parse_row(row, cur)
         except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             return None
 
-    async def authenticate_user(self, email: str, password: str, sso: bool) -> Optional[Dict[str, Any]]:
+    def _authenticate_user_sync(
+        self, email: str, password: str, sso: bool
+    ) -> Optional[Dict[str, Any]]:
+        user = self._get_user_by_email_sync(email)
+        if not user:
+            return None
+        if not sso and not self._verify_password(password, user["hashed_password"]):
+            return None
+
+        # Record last login
+        conn = None
         try:
-            user = await self.get_user_by_email(email)
-            if not user:
-                return None
-            if not sso and not self._verify_password(password, user["hashed_password"]):
-                return None
-
-            user["last_login"] = datetime.utcnow().isoformat()
-            await self.update_user(user["id"], {"last_login": user["last_login"]})
-            return user
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            now = datetime.now(timezone.utc)
+            cur.execute(
+                "UPDATE users SET last_login = %s WHERE id = %s",
+                (now, user["id"]),
+            )
+            conn.commit()
+            user["last_login"] = now.isoformat()
         except Exception:
-            return None
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
 
-    async def update_user(self, user_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return user
+
+    def _update_user_sync(
+        self, user_id: str, update_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        allowed_fields = {
+            "full_name", "email", "hashed_password",
+            "is_active", "is_superuser", "last_login",
+        }
+        fields = {k: v for k, v in update_data.items() if k in allowed_fields}
+        if not fields:
+            return self._get_user_by_id_sync(user_id)
+
+        conn = None
         try:
-            registry = await self._load_user_registry()
-            if user_id not in registry["users"]:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            now = datetime.now(timezone.utc)
+            set_clause = ", ".join(f"{k} = %s" for k in fields)
+            values = list(fields.values()) + [now, user_id]
+            cur.execute(
+                f"UPDATE users SET {set_clause}, updated_at = %s WHERE id = %s",
+                values,
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
                 return None
-
-            user_record = registry["users"][user_id]
-            user_record.update(update_data)
-            user_record["updated_at"] = datetime.utcnow().isoformat()
-
-            if await self._save_user_registry(registry):
-                return user_record
-            return None
+            conn.commit()
+            return self._get_user_by_id_sync(user_id)
         except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
             return None
 
-    async def deactivate_user(self, user_id: str) -> bool:
-        result = await self.update_user(user_id, {"is_active": False})
+    def _deactivate_user_sync(self, user_id: str) -> bool:
+        result = self._update_user_sync(user_id, {"is_active": False})
         return result is not None
 
+    def _list_users_sync(self, skip: int, limit: int) -> List[Dict[str, Any]]:
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (limit, skip),
+            )
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+            results = []
+            for row in rows:
+                doc = {cols[i]: row[i] for i in range(len(cols))}
+                for field in ("created_at", "updated_at", "last_login"):
+                    if doc.get(field) and isinstance(doc[field], datetime):
+                        doc[field] = doc[field].isoformat()
+                results.append(doc)
+            return results
+        except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            return []
+
+    def _get_user_count_sync(self) -> int:
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM users")
+            row = cur.fetchone()
+            return row[0] if row else 0
+        except Exception:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            return 0
+
+    # ------------------------------------------------------------------
+    # Public async interface (same signatures as the previous implementation)
+    # ------------------------------------------------------------------
+
+    async def create_user(self, user_data: UserCreate) -> Optional[UserRead]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._create_user_sync, user_data)
+
+    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_user_by_email_sync, email)
+
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_user_by_id_sync, user_id)
+
+    async def authenticate_user(
+        self, email: str, password: str, sso: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._authenticate_user_sync, email, password, sso
+        )
+
+    async def update_user(
+        self, user_id: str, update_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._update_user_sync, user_id, update_data
+        )
+
+    async def deactivate_user(self, user_id: str) -> bool:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._deactivate_user_sync, user_id)
+
     async def list_users(self, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-        registry = await self._load_user_registry()
-        users = list(registry.get("users", {}).values())
-        users.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return users[skip : skip + limit]
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._list_users_sync, skip, limit)
 
     async def get_all_users(self) -> List[Dict[str, Any]]:
-        registry = await self._load_user_registry()
-        users = list(registry.get("users", {}).values())
-        users.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return users
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._list_users_sync, 0, 10_000)
 
     async def get_user_count(self) -> int:
-        registry = await self._load_user_registry()
-        return len(registry.get("users", {}))
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_user_count_sync)
 
 
-# Global instance
+# Global instance — matches the name expected by security.py and sr/router.py
 try:
     user_db_service: Optional[UserDatabaseService] = UserDatabaseService()
 except Exception:
