@@ -8,6 +8,7 @@ import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
 import { useDictionary } from '../../DictionaryProvider'
+import { CriteriaBuilder } from '@/components/can-sr/setup/criteria-builder'
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
@@ -331,20 +332,16 @@ export default function CanSrSetupPage() {
               </div>
             </div>
 
-              <div className="mt-3">
-              <textarea
-                value={yamlText}
-                onChange={(e) => setYamlText(e.target.value)}
-                className="w-full min-h-[220px] resize-y rounded-md border border-gray-200 bg-white px-3 py-2 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                placeholder="# criteria yaml"
-              />
+            <div className="mt-3 space-y-3">
+              <CriteriaBuilder yamlText={yamlText} onYamlChange={setYamlText} />
+
               {yamlLoading ? (
-                <div className="mt-2 text-sm text-gray-500">Loading example...</div>
+                <div className="text-sm text-gray-500">Loading example...</div>
               ) : yamlSaveMessage ? (
-                <div className="mt-2 text-sm text-gray-600">{yamlSaveMessage}</div>
+                <div className="text-sm text-gray-600">{yamlSaveMessage}</div>
               ) : null}
 
-              <div className="mt-3 flex items-center space-x-2">
+              <div className="flex items-center space-x-2">
                 <button
                   onClick={() => {
                     try {
@@ -371,7 +368,9 @@ export default function CanSrSetupPage() {
                 <button
                   onClick={saveYaml}
                   disabled={yamlSaving}
-                  className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                  className={`rounded-md px-3 py-2 text-sm font-medium text-white ${
+                    yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
                 >
                   {yamlSaving ? dict.setup.saving : dict.setup.saveCriteria}
                 </button>

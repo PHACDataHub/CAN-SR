@@ -34,6 +34,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.18.1",
+    "js-yaml": "^4.1.1",
     "katex": "^0.16.22",
     "lucide-react": "^0.515.0",
     "negotiator": "^1.0.0",
