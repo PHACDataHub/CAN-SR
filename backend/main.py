@@ -40,7 +40,7 @@ async def startup_event():
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
     try:
         if user_db_service:
-            await run_in_threadpool(user_db_service.ensure_table_exists)
+            await user_db_service.ensure_table_exists()
             print("✓ Users table initialized", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure users table exists: {e}", flush=True)
