@@ -315,7 +315,12 @@ class RunAllRepo:
             raise
 
     def count_active_jobs(self) -> int:
-        """Return number of active run-all jobs (queued/running/paused)."""
+        """Return number of active run-all jobs (queued/running/paused).
+
+        NOTE: We intentionally do NOT count terminal-but-visible statuses like
+        "finished" or "failed" here, because this function is used for worker
+        fair-share scheduling.
+        """
         conn = None
         try:
             conn = postgres_server.conn
@@ -334,7 +339,17 @@ class RunAllRepo:
             raise
 
     def list_active_jobs_for_srs(self, sr_ids: list[str]) -> list[Dict[str, Any]]:
-        """List active (queued/running/paused) jobs for the given SR ids."""
+        """List jobs to show in the UI floating panel.
+
+        We include running states + "sticky terminal" states:
+        - queued/running/paused: active
+        - finished: successful completion, stays visible until dismissed
+        - failed: failed completion, stays visible until dismissed
+
+        We intentionally exclude:
+        - done: dismissed/hidden
+        - canceled: disappears immediately
+        """
         if not sr_ids:
             return []
         conn = None
@@ -347,7 +362,7 @@ class RunAllRepo:
                        phase, error, meta, created_at, started_at, finished_at
                 FROM run_all_jobs
                 WHERE sr_id = ANY(%s)
-                  AND status IN ('queued', 'running', 'paused')
+                  AND status IN ('queued', 'running', 'paused', 'finished', 'failed')
                 ORDER BY created_at DESC
                 """,
                 (sr_ids,),
@@ -491,7 +506,7 @@ class RunAllRepo:
                     """,
                     (status, now, error, job_id),
                 )
-            elif status in ("done", "failed", "canceled"):
+            elif status in ("done", "finished", "failed", "canceled"):
                 cur.execute(
                     """
                     UPDATE run_all_jobs

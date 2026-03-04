@@ -798,7 +798,10 @@ async def run_all_chunk(job_id: str, chunk_id: int) -> None:
             done = int(job2.get("done") or 0)
             skipped = int(job2.get("skipped") or 0)
             failed = int(job2.get("failed") or 0)
+            # Successful completion should remain visible in the UI until the
+            # user dismisses it. We model that as a terminal-but-sticky status
+            # called "finished". Dismissal transitions "finished" -> "done".
             if total > 0 and (done + skipped + failed) >= total and not await run_in_threadpool(run_all_repo.is_canceled, job_id):
-                await run_in_threadpool(run_all_repo.set_status, job_id, "done")
+                await run_in_threadpool(run_all_repo.set_status, job_id, "finished")
     except Exception:
         pass

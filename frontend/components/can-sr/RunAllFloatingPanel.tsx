@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Progress } from '@/components/ui/progress'
-import { Pause, Play, X } from 'lucide-react'
+import { Check, Pause, Play, X } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 type RunAllJob = {
@@ -72,12 +72,15 @@ export default function RunAllFloatingPanel() {
 
       // Polling policy:
       // - If there are no active jobs, stop polling after this empty result.
-      // - If all jobs are paused, stop polling; refresh will occur when the user
-      //   performs an action (resume/cancel/start run-all).
-      const allPaused =
+      // - If all jobs are idle (paused/finished/failed), stop polling; refresh
+      //   will occur when the user performs an action (resume/cancel/start/dismiss).
+      const allIdle =
         nextJobs.length > 0 &&
-        nextJobs.every((j) => String(j.status || '').toLowerCase() === 'paused')
-      if (nextJobs.length === 0 || allPaused) {
+        nextJobs.every((j) => {
+          const s = String(j.status || '').toLowerCase()
+          return s === 'paused' || s === 'finished' || s === 'failed'
+        })
+      if (nextJobs.length === 0 || allIdle) {
         if (intervalRef.current) {
           window.clearInterval(intervalRef.current)
           intervalRef.current = null
@@ -168,6 +171,31 @@ export default function RunAllFloatingPanel() {
     }
   }
 
+  const dismiss = async (job: RunAllJob) => {
+    try {
+      setActingJobId(job.job_id)
+      const headers = getAuthHeaders()
+      await fetch(
+        `/api/can-sr/jobs/run-all/dismiss?job_id=${encodeURIComponent(job.job_id)}`,
+        {
+          method: 'POST',
+          headers,
+        },
+      )
+
+      // Optimistic removal (server will also stop returning it once status=done)
+      setJobs((prev) => prev.filter((j) => j.job_id !== job.job_id))
+
+      try {
+        window.dispatchEvent(new Event('run-all:changed'))
+      } catch {
+        // ignore
+      }
+    } finally {
+      setActingJobId(null)
+    }
+  }
+
   if (hide) return null
   if (!jobs || jobs.length === 0) return null
 
@@ -181,6 +209,8 @@ export default function RunAllFloatingPanel() {
         const processed = done + skipped + failed
         const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
         const st = String(job.status || '').toLowerCase()
+        const isFinished = st === 'finished'
+        const isFailed = st === 'failed'
         const stepLabel =
           job.step === 'l1'
             ? dict?.screening?.titleAbstract || 'Title/Abstract'
@@ -201,33 +231,57 @@ export default function RunAllFloatingPanel() {
                 <div className="mt-0.5 text-xs text-gray-600">
                   {dict?.screening?.runAllAI || 'Run all AI'} · {stepLabel}
                   {st === 'paused' ? ` · ${dict?.screening?.paused || 'Paused'}` : ''}
+                  {st === 'finished' ? ` · ${dict?.common?.done || 'Done'}` : ''}
+                  {st === 'failed' ? ' · Failed' : ''}
                 </div>
               </div>
 
               <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  disabled={actingJobId === job.job_id}
-                  onClick={() => togglePause(job)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
-                  title={st === 'paused' ? (dict?.screening?.resume || 'Resume') : (dict?.screening?.pause || 'Pause')}
-                >
-                  {st === 'paused' ? (
-                    <Play className="h-4 w-4" />
-                  ) : (
-                    <Pause className="h-4 w-4" />
-                  )}
-                </button>
+                {isFinished || isFailed ? (
+                  <button
+                    type="button"
+                    disabled={actingJobId === job.job_id}
+                    onClick={() => dismiss(job)}
+                    className={
+                      isFinished
+                        ? 'inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:bg-gray-100 disabled:text-gray-400'
+                        : 'inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:bg-gray-100 disabled:text-gray-400'
+                    }
+                    title={dict?.common?.close || 'Close'}
+                  >
+                    {isFinished ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={actingJobId === job.job_id}
+                      onClick={() => togglePause(job)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                      title={
+                        st === 'paused'
+                          ? dict?.screening?.resume || 'Resume'
+                          : dict?.screening?.pause || 'Pause'
+                      }
+                    >
+                      {st === 'paused' ? (
+                        <Play className="h-4 w-4" />
+                      ) : (
+                        <Pause className="h-4 w-4" />
+                      )}
+                    </button>
 
-                <button
-                  type="button"
-                  disabled={actingJobId === job.job_id}
-                  onClick={() => cancel(job)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-red-600 hover:bg-red-50 disabled:bg-gray-100 disabled:text-gray-400"
-                  title={dict?.common?.cancel || 'Cancel'}
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                    <button
+                      type="button"
+                      disabled={actingJobId === job.job_id}
+                      onClick={() => cancel(job)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-red-600 hover:bg-red-50 disabled:bg-gray-100 disabled:text-gray-400"
+                      title={dict?.common?.cancel || 'Cancel'}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 

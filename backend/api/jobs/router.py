@@ -297,7 +297,7 @@ async def run_all_pause(
 
     # Only pause if running/queued
     st = str(job.get("status") or "").lower()
-    if st in {"done", "failed", "canceled"}:
+    if st in {"done", "finished", "failed", "canceled"}:
         return {"status": st, "job_id": job_id}
 
     await run_in_threadpool(run_all_repo.set_paused, job_id, True)
@@ -317,8 +317,38 @@ async def run_all_resume(
     await load_sr_and_check(sr_id, current_user, srdb_service)
 
     st = str(job.get("status") or "").lower()
-    if st in {"done", "failed", "canceled"}:
+    if st in {"done", "finished", "failed", "canceled"}:
         return {"status": st, "job_id": job_id}
 
     await run_in_threadpool(run_all_repo.set_paused, job_id, False)
     return {"status": "running", "job_id": job_id}
+
+
+@router.post("/run-all/dismiss")
+async def run_all_dismiss(
+    job_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Dismiss a sticky terminal job from the UI.
+
+    We keep completed/failed jobs visible using statuses:
+    - finished (success)
+    - failed
+
+    When the user clicks the icon in the UI, we transition the job to "done"
+    which removes it from the /run-all/active list.
+    """
+
+    job = await run_in_threadpool(run_all_repo.get_job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    sr_id = str(job.get("sr_id"))
+    await load_sr_and_check(sr_id, current_user, srdb_service)
+
+    st = str(job.get("status") or "").lower()
+    if st not in {"finished", "failed"}:
+        raise HTTPException(status_code=400, detail="Only finished/failed jobs can be dismissed")
+
+    await run_in_threadpool(run_all_repo.set_status, job_id, "done")
+    return {"status": "done", "job_id": job_id}
