@@ -240,6 +240,39 @@ docker compose logs -f grobid-service
 
 # Restart service
 docker compose restart api
+
+# Background jobs
+# The /api/jobs/* endpoints require ENABLE_PROCRASTINATE=true
+# (enabled by default in docker-compose.yml).
+#
+# If you run the API outside docker compose, export it manually:
+#   export ENABLE_PROCRASTINATE=true
+#
+# The embedded worker loop is optional and controlled separately:
+#   export ENABLE_PROCRASTINATE_WORKER=true
+#   export PROCRASTINATE_WORKER_CONCURRENCY=1
+#
+# Optional dev cleanup: clear leftover queued/doing jobs on API startup:
+#   export PROCRASTINATE_CLEAR_ON_START=true
+#
+# Deploy script convenience:
+#   ./deploy.sh --clear-tasks
+# will set:
+#   ENABLE_PROCRASTINATE_WORKER=true
+#   PROCRASTINATE_CLEAR_ON_START=true
+#
+# Notes:
+# - In docker-compose.yml, ENABLE_PROCRASTINATE is enabled, but the embedded worker
+#   is OFF by default. Enable it via env vars or `./deploy.sh --clear-tasks`.
+# - For production, prefer running the worker in a separate process/container.
+#
+# Implementation notes:
+# - CAN-SR uses Procrastinate 3.2.x with psycopg v3.
+# - The queue connector is `procrastinate.psycopg_connector.PsycopgConnector`.
+# - Enqueueing is done via the task object (e.g. `run_all_start.defer_async(...)`),
+#   not `app.defer_async(...)` (removed in Procrastinate 3.2).
+# - The API opens the Procrastinate app on startup and keeps it open for the
+#   full process lifetime so request handlers can enqueue jobs.
 ```
 
 ## Environment Variables Reference

@@ -70,7 +70,17 @@ export function ModelSelector({
         }
 
         const {config} = await response.json()
-        const modelIds = config.available_models.map((id: string) => id.toLowerCase()) || []
+        // Backend may return either:
+        // - available_deployments: ["gpt-5-mini", ...] (preferred)
+        // - available_models: ["GPT-5-Mini", ...] (models.yaml display keys)
+        // We normalize both to our UI ids (deployment ids).
+        const rawIds: string[] = Array.isArray(config?.available_deployments)
+          ? config.available_deployments
+          : Array.isArray(config?.available_models)
+            ? config.available_models
+            : []
+
+        const modelIds = rawIds.map((id: string) => String(id).toLowerCase())
 
         // Filter to only show models we have info for (your configured Azure OpenAI models)
         const filteredModels = modelIds

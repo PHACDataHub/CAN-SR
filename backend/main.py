@@ -1,5 +1,6 @@
 import os
 import uvicorn
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -26,7 +27,12 @@ app = FastAPI(
 async def startup_event():
     """Startup event - initialize CAN-SR systematic review database"""
     from fastapi.concurrency import run_in_threadpool
+    import asyncio
     
+    # Reduce Azure SDK HTTP logging noise (especially during polling endpoints).
+    logging.getLogger("azure").setLevel(logging.WARNING)
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+
     print("🚀 Starting CAN-SR Backend...", flush=True)
     print("📚 Initializing systematic review database...", flush=True)
     # Ensure systematic review table exists in PostgreSQL
@@ -37,7 +43,56 @@ async def startup_event():
         print("✓ Systematic review table initialized", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
+
+    # Procrastinate schema + run-all job tables
+    try:
+        from api.jobs.procrastinate_app import (
+            jobs_enabled,
+            ensure_procrastinate_schema,
+            workers_enabled,
+            run_worker_once,
+            clear_pending_jobs,
+        )
+        from api.jobs.run_all_repo import run_all_repo
+
+        if jobs_enabled():
+            print("🧰 Ensuring background job tables...", flush=True)
+            # Keep Procrastinate open for the whole API lifespan so request handlers
+            # can enqueue jobs.
+            from api.jobs.procrastinate_app import PROCRASTINATE_APP
+            await PROCRASTINATE_APP.open_async()
+            await ensure_procrastinate_schema()
+            await run_in_threadpool(run_all_repo.ensure_tables)
+            print("✓ Job tables initialized", flush=True)
+
+            # Always clear out leftover queued/doing tasks from previous runs.
+            # This avoids confusing "old" jobs being picked up when you restart the API.
+            try:
+                cleared = await clear_pending_jobs(queues=["default"])
+                print(f"🧹 Cleared {cleared} pending Procrastinate jobs", flush=True)
+            except Exception as e:
+                print(f"⚠️ Failed to clear pending Procrastinate jobs: {e}", flush=True)
+
+            if workers_enabled():
+                # Run a worker loop inside the API process (dev/quick deploy).
+                # For production, run a separate worker service.
+                print("👷 Starting embedded Procrastinate worker...", flush=True)
+                asyncio.create_task(run_worker_once(queues=["default"]))
+    except Exception as e:
+        print(f"⚠️ Background jobs not started: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown event - close background resources."""
+    try:
+        from api.jobs.procrastinate_app import jobs_enabled, PROCRASTINATE_APP
+
+        if jobs_enabled():
+            await PROCRASTINATE_APP.close_async()
+    except Exception:
+        pass
 
     
 
@@ -87,6 +142,7 @@ async def health_check():
         "azure_openai_configured": azure_openai_client.is_configured(),
         "default_chat_model": settings.DEFAULT_CHAT_MODEL,
         "available_models": azure_openai_client.get_available_models(),
+        "available_deployments": azure_openai_client.get_available_deployments(),
     }
 
 

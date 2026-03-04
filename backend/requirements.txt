@@ -23,6 +23,15 @@ openai==2.15.0
 
 # Databases
 psycopg2-binary==2.9.11
+asyncpg==0.30.0
+
+# Procrastinate imports psycopg (v3) at import time; install the binary extra so
+# the container doesn't need system libpq.
+psycopg[binary]>=3.1.0
+
+# Background jobs (Postgres-backed)
+# 3.2.0 is no longer published on PyPI (build fails with "No matching distribution")
+procrastinate==3.2.2
 
 # Data processing
 beautifulsoup4==4.14.3
