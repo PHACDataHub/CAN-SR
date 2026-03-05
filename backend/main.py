@@ -13,6 +13,7 @@ load_dotenv(env_path)
 from api.router import api_router
 from api.core.config import settings
 from api.services.sr_db_service import srdb_service
+from api.services.user_db import user_db_service
 
 
 app = FastAPI(
@@ -81,6 +82,13 @@ async def startup_event():
                 asyncio.create_task(run_worker_once(queues=["default"]))
     except Exception as e:
         print(f"⚠️ Background jobs not started: {e}", flush=True)
+        
+    try:
+        if user_db_service:
+            await user_db_service.ensure_table_exists()
+            print("✓ Users table initialized", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to ensure users table exists: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)
 
 
