@@ -8,7 +8,7 @@ import { BACKEND_URL } from '@/lib/config'
  * - POST /api/can-sr/citations/upload?sr_id=<sr_id>
  *
  * Forwards request to backend:
- * POST {BACKEND_URL}/api/citations/{sr_id}/upload-csv
+ * POST {BACKEND_URL}/api/citations/{sr_id}/upload-citations
  *
  * Accepts multipart/form-data with a 'file' field. Forwards authentication via
  * Authorization header (if present) or cookie header.
@@ -39,18 +39,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'File is required' }, { status: 400 })
     }
 
-    // Basic CSV validation: check extension or mime type if available
+    // Basic validation: allow CSV or RIS uploads
     const lower = file.name.toLowerCase()
-    if (!lower.endsWith('.csv') && file.type !== 'text/csv') {
-      // allow backend to enforce stricter checks, but warn client
-      // Not returning error to be slightly permissive (some CSVs may have different mime)
+    const isAllowed =
+      lower.endsWith('.csv') || lower.endsWith('.ris') || lower.endsWith('.txt')
+    if (!isAllowed) {
+      // allow backend to enforce stricter checks (some exports have odd extensions)
     }
 
     // Forward form data to backend
     const backendForm = new FormData()
     backendForm.append('file', file)
 
-    const url = `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/upload-csv`
+    const url = `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/upload-citations`
 
     if (!authHeader) {
       return NextResponse.json(
