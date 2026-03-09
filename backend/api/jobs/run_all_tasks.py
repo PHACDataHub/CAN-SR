@@ -17,6 +17,7 @@ from ..extract.router import extract_fulltext_from_storage
 from ..screen.router import update_inclusion_decision
 from ..screen.prompts import PROMPT_JSON_TEMPLATE, PROMPT_JSON_TEMPLATE_FULLTEXT
 from ..extract.prompts import PARAMETER_PROMPT_JSON
+from ..core.config import settings
 
 
 def _compute_run_all_prefetch() -> int:
@@ -656,10 +657,10 @@ async def run_all_start(job_id: str) -> None:
 
         sr_id = str(job.get("sr_id"))
         step = str(job.get("step"))
-        # Force chunk_size=1 for maximum fairness/responsiveness.
-        # NOTE: meta may store a historical chunk_size from the request, but
-        # we intentionally ignore it here.
-        chunk_size = 1
+        # Chunk size is controlled via backend/.env (RUN_ALL_CHUNK_SIZE).
+        # Default is 1 for maximum fairness/responsiveness.
+        chunk_size = int(getattr(settings, "RUN_ALL_CHUNK_SIZE", 1) or 1)
+        chunk_size = max(1, min(100, chunk_size))
         ids = []
 
         sr, table_name = await _load_sr_and_table(sr_id)

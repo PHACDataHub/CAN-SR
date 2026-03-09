@@ -65,13 +65,14 @@ async def startup_event():
             await run_in_threadpool(run_all_repo.ensure_tables)
             print("✓ Job tables initialized", flush=True)
 
-            # Always clear out leftover queued/doing tasks from previous runs.
-            # This avoids confusing "old" jobs being picked up when you restart the API.
-            try:
-                cleared = await clear_pending_jobs(queues=["default"])
-                print(f"🧹 Cleared {cleared} pending Procrastinate jobs", flush=True)
-            except Exception as e:
-                print(f"⚠️ Failed to clear pending Procrastinate jobs: {e}", flush=True)
+            # Optional dev cleanup: clear out leftover queued/doing tasks from previous runs.
+            # Controlled by PROCRASTINATE_CLEAR_ON_START (defaults to true if unset).
+            if getattr(settings, "PROCRASTINATE_CLEAR_ON_START", True):
+                try:
+                    cleared = await clear_pending_jobs(queues=["default"])
+                    print(f"🧹 Cleared {cleared} pending Procrastinate jobs", flush=True)
+                except Exception as e:
+                    print(f"⚠️ Failed to clear pending Procrastinate jobs: {e}", flush=True)
 
             if workers_enabled():
                 # Run a worker loop inside the API process (dev/quick deploy).

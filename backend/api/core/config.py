@@ -92,6 +92,26 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # ---------------------------------------------------------------------
+    # Background jobs (Procrastinate)
+    # ---------------------------------------------------------------------
+    # Enable Procrastinate-backed background jobs (required for /api/jobs/*)
+    ENABLE_PROCRASTINATE: bool = os.getenv("ENABLE_PROCRASTINATE", "false").lower().strip() == "true"
+
+    # Embedded worker loop (dev-friendly). Keep this OFF by default.
+    ENABLE_PROCRASTINATE_WORKER: bool = os.getenv("ENABLE_PROCRASTINATE_WORKER", "false").lower().strip() == "true"
+
+    # Worker concurrency (only used when ENABLE_PROCRASTINATE_WORKER=true)
+    PROCRASTINATE_WORKER_CONCURRENCY: int = int(os.getenv("PROCRASTINATE_WORKER_CONCURRENCY", "1"))
+
+    # Optional dev cleanup: clear out leftover queued/doing tasks on API startup.
+    # IMPORTANT: default is true if the env var is absent.
+    PROCRASTINATE_CLEAR_ON_START: bool = os.getenv("PROCRASTINATE_CLEAR_ON_START", "true").lower().strip() == "true"
+
+    # Run-All job chunk size: citations per Procrastinate chunk task.
+    # Larger values reduce overhead but can reduce fairness/responsiveness.
+    RUN_ALL_CHUNK_SIZE: int = int(os.getenv("RUN_ALL_CHUNK_SIZE", "1"))
+
     # Additional settings
     ALLOW_USER_REGISTRATION: bool = (
         os.getenv("ALLOW_USER_REGISTRATION", "true").lower() == "true"

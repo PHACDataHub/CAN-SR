@@ -242,28 +242,31 @@ docker compose logs -f grobid-service
 docker compose restart api
 
 # Background jobs
-# The /api/jobs/* endpoints require ENABLE_PROCRASTINATE=true
-# (enabled by default in docker-compose.yml).
+# The /api/jobs/* endpoints require ENABLE_PROCRASTINATE=true.
+# These settings are controlled via backend/.env (docker-compose uses env_file: .env).
 #
-# If you run the API outside docker compose, export it manually:
-#   export ENABLE_PROCRASTINATE=true
+# backend/.env defaults (safe/off by default):
+#   ENABLE_PROCRASTINATE=false
+#   ENABLE_PROCRASTINATE_WORKER=false
+#   PROCRASTINATE_WORKER_CONCURRENCY=1
 #
-# The embedded worker loop is optional and controlled separately:
-#   export ENABLE_PROCRASTINATE_WORKER=true
-#   export PROCRASTINATE_WORKER_CONCURRENCY=1
+# Optional dev cleanup:
+#   PROCRASTINATE_CLEAR_ON_START=true
+# NOTE: if PROCRASTINATE_CLEAR_ON_START is *unset*, it defaults to true.
 #
-# Optional dev cleanup: clear leftover queued/doing jobs on API startup:
-#   export PROCRASTINATE_CLEAR_ON_START=true
+# Run-All job chunking (citations per Procrastinate chunk task):
+#   RUN_ALL_CHUNK_SIZE=1
+# (Larger values reduce task overhead but can reduce fairness/responsiveness.)
 #
 # Deploy script convenience:
 #   ./deploy.sh --clear-tasks
-# will set:
-#   ENABLE_PROCRASTINATE_WORKER=true
+# sets:
 #   PROCRASTINATE_CLEAR_ON_START=true
+# (You can still override ENABLE_PROCRASTINATE_WORKER / concurrency via .env.)
 #
 # Notes:
-# - In docker-compose.yml, ENABLE_PROCRASTINATE is enabled, but the embedded worker
-#   is OFF by default. Enable it via env vars or `./deploy.sh --clear-tasks`.
+# - docker-compose.yml no longer inlines Procrastinate env vars; use backend/.env.
+# - ENABLE_PROCRASTINATE_WORKER runs an *embedded* worker inside the API process (dev/quick deploy).
 # - For production, prefer running the worker in a separate process/container.
 #
 # Implementation notes:

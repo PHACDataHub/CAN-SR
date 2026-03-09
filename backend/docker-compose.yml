@@ -11,15 +11,6 @@ services:
       - "8000:8000"
     environment:
       - GROBID_SERVICE_URL=http://grobid-service:8070
-      # Enable Procrastinate-backed background jobs (required for /api/jobs/*)
-      - ENABLE_PROCRASTINATE=true
-      # Embedded worker loop (dev-friendly). Keep this OFF by default.
-      # Enable via `./deploy.sh --clear-tasks` or by exporting ENABLE_PROCRASTINATE_WORKER=true.
-      - ENABLE_PROCRASTINATE_WORKER=true
-      - PROCRASTINATE_WORKER_CONCURRENCY=5
-      # Optional dev cleanup: clear out leftover queued/doing tasks on API startup.
-      # Enable via `./deploy.sh --clear-tasks` or by exporting PROCRASTINATE_CLEAR_ON_START=true.
-      - PROCRASTINATE_CLEAR_ON_START=${PROCRASTINATE_CLEAR_ON_START:-false}
     env_file:
       - .env
     depends_on:

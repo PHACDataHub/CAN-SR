@@ -53,16 +53,16 @@ PROCRASTINATE_APP = procrastinate.App(
 
 
 def jobs_enabled() -> bool:
-    return os.getenv("ENABLE_PROCRASTINATE", "false").lower().strip() == "true"
+    return bool(getattr(settings, "ENABLE_PROCRASTINATE", False))
 
 
 def workers_enabled() -> bool:
-    return os.getenv("ENABLE_PROCRASTINATE_WORKER", "false").lower().strip() == "true"
+    return bool(getattr(settings, "ENABLE_PROCRASTINATE_WORKER", False))
 
 
 def worker_concurrency() -> int:
     try:
-        return max(1, int(os.getenv("PROCRASTINATE_WORKER_CONCURRENCY", "1")))
+        return max(1, int(getattr(settings, "PROCRASTINATE_WORKER_CONCURRENCY", 1) or 1))
     except Exception:
         return 1
 
