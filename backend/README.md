@@ -194,6 +194,21 @@ docker compose up -d grobid-service sr-mongodb-service cit-pgdb-service
 uvicorn main:app --reload --port 8000
 ```
 
+### Linting (Python)
+
+We use **pylint** for backend linting.
+
+```bash
+cd backend
+
+# If you're using a virtualenv/conda env, activate it first.
+# Install deps (includes pylint)
+pip install -r requirements.txt
+
+# Run pylint on the backend package
+pylint api
+```
+
 
 
 ## Deployment Options
