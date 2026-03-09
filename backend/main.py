@@ -52,6 +52,7 @@ async def startup_event():
             workers_enabled,
             run_worker_once,
             clear_pending_jobs,
+            open_procrastinate_app,
         )
         from api.jobs.run_all_repo import run_all_repo
 
@@ -59,8 +60,7 @@ async def startup_event():
             print("🧰 Ensuring background job tables...", flush=True)
             # Keep Procrastinate open for the whole API lifespan so request handlers
             # can enqueue jobs.
-            from api.jobs.procrastinate_app import PROCRASTINATE_APP
-            await PROCRASTINATE_APP.open_async()
+            await open_procrastinate_app()
             await ensure_procrastinate_schema()
             await run_in_threadpool(run_all_repo.ensure_tables)
             print("✓ Job tables initialized", flush=True)
@@ -79,7 +79,9 @@ async def startup_event():
                 print("👷 Starting embedded Procrastinate worker...", flush=True)
                 asyncio.create_task(run_worker_once(queues=["default"]))
     except Exception as e:
+        import traceback
         print(f"⚠️ Background jobs not started: {e}", flush=True)
+        traceback.print_exc()
     print("🎯 CAN-SR Backend ready!", flush=True)
 
 
@@ -87,10 +89,10 @@ async def startup_event():
 async def shutdown_event():
     """Shutdown event - close background resources."""
     try:
-        from api.jobs.procrastinate_app import jobs_enabled, PROCRASTINATE_APP
+        from api.jobs.procrastinate_app import jobs_enabled, close_procrastinate_app
 
         if jobs_enabled():
-            await PROCRASTINATE_APP.close_async()
+            await close_procrastinate_app()
     except Exception:
         pass
 

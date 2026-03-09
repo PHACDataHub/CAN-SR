@@ -114,7 +114,7 @@ class PostgresServer:
         now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         return not self._token or now >= self._token_expiration
 
-    def _refresh_azure_token(self) -> str:
+    def refresh_azure_token(self) -> str:
         """Return a valid Azure token, fetching a new one only if expired."""
         if self._is_token_expired():
             logger.info("Fetching fresh Azure PostgreSQL token")
@@ -154,7 +154,7 @@ class PostgresServer:
             kwargs["sslmode"] = sslmode
 
         if prof.get("mode") == "azure":
-            kwargs["password"] = self._refresh_azure_token()
+            kwargs["password"] = self.refresh_azure_token()
         else:
             if not prof.get("password"):
                 raise RuntimeError(f"{mode} profile requires password")
