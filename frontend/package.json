@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "node node_modules/next/dist/bin/next build",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "eslint app components hooks lib",
+    "lint:fix": "eslint app components hooks lib --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

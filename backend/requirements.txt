@@ -37,6 +37,7 @@ procrastinate==3.2.2
 # Data processing
 beautifulsoup4==4.14.3
 rispy==0.10.0
+pylint==3.3.8
 
 # Document processing
 grobid-client-python==0.1.4
