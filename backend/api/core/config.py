@@ -168,6 +168,10 @@ class Settings(BaseSettings):
     # Entra
     USE_ENTRA_AUTH: bool = os.getenv("USE_ENTRA_AUTH", "false").lower() == "true"
 
+    # Azure App Insights
+    USE_APP_INSIGHTS: bool = os.getenv("USE_APP_INSIGHTS", "false").lower() == "true"
+    APP_INSIGHTS_CONNECTION_STRING: Optional[str] = os.getenv("APP_INSIGHTS_CONNECTION_STRING")
+
     class Config:
         case_sensitive = True
         # Resolve to backend/.env regardless of current working directory.

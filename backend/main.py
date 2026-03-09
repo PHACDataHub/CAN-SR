@@ -1,4 +1,5 @@
 import os
+from api.services.app_insights_service import log_action
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,15 @@ async def startup_event():
             print("✓ Users table initialized", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure users table exists: {e}", flush=True)
+
+    # Configure Azure Application Insights if enabled
+    if settings.USE_APP_INSIGHTS:
+        try:
+            from api.services.app_insights_service import configure_azure_app_insights
+            configure_azure_app_insights()
+            log_action("Application Insights configured")
+        except Exception as e:
+            print(f"⚠️ Failed to configure Azure Application Insights: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)
 
     
