@@ -113,10 +113,10 @@
   "setup": {
     "title": "Importation et configuration",
     "pageTitle": "Importer les références et définir les critères",
-    "pageDesc": "Téléversez des fichiers de citations (CSV) pour créer une base de données de sélection. Prévisualisez les premières lignes ci-dessous avant de téléverser. Modifiez et enregistrez le YAML des critères de sélection utilisé pour configurer les colonnes de sélection.",
-    "uploadCitations": "Téléverser les citations (CSV)",
+    "pageDesc": "Téléversez des fichiers de citations (CSV ou RIS) pour créer une base de données de sélection. Modifiez et enregistrez le YAML des critères de sélection utilisé pour configurer les colonnes de sélection.",
+    "uploadCitations": "Téléverser les citations (CSV ou RIS)",
     "chooseFile": "Choisir un fichier",
-    "uploadCSV": "Téléverser le CSV",
+    "uploadCitationsButton": "Téléverser les citations",
     "uploading": "Téléversement...",
     "selectedFile": "Fichier sélectionné :",
     "noFileSelected": "Aucun fichier sélectionné",
