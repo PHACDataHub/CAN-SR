@@ -259,7 +259,7 @@ export default function CanSrSetupPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.ris,.txt,text/csv,text/plain,application/x-research-info-systems"
                 onChange={(e) => handleFileSelected(e.target.files ? e.target.files[0] : null)}
                 className="hidden"
               />
@@ -278,7 +278,7 @@ export default function CanSrSetupPage() {
                     !file || uploading ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
-                  {uploading ? dict.setup.uploading : dict.setup.uploadCSV}
+                  {uploading ? dict.setup.uploading : dict.setup.uploadCitationsButton}
                 </button>
               </div>
             </div>
