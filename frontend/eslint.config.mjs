@@ -12,6 +12,17 @@ const compat = new FlatCompat({
 const eslintConfig = [
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
 
+  // Global ignores (Flat Config)
+  {
+    ignores: [
+      '.next/**',
+      'node_modules/**',
+      'out/**',
+      'dist/**',
+      'build/**',
+    ],
+  },
+
   // Add custom rules override
   {
     files: ['**/*.ts', '**/*.tsx'],
