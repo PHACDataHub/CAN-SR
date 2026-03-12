@@ -22,9 +22,13 @@ Notes:
 """
 
 import os
-from typing import Optional, Dict, Any
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional, Dict, Any
 
+import psycopg
 import psycopg2
+import psycopg2.extensions
+from psycopg.rows import dict_row
 from ..core.config import settings
 import logging
 import datetime
@@ -55,10 +59,28 @@ class PostgresServer:
         """Return an open connection, reconnecting only when necessary."""
         if self._conn is None or self._conn.closed:
             self._conn = self._connect()
-        elif self._mode() == "azure" and self._is_token_expired():
+
+        # Azure token refresh handling
+        if self._mode() == "azure" and self._is_token_expired():
             logger.info("Azure token expired — reconnecting to PostgreSQL")
             self.close()
             self._conn = self._connect()
+
+        # If a previous request hit a SQL error and did not rollback, the connection
+        # stays in an aborted transaction state. Any subsequent query will fail with:
+        #   psycopg2.errors.InFailedSqlTransaction
+        # Heal it proactively so one bad request cannot poison the process.
+        try:
+            if self._conn and self._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
+                logger.warning("Postgres connection in aborted transaction; rolling back")
+                self._conn.rollback()
+        except Exception:
+            # If rollback fails, reconnect.
+            try:
+                self.close()
+            finally:
+                self._conn = self._connect()
+
         return self._conn
 
     def close(self):
@@ -117,8 +139,11 @@ class PostgresServer:
     def _has_local_fallback() -> bool:
         return False
 
-    def _candidate_kwargs(self, mode: str) -> Dict[str, Any]:
-        """Build connect kwargs for a given mode based on POSTGRES_* env vars."""
+    def _candidate_kwargs(self, mode: str, psycopg3: bool = False) -> Dict[str, Any]:
+        """Build connect kwargs for a given mode based on POSTGRES_* env vars.
+
+        If psycopg3=True, renames 'database' -> 'dbname' for psycopg3 compatibility.
+        """
         prof = settings.postgres_profile(mode)
 
         kwargs: Dict[str, Any] = {
@@ -146,6 +171,9 @@ class PostgresServer:
         if not all(required):
             raise RuntimeError(f"Incomplete Postgres config for mode={mode}")
 
+        if psycopg3:
+            kwargs["dbname"] = kwargs.pop("database")
+
         return kwargs
 
     def _connect_with_mode(self, mode: str):
@@ -164,6 +192,16 @@ class PostgresServer:
             raise psycopg2.OperationalError(
                 f"Could not connect to Postgres for mode={primary_mode}"
             )
+
+    @asynccontextmanager
+    async def aconn(self) -> AsyncIterator[psycopg.AsyncConnection]:
+        """Open a short-lived psycopg3 async connection.
+
+        Commits automatically on clean exit, rolls back on exception.
+        """
+        kwargs = self._candidate_kwargs(self._mode(), psycopg3=True)
+        async with await psycopg.AsyncConnection.connect(**kwargs, row_factory=dict_row) as conn:
+            yield conn
 
     def __repr__(self) -> str:
         status = "open" if self._conn and not self._conn.closed else "closed"

@@ -39,18 +39,45 @@ class GrobidService:
             "GROBID_SERVICE_URL", "http://grobid-service:8000"
         )
 
-        grobid_client = GrobidClient(
-            grobid_server=self.base_service_url,
-            batch_size=1000,
-            coordinates=["p", "s", "persName", "biblStruct", "figure", "formula", "head", "note", "title", "ref",
-                        "affiliation"],
-            sleep_time=5,
-            timeout=240,
-            check_server=True
-        )
-        self.grobid_client = grobid_client
+        # IMPORTANT:
+        # Do not check server availability at import time. This repo is often imported
+        # in environments where the grobid container is not running (dev/test), and
+        # failing hard on import breaks unrelated endpoints.
+        try:
+            grobid_client = GrobidClient(
+                grobid_server=self.base_service_url,
+                batch_size=1000,
+                coordinates=[
+                    "p",
+                    "s",
+                    "persName",
+                    "biblStruct",
+                    "figure",
+                    "formula",
+                    "head",
+                    "note",
+                    "title",
+                    "ref",
+                    "affiliation",
+                ],
+                sleep_time=5,
+                timeout=240,
+                check_server=False,
+            )
+            self.grobid_client = grobid_client
+        except Exception as e:
+            logger.error(
+                "Failed to initialize GrobidClient (service may be down): %s",
+                e,
+            )
+            self.grobid_client = None
+
+    def is_available(self) -> bool:
+        return self.grobid_client is not None
 
     async def process_structure(self, input_path) -> (dict, list):
+        if not self.grobid_client:
+            raise RuntimeError("GROBID client is not available (service not configured or down)")
         pdf_file, status, text = self.grobid_client.process_pdf("processFulltextDocument",
                                                                 input_path,
                                                                 consolidate_header=True,
@@ -119,4 +146,9 @@ class GrobidService:
         return pages
 
 # Global instance
-grobid_service = GrobidService()
+try:
+    grobid_service = GrobidService()
+except Exception as e:  # pragma: no cover
+    logger.error("Failed to initialize GrobidService: %s", e)
+    grobid_service = GrobidService.__new__(GrobidService)  # type: ignore
+    grobid_service.grobid_client = None  # type: ignore
