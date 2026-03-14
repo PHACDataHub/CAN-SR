@@ -1,3 +1,19 @@
+# services:
+#   # =============================================================================
+#   # CAN-SR BACKEND API
+#   # =============================================================================
+#   api:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#     container_name: can-sr-api
+#     ports:
+#       - "8000:8000"
+#     environment:
+#       - GROBID_SERVICE_URL=http://grobid-service:8070
+#       - JAVA_OPTS=-XX:-UseContainerSupport
+
+
 services:
   # =============================================================================
   # CAN-SR BACKEND API
@@ -29,9 +45,24 @@ services:
   # =============================================================================
   # GROBID SERVICE - PDF Parsing for Full-Text Extraction
   # =============================================================================
+  # grobid-service:
+  #   image: grobid/grobid:0.8.2-crf
+  #   container_name: grobid-service
+  #   ports:
+  #     - "8070:8070"
+  #     - "8081:8081"
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8070/api/isalive"]
+  #     interval: 10s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 120s
   grobid-service:
-    image: grobid/grobid:0.8.2-crf
+    image: grobid/grobid:0.8.2
     container_name: grobid-service
+    environment:
+      - JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport
     ports:
       - "8070:8070"
       - "8081:8081"
@@ -57,7 +88,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./volumes/postgres:/var/lib/postgresql/data
+      - ./volumes/postgres:/var/lib/postgresql #/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d postgres -h localhost"]
       interval: 30s
