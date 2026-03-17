@@ -92,7 +92,7 @@ async def database_search(
         
         SCOPUS_API_KEY = settings.SCOPUS_API_KEY or None #currently don't have
 
-        API_URL = 'https://api.elsevier.com/content/search/scopus'
+        API_URL = settings.SCOPUS_API_URL
 
         if not SCOPUS_API_KEY or not API_URL:
             logging.error("Missing SCOPUS_API_KEY or SCOPUS_BASE_URL in environment settings.")

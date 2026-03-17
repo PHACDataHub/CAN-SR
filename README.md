@@ -272,6 +272,13 @@ POSTGRES_PASSWORD=password
 # Databricks (for database search)
 DATABRICKS_INSTANCE=your-instance
 DATABRICKS_TOKEN=your-token
+
+# Database Search 
+ENTREZ_EMAIL=your-pubmed-entrez-email
+ENTREZ_API_KEY=your-pubmed-api-key
+
+AZURE_STORAGE_CONNECTION_STRING=your-azure-storage-account-connection-string
+SCOPUS_API_URL=your-scopus-api-url
 ```
 
 ### Frontend (.env.local)
