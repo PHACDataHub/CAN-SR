@@ -184,6 +184,7 @@ class Settings(BaseSettings):
     ENTREZ_API_KEY: str = os.getenv("ENTREZ_API_KEY")
 
     AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    SCOPUS_API_URL: str = os.getenv("SCOPUS_API_URL")
 
     # OAuth
     OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID", "")
