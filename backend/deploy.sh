@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 BUILD=false
 UPDATE_DEPS=false
 RESET_DB=false
+DROP_ALL=false
 DEV=false
 
 # Parse command line arguments
@@ -34,6 +35,10 @@ while [[ $# -gt 0 ]]; do
             RESET_DB=true
             shift
             ;;
+        --drop-all-dbs)
+            DROP_ALL=true
+            shift
+            ;;
         --dev)
             DEV=true
             shift
@@ -47,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --build         Rebuild Docker images"
             echo "  --update-deps   Update Python dependencies"
             echo "  --reset-db      Reset databases (WARNING: deletes all data)"
+            echo "  --drop-all-dbs  Drop ALL DB data on disk (stronger than --reset-db; wipes Postgres volume dir)"
             echo "  --dev           Development mode with hot reload"
             echo "  -h, --help      Show this help message"
             echo ""
@@ -81,8 +87,22 @@ fi
 if [ "$RESET_DB" = true ]; then
     echo -e "${YELLOW}🗑️  Resetting databases...${NC}"
     docker compose down -v
+    # NOTE: docker-compose mounts ./volumes/postgres (see backend/docker-compose.yml)
+    # Keep legacy path cleanup as best-effort.
+    sudo rm -rf volumes/postgres 2>/dev/null || true
     sudo rm -rf volumes/postgres-cits 2>/dev/null || true
     echo -e "${GREEN}✅ Databases reset${NC}"
+fi
+
+# Drop ALL database data on disk if requested (intended for validation resets)
+if [ "$DROP_ALL" = true ]; then
+    echo -e "${YELLOW}🧨 Dropping ALL database data (full wipe)...${NC}"
+    docker compose down -v
+    # Wipe compose-mounted postgres directory
+    sudo rm -rf volumes/postgres 2>/dev/null || true
+    # Legacy dirs (best-effort)
+    sudo rm -rf volumes/postgres-cits 2>/dev/null || true
+    echo -e "${GREEN}✅ All DB data wiped${NC}"
 fi
 
 # Build images if requested
@@ -94,6 +114,8 @@ fi
 
 # Create necessary directories
 echo -e "${BLUE}📁 Creating volume directories...${NC}"
+mkdir -p volumes/{postgres}
+# Legacy dir (safe to keep if present)
 mkdir -p volumes/{postgres-cits}
 mkdir -p uploads/users
 

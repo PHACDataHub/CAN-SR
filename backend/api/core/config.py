@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     # Backwards/alternate env var: OPENAI_TYPE
     AZURE_OPENAI_MODE: str = os.getenv("AZURE_OPENAI_MODE", "key").lower().strip()
 
+    # Azure Document Intelligence settings
+    # Azure Document Intelligence auth selection
+    # key -> uses AZURE_DOC_INT_ENDPOINT + AZURE_DOC_INT_API_KEY
+    # entra -> uses AZURE_DOC_INT_ENDPOINT + DefaultAzureCredential
+    AZURE_DOC_INT_MODE: str = os.getenv("AZURE_DOC_INT_MODE", "key").lower().strip()
+    AZURE_DOC_INT_ENDPOINT: str = os.getenv("AZURE_DOC_INT_ENDPOINT")
+    AZURE_DOC_INT_API_KEY: Optional[str] = os.getenv("AZURE_DOC_INT_API_KEY")
+
     # Default model to use
     DEFAULT_CHAT_MODEL: str = os.getenv("DEFAULT_CHAT_MODEL", "gpt-5-mini")
 

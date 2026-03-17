@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+
+declare global {
+  interface Window {
+    pdfjsLib: any
+  }
+}
 
 interface PDFBoundingBoxViewerProps {
   srId: string
@@ -28,23 +35,7 @@ interface PDFBoundingBoxViewerProps {
  * - Coloring: per-parameter deterministic color based on parameter name
  */
 
-const COLOR_MAP: Record<string, string> = {
-  paragraphs: 'rgba(128, 0, 128, 0.3)',
-  tables: 'rgba(255, 128, 0, 0.4)',
-  table_cells: 'rgba(255, 179, 77, 0.2)',
-  figures: 'rgba(0, 204, 0, 0.4)',
-  title: 'rgba(204, 0, 0, 0.4)',
-  section_heading: 'rgba(153, 0, 102, 0.4)',
-}
-
-const COLOR_BORDER_MAP: Record<string, string> = {
-  paragraphs: 'rgb(128, 0, 128)',
-  tables: 'rgb(255, 128, 0)',
-  table_cells: 'rgb(255, 179, 77)',
-  figures: 'rgb(0, 204, 0)',
-  title: 'rgb(204, 0, 0)',
-  section_heading: 'rgb(153, 0, 102)',
-}
+// Note: document-intelligence overlay support was removed during validation polish.
 
 function hashCode(str: string): number {
   let hash = 0
@@ -94,7 +85,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   {
     srId,
     citationId,
-    conversionId = null,
     fileName,
     coords = [],
     pages = [],
@@ -105,28 +95,30 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   }: PDFBoundingBoxViewerProps,
   ref
 ) {
+  const dict = useDictionary()
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
-  const [analysisResult, setAnalysisResult] = useState<any | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
   const [scale, setScale] = useState(1.0)
   const [fitToWidth, setFitToWidth] = useState(!!defaultFitToWidth)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-const pageRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
-const containerRef = useRef<HTMLDivElement | null>(null)
-const wrapperRefs = useRef<Record<number, HTMLDivElement | null>>({})
+  const pageRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const wrapperRefs = useRef<Record<number, HTMLDivElement | null>>({})
   const [pdfDocument, setPdfDocument] = useState<any | null>(null)
   const [showBoundingBoxes, setShowBoundingBoxes] = useState(true)
-  const [visibleElements, setVisibleElements] = useState<Set<string>>(new Set(['paragraphs', 'tables', 'figures']))
   const [pageViewports, setPageViewports] = useState<Record<number, { width: number; height: number }>>({})
   const renderTasksRef = useRef<Record<number, any>>({})
   const renderTokenRef = useRef(0)
   const [hoverInfo, setHoverInfo] = useState<{ page: number; left: number; top: number; content: string } | null>(null)
+  // Explicitly selected box (e.g., when user clicks an evidence chip). This is drawn
+  // regardless of whether the LLM evidence panels contain that coordinate.
+  const [selectedCoord, setSelectedCoord] = useState<any | null>(null)
 
-const sentenceTexts = extractSentenceArray(fulltext)
+  const sentenceTexts = extractSentenceArray(fulltext)
 
-useImperativeHandle(ref, () => ({
+  useImperativeHandle(ref, () => ({
   scrollToPage: (pageNum: number) => {
     const container = containerRef.current
     const wrapper = wrapperRefs.current[pageNum]
@@ -138,17 +130,15 @@ useImperativeHandle(ref, () => ({
   },
   scrollToCoord: (coord: any) => {
     try {
+      setSelectedCoord(coord)
       const pageNum = Number(coord?.page ?? coord?.page_number ?? coord?.pageNum ?? 1)
       const vp = pageViewports[pageNum]
       const dims = pages?.[pageNum - 1]
       const container = containerRef.current
       const wrapper = wrapperRefs.current[pageNum]
       if (!vp || !dims || !container || !wrapper) return
-      const pageWidth = Number(dims.width || 1)
       const pageHeight = Number(dims.height || 1)
-      const ulx = parseFloat(coord?.ulx ?? coord?.x ?? 0)
       const uly = parseFloat(coord?.uly ?? coord?.y ?? 0)
-      const lrx = coord?.lrx != null ? parseFloat(coord.lrx) : (coord?.width != null ? ulx + parseFloat(coord.width) : ulx)
       const lry = coord?.lry != null ? parseFloat(coord.lry) : (coord?.height != null ? uly + parseFloat(coord.height) : uly)
       const topY = Math.min(uly, lry)
       const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
@@ -166,6 +156,7 @@ useImperativeHandle(ref, () => ({
       const firstCoord =
         Array.isArray(coords) ? coords.find((c: any) => String(c?.text || '').trim() === trimmed) : null
       if (!firstCoord) return
+      setSelectedCoord(firstCoord)
       const pageNum = Number(firstCoord?.page ?? firstCoord?.page_number ?? firstCoord?.pageNum ?? 1)
       const vp = pageViewports[pageNum]
       const dims = pages?.[pageNum - 1]
@@ -173,9 +164,7 @@ useImperativeHandle(ref, () => ({
       const wrapper = wrapperRefs.current[pageNum]
       if (!vp || !dims || !container || !wrapper) return
       const pageHeight = Number(dims.height || 1)
-      const ulx = parseFloat(firstCoord?.ulx ?? firstCoord?.x ?? 0)
       const uly = parseFloat(firstCoord?.uly ?? firstCoord?.y ?? 0)
-      const lrx = firstCoord?.lrx != null ? parseFloat(firstCoord.lrx) : (firstCoord?.width != null ? ulx + parseFloat(firstCoord.width) : ulx)
       const lry = firstCoord?.lry != null ? parseFloat(firstCoord.lry) : (firstCoord?.height != null ? uly + parseFloat(firstCoord.height) : uly)
       const topY = Math.min(uly, lry)
       const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
@@ -185,13 +174,12 @@ useImperativeHandle(ref, () => ({
       setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
     } catch {}
   }
-}), [pageViewports, pages, totalPages, sentenceTexts, coords])
+  }), [pageViewports, pages, totalPages, sentenceTexts, coords])
 
   // Load PDF.js dynamically (CDN)
   useEffect(() => {
     const loadPDFJS = async () => {
       try {
-        // @ts-ignore
         if (!window.pdfjsLib) {
           const script = document.createElement('script')
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
@@ -199,13 +187,10 @@ useImperativeHandle(ref, () => ({
           document.body.appendChild(script)
 
           await new Promise((resolve, reject) => {
-            // @ts-ignore
             script.onload = resolve
-            // @ts-ignore
             script.onerror = reject
           })
 
-          // @ts-ignore
           window.pdfjsLib.GlobalWorkerOptions.workerSrc =
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
         }
@@ -255,33 +240,11 @@ useImperativeHandle(ref, () => ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srId, citationId])
 
-  // Fetch analysis result (docling/doc-intelligence) if conversionId provided (optional)
-  useEffect(() => {
-    const fetchAnalysis = async () => {
-      if (!conversionId) return
-      try {
-        const token = getAuthToken()
-        const tokenType = getTokenType()
-        const headers: Record<string, string> = {}
-        if (token) headers['Authorization'] = `${tokenType} ${token}`
-        const res = await fetch(`/api/documents/${encodeURIComponent(conversionId)}/analysis`, { headers })
-        if (!res.ok) return
-        const data = await res.json()
-        setAnalysisResult(data.analysis_result || data)
-      } catch (err) {
-        console.error('Error fetching analysis:', err)
-      }
-    }
-    fetchAnalysis()
-  }, [conversionId])
-
   // Load PDF document via pdf.js
   useEffect(() => {
     const loadPDF = async () => {
-      // @ts-ignore
       if (!pdfUrl || !window.pdfjsLib) return
       try {
-        // @ts-ignore
         const loadingTask = window.pdfjsLib.getDocument(pdfUrl)
         const pdf = await loadingTask.promise
         setPdfDocument(pdf)
@@ -361,12 +324,6 @@ useImperativeHandle(ref, () => ({
             if (err?.name !== 'RenderingCancelledException') throw err
           })
 
-          // ensure page resources cleaned up
-          try {
-            // @ts-ignore
-            page.cleanup && page.cleanup()
-          } catch {}
-
           renderTasksRef.current[pageNum] = null
 
           if (cancelled || token !== renderTokenRef.current) break
@@ -393,100 +350,7 @@ useImperativeHandle(ref, () => ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDocument, totalPages, scale])
 
-  const drawDocAnalysisBoundingBoxes = (context: CanvasRenderingContext2D, pageNum: number, pageHeight: number) => {
-    if (!analysisResult) return
-    const processor = analysisResult.processor || 'unknown'
-    const needsYFlip = processor === 'docling'
-    const polygonToRect = (polygon: number[], pageHeight: number) => {
-      if (!polygon || polygon.length < 8) return null
-      const xCoords = polygon.filter((_, i) => i % 2 === 0).map((x) => x * scale)
-      const yCoords = polygon
-        .filter((_, i) => i % 2 === 1)
-        .map((y) => (needsYFlip ? pageHeight - y : y) * scale)
-      const x = Math.min(...xCoords)
-      const y = Math.min(...yCoords)
-      const width = Math.max(...xCoords) - x
-      const height = Math.max(...yCoords) - y
-      return { x, y, width, height }
-    }
-
-    const pageInfo = analysisResult.pages?.find((p: any) => p.page_number === pageNum)
-    const ph = pageInfo?.height || pageHeight || 792
-
-
-    // paragraphs
-    if (visibleElements.has('paragraphs') && analysisResult.paragraphs) {
-      analysisResult.paragraphs.forEach((para: any) => {
-        para.bounding_regions?.forEach((region: any) => {
-          if (region.page_number === pageNum) {
-            const rect = polygonToRect(region.polygon, ph)
-            if (rect) {
-              const colorKey = para.role || 'paragraphs'
-              context.strokeStyle = COLOR_BORDER_MAP[colorKey] || COLOR_BORDER_MAP.paragraphs
-              context.fillStyle = COLOR_MAP[colorKey] || COLOR_MAP.paragraphs
-              context.lineWidth = 2
-              context.fillRect(rect.x, rect.y, rect.width, rect.height)
-              context.strokeRect(rect.x, rect.y, rect.width, rect.height)
-              if (para.role) {
-                context.fillStyle = COLOR_BORDER_MAP[colorKey] || COLOR_BORDER_MAP.paragraphs
-                context.font = '12px sans-serif'
-                context.fillText(para.role, rect.x + 2, rect.y - 4)
-              }
-            }
-          }
-        })
-      })
-    }
-
-    // tables
-    if (visibleElements.has('tables') && analysisResult.tables) {
-      analysisResult.tables.forEach((table: any, idx: number) => {
-        table.bounding_regions?.forEach((region: any) => {
-          if (region.page_number === pageNum) {
-            const rect = polygonToRect(region.polygon, ph)
-            if (rect) {
-              context.strokeStyle = COLOR_BORDER_MAP.tables
-              context.fillStyle = COLOR_MAP.tables
-              context.lineWidth = 3
-              context.fillRect(rect.x, rect.y, rect.width, rect.height)
-              context.strokeRect(rect.x, rect.y, rect.width, rect.height)
-              context.fillStyle = COLOR_BORDER_MAP.tables
-              context.font = 'bold 14px sans-serif'
-              context.fillText(`Table ${idx + 1}`, rect.x + 4, rect.y + 18)
-            }
-          }
-        })
-      })
-    }
-
-    // figures
-    if (visibleElements.has('figures') && analysisResult.figures) {
-      analysisResult.figures.forEach((figure: any) => {
-        figure.bounding_regions?.forEach((region: any) => {
-          if (region.page_number === pageNum) {
-            const rect = polygonToRect(region.polygon, ph)
-            if (rect) {
-              context.strokeStyle = COLOR_BORDER_MAP.figures
-              context.fillStyle = COLOR_MAP.figures
-              context.lineWidth = 3
-              context.fillRect(rect.x, rect.y, rect.width, rect.height)
-              context.strokeRect(rect.x, rect.y, rect.width, rect.height)
-              context.fillStyle = COLOR_BORDER_MAP.figures
-              context.font = 'bold 14px sans-serif'
-              context.fillText(`Fig ${figure.id}`, rect.x + 4, rect.y + 18)
-            }
-          }
-        })
-      })
-    }
-  }
-
-  const toggleElement = (element: string) => {
-    const newSet = new Set(visibleElements)
-    if (newSet.has(element)) newSet.delete(element)
-    else newSet.add(element)
-    setVisibleElements(newSet)
-  }
+  // Note: doc-intelligence overlay rendering was removed.
 
   // keyboard navigation
   useEffect(() => {
@@ -595,6 +459,18 @@ useImperativeHandle(ref, () => ({
               })
             : []
 
+          // Add an explicitly selected coordinate (e.g., table/figure chip click)
+          if (selectedCoord) {
+            try {
+              const p = Number(selectedCoord?.page ?? selectedCoord?.page_number ?? selectedCoord?.pageNum ?? 0)
+              if (p === pageNum) {
+                filtered.unshift({ ...selectedCoord, __selected: true })
+              }
+            } catch {
+              // ignore
+            }
+          }
+
 
           const elements = filtered.map((c: any, idx: number) => {
             const x = parseFloat(c?.x ?? '0')
@@ -608,15 +484,12 @@ useImperativeHandle(ref, () => ({
             // Handle either (ulx,uly,lrx,lry) or (x,y,width,height)
             let width: number
             let height: number
-            let mode: 'rightBottom' | 'size'
             if (w > x && h > y) {
               width = Math.max(((w - x) / pageWidth) * vp.width, 0)
               height = Math.max(((h - y) / pageHeight) * vp.height, 0)
-              mode = 'rightBottom'
             } else {
               width = Math.max((w / pageWidth) * vp.width, 0)
               height = Math.max((h / pageHeight) * vp.height, 0)
-              mode = 'size'
             }
 
             const t = String(c?.text || '').trim()
@@ -651,10 +524,25 @@ useImperativeHandle(ref, () => ({
               (isOpen ? (paramsOpenHere[0] || coordsParamsOpen[0]) : undefined) ??
               (isClosed ? (paramsClosedHere[0] || coordsParamsClosed[0]) : undefined)
 
-            const alpha = isOpen ? 0.2 : 0.05
-            const fill = chosenParam ? colorForParam(chosenParam, alpha) : `rgba(255, 229, 100, ${alpha})`
-            const borderColor = chosenParam ? solidForParam(chosenParam) : 'rgba(255, 196, 0, 0.95)'
-            const border = isOpen ? `2px solid ${borderColor}` : `1px dashed ${borderColor}`
+            const isSelected = !!c?.__selected
+            const isArtifact = c?.type === 'table' || c?.type === 'figure'
+            // Keep tables/figures highlights more transparent so users can still read/see
+            // the underlying content.
+            const alpha = isArtifact
+              ? (isSelected ? 0.5 : (isOpen ? 0.5 : 0.5))
+              : (isSelected ? 0.0 : (isOpen ? 0.0 : 0.0))
+            const border_alpha = isArtifact
+              ? 0.95
+              : 0.0
+            const fill = isSelected
+              ? `rgba(59, 130, 246, ${alpha})`
+              : (chosenParam ? colorForParam(chosenParam, alpha) : `rgba(255, 229, 100, ${alpha})`)
+            const borderColor = isSelected
+              ? `rgba(37, 99, 235, ${border_alpha})`
+              : (chosenParam ? solidForParam(chosenParam) : `rgba(255, 196, 0, ${border_alpha})`)
+            const border = isSelected
+              ? `3px solid ${borderColor}`
+              : (isOpen ? `2px solid ${borderColor}` : `1px dashed ${borderColor}`)
             const title = chosenParam ? `${chosenParam}${t ? `: ${t.slice(0, 160)}` : ''}` : t ? t.slice(0, 160) : 'Sentence'
 
 
@@ -723,7 +611,7 @@ useImperativeHandle(ref, () => ({
       <div className="mb-3 flex items-center justify-between">
         <div>
           <div className="text-xs text-gray-600">Citation #{citationId}</div>
-          <div className="text-lg font-semibold text-gray-900">{fileName || 'Full text'}</div>
+          <div className="text-lg font-semibold text-gray-900">{fileName || dict.pdf.fullText}</div>
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center text-sm">
@@ -733,7 +621,7 @@ useImperativeHandle(ref, () => ({
               onChange={(e) => setShowBoundingBoxes(e.target.checked)}
               className="mr-2"
             />
-            Show Evidence Highlights
+            {dict.pdf.showEvidenceHighlights}
           </label>
           <div className="ml-3 text-xs text-gray-500">{Math.round(scale * 100)}%</div>
         </div>
@@ -770,7 +658,7 @@ useImperativeHandle(ref, () => ({
               100%
             </button>
             <button onClick={() => setFitToWidth((v) => !v)} className="rounded-md border px-2 py-1 text-sm">
-              Fit
+              {dict.pdf.fit}
             </button>
           </div>
         </div>
@@ -781,7 +669,7 @@ useImperativeHandle(ref, () => ({
             className="h-[680px] overflow-auto border rounded p-4 bg-gray-50 flex justify-center items-start"
           >
             {loading ? (
-              <div className="text-sm text-gray-600">Loading PDF...</div>
+              <div className="text-sm text-gray-600">{dict.pdf.loadingPDF}</div>
             ) : error ? (
               <div className="text-sm text-red-600">{error}</div>
             ) : (
@@ -790,7 +678,7 @@ useImperativeHandle(ref, () => ({
                   const vp = pageViewports[pageNum]
                   return (
                     <div key={pageNum} className="w-full flex flex-col items-center">
-                      <div className="mb-2 text-sm text-gray-700 font-medium">Page {pageNum}</div>
+                      <div className="mb-2 text-sm text-gray-700 font-medium">{dict.screening.page} {pageNum}</div>
                       <div
                         ref={(el) => {
                           wrapperRefs.current[pageNum] = el
@@ -827,7 +715,7 @@ useImperativeHandle(ref, () => ({
 
         <div className="flex items-center justify-between">
           <div className="text-xs text-gray-500">{fileName}</div>
-          <div className="text-xs text-gray-400">Keyboard: ← → Home/End</div>
+          <div className="text-xs text-gray-400">{dict.pdf.keyboardHint}</div>
         </div>
       </div>
     </div>

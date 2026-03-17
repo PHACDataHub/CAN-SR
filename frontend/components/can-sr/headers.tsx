@@ -1,15 +1,27 @@
 'use client'
 
 import Image from 'next/image'
-import { useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import BackButton from '@/components/ui/backbutton'
 import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-button'
 import { Settings, Download } from 'lucide-react'
 import React from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
+import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import Link from 'next/link'
 
 export function GCHeader() {
   const router = useRouter()
+  const dict = useDictionary()
+
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
+  // For language swaps
+  const currentPathname = usePathname()
+  const nextLang = lang === 'en' ? 'fr' : 'en'
+  const nextLangPath = currentPathname.replace(`/${lang}`, `/${nextLang}`)
+  const currentSearchParams = useSearchParams()
 
   return (
     <header className="relative z-20 w-full py-4 bg-white shadow-sm">
@@ -24,22 +36,35 @@ export function GCHeader() {
               className="rounded-sm object-cover shadow-sm"
             />
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Government of Canada</h1>
-              <p className="text-sm font-medium text-gray-600">AI Assistant Portal</p>
+              <h1 className="text-xl font-semibold text-gray-900">{dict.common.governmentOfCanada}</h1>
+              <p className="text-sm font-medium text-gray-600">{dict.common.aiAssistantPortal}</p>
             </div>
           </div>
 
-          <InteractiveHoverButton
-            onClick={() => {
-              try {
-                localStorage.removeItem('access_token')
-              } catch {}
-              router.push('/login')
-            }}
-            className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
-          >
-            Sign out
-          </InteractiveHoverButton>
+
+          <div className="space-x-5">
+            <InteractiveHoverButton
+              onClick={() => {
+                try {
+                  localStorage.removeItem('access_token')
+                } catch {}
+                router.push(`/${lang}/login`)
+              }}
+              className="border-gray-200/60 bg-white/90 text-sm text-gray-700 backdrop-blur-sm hover:border-gray-300 hover:bg-white hover:shadow-md"
+            >
+              {dict.common.signOut}
+            </InteractiveHoverButton>
+            
+            <Link
+              href={{
+                pathname: nextLangPath,
+                query: Object.fromEntries(currentSearchParams.entries())
+              }}
+              className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+            >
+              {dict.common.languageSwitch}
+            </Link>
+          </div>
         </div>
       </div>
     </header>
@@ -65,10 +90,12 @@ export function SRHeader({
   showExport = false,
   showBack = true,
   backHref = '/can-sr',
-  backLabel = 'Back to Review',
+  backLabel,
   right,
 }: SRHeaderProps) {
   const router = useRouter()
+  const dict = useDictionary()
+  const resolvedBackLabel = backLabel || dict.cansr.backToReview
 
   const handleExport = async () => {
     try {
@@ -117,6 +144,9 @@ export function SRHeader({
     }
   }
 
+  // Get current language to keep language when navigating
+  const { lang } = useParams<{ lang: string }>();
+
   return (
     <header className="relative border-b border-gray-200 bg-white shadow-sm">
       <div className="mx-auto max-w-4xl px-6">
@@ -124,12 +154,12 @@ export function SRHeader({
           {/* Left: optional back button */}
           {showBack ? (
             <div
-              onClick={() => router.push(backHref)}
+              onClick={() => router.push(`/${lang}${backHref}`)}
               style={{ cursor: 'pointer' }}
               className="flex items-center space-x-3"
             >
               <BackButton />
-              <span className="text-sm font-medium text-gray-900">{backLabel}</span>
+              <span className="text-sm font-medium text-gray-900">{resolvedBackLabel}</span>
             </div>
           ) : (
             <div />
@@ -151,7 +181,7 @@ export function SRHeader({
                 className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
               >
                 <Settings className="h-4 w-4 text-gray-600" />
-                <span>Settings</span>
+                <span>{dict.common.settings}</span>
               </button>
             ) : null}
 
@@ -164,7 +194,7 @@ export function SRHeader({
                 className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
               >
                 <Download className="h-4 w-4 text-gray-600" />
-                <span>Export</span>
+                <span>{dict.common.export}</span>
               </button>
             ) : null}
 
