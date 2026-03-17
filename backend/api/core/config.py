@@ -159,6 +159,13 @@ class Settings(BaseSettings):
     JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED", "")
     JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS", "")
 
+    #search function 
+    ENTREZ_EMAIL: str = os.getenv("ENTREZ_EMAIL")
+    ENTREZ_API_KEY: str = os.getenv("ENTREZ_API_KEY")
+
+    AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    SCOPUS_API_URL: str = os.getenv("SCOPUS_API_URL")
+
     # OAuth
     OAUTH_CLIENT_ID: str = os.getenv("OAUTH_CLIENT_ID", "")
     OAUTH_CLIENT_SECRET: str = os.getenv("OAUTH_CLIENT_SECRET", "")
