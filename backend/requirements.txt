@@ -51,7 +51,7 @@ langchain-core==1.2.11
 langchain-google-genai==4.2.0
 
 # OAuth
-Authlib==1.6.7
+Authlib==1.6.9
 itsdangerous==2.2.0
 
 #Citation search
