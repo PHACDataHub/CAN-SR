@@ -112,10 +112,10 @@
   "setup": {
     "title": "Import & Setup",
     "pageTitle": "Import references and define criteria",
-    "pageDesc": "Upload citation files (CSV) to create a screening database. Preview the first rows below before uploading. Edit and save the screening criteria YAML used to configure columns for screening.",
-    "uploadCitations": "Upload citations (CSV)",
+    "pageDesc": "Upload citation files (CSV or RIS) to create a screening database. Edit and save the screening criteria YAML used to configure columns for screening.",
+    "uploadCitations": "Upload citations (CSV or RIS)",
     "chooseFile": "Choose file",
-    "uploadCSV": "Upload CSV",
+    "uploadCitationsButton": "Upload citations",
     "uploading": "Uploading...",
     "selectedFile": "Selected file:",
     "noFileSelected": "No file selected",

@@ -169,7 +169,7 @@ export function useSettings(): UseSettingsReturn {
       const savedSettings = localStorage.getItem(STORAGE_KEY)
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings)
-        let finalSettings = { ...DEFAULT_SETTINGS, ...parsed }
+        const finalSettings = { ...DEFAULT_SETTINGS, ...parsed }
 
         // Migration: Initialize new knowledge base selection settings if they don't exist
         if (
@@ -219,7 +219,7 @@ export function useSettings(): UseSettingsReturn {
   const updateSetting = useCallback(
     <K extends keyof Settings>(key: K, value: Settings[K]) => {
       setSettings((prevSettings) => {
-        let newSettings = { ...prevSettings, [key]: value }
+        const newSettings = { ...prevSettings, [key]: value }
 
         // Auto-update search_type based on knowledge base selections
         if (
