@@ -52,6 +52,9 @@ class SystematicReviewRead(BaseModel):
     # convenience structured metadata extracted from criteria (l1, l2, parameters)
     criteria_parsed: Optional[Dict[str, Any]] = None
 
+    # SR-level agentic screening configuration (confidence thresholds, critical prompt options)
+    agentic_config: Optional[Dict[str, Any]] = None
+
 
 
 
@@ -136,6 +139,7 @@ async def create_systematic_review(
         criteria=sr_doc.get("criteria"),
         criteria_yaml=sr_doc.get("criteria_yaml"),
         criteria_parsed=sr_doc.get("criteria_parsed"),
+        agentic_config=sr_doc.get("agentic_config"),
     )
 
 
@@ -261,6 +265,7 @@ async def list_systematic_reviews_for_user(
                 criteria=doc.get("criteria"),
                 criteria_yaml=doc.get("criteria_yaml"),
                 criteria_parsed=doc.get("criteria_parsed"),
+                agentic_config=doc.get("agentic_config"),
             )
         )
 
@@ -293,6 +298,7 @@ async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depen
         criteria=doc.get("criteria"),
         criteria_yaml=doc.get("criteria_yaml"),
         criteria_parsed=doc.get("criteria_parsed"),
+        agentic_config=doc.get("agentic_config"),
     )
 
 
@@ -390,7 +396,48 @@ async def update_systematic_review_criteria(
         criteria=doc.get("criteria"),
         criteria_yaml=doc.get("criteria_yaml"),
         criteria_parsed=doc.get("criteria_parsed"),
+        agentic_config=doc.get("agentic_config"),
     )
+
+
+@router.get("/{sr_id}/agentic_config")
+async def get_systematic_review_agentic_config(
+    sr_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return SR agentic_config.
+
+    This is used by the UI to apply confidence/disagreement gating.
+    """
+    requester_id = current_user.get("id")
+    try:
+        cfg = await run_in_threadpool(srdb_service.get_agentic_config, sr_id, requester_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agentic config: {e}")
+    return {"agentic_config": cfg}
+
+
+class AgenticConfigUpdateRequest(BaseModel):
+    agentic_config: Dict[str, Any]
+
+
+@router.put("/{sr_id}/agentic_config")
+async def update_systematic_review_agentic_config(
+    sr_id: str,
+    payload: AgenticConfigUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Update SR agentic_config."""
+    requester_id = current_user.get("id")
+    try:
+        doc = await run_in_threadpool(srdb_service.update_agentic_config, sr_id, payload.agentic_config, requester_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update agentic config: {e}")
+    return {"status": "success", "sr_id": sr_id, "agentic_config": doc.get("agentic_config")}
 
 
 @router.delete("/{sr_id}")

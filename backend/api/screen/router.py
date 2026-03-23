@@ -19,7 +19,12 @@ from ..core.cit_utils import load_sr_and_check
 
 # Import consolidated Postgres helpers if available (optional)
 from ..services.cit_db_service import cits_dp_service, snake_case_column, snake_case
-from .prompts import PROMPT_JSON_TEMPLATE, PROMPT_JSON_TEMPLATE_FULLTEXT
+from .prompts import (
+    PROMPT_JSON_TEMPLATE,
+    PROMPT_JSON_TEMPLATE_FULLTEXT,
+    PROMPT_CRITICAL_JSON_TEMPLATE,
+    PROMPT_CRITICAL_JSON_TEMPLATE_FULLTEXT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,29 @@ class HumanClassifyRequest(BaseModel):
     explanation: Optional[str] = Field("", description="Optional free-text explanation from the human reviewer")
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional confidence (0.0 - 1.0)")
     reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
+
+
+class CriticalClassifyRequest(BaseModel):
+    """Request payload for the critical (second-opinion) screening agent."""
+    citation_text: Optional[str] = Field(
+        None,
+        description="Optional combined citation text. If omitted the server will build it from the screening DB row.",
+    )
+    include_columns: Optional[List[str]] = Field(
+        None,
+        description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation",
+    )
+    question: str = Field(..., description="Screening question")
+    screening_step: str = Field(..., description="Screening step identifier: 'l1' or 'l2', etc.")
+    options: List[str] = Field(..., description="Original list of possible options")
+    primary_selected: Optional[str] = Field(
+        None,
+        description="Primary selection (from llm_<question>). If omitted, the server will attempt to read it from the citation row.",
+    )
+    xtra: Optional[str] = Field("", description="Additional context/instructions")
+    model: Optional[str] = Field(None, description="Model to use")
+    temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Sampling temperature")
+    max_tokens: Optional[int] = Field(2000, ge=1, le=4000, description="Max tokens for LLM response")
     
 # _update_sync moved to backend.api.core.postgres.update_jsonb_column
 # Use run_in_threadpool(update_jsonb_column, ...) where needed.
@@ -330,6 +358,266 @@ async def classify_citation(
     await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm")
 
     return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+
+
+@router.post("/{sr_id}/citations/{citation_id}/critical_classify")
+async def critical_classify_citation(
+    sr_id: str,
+    citation_id: int,
+    payload: CriticalClassifyRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Run the critical (second-opinion) screening agent and persist into llm_critical_<question>.
+
+    The critical agent is shown a reduced option set: (all options EXCEPT the primary selection) + "None of the above".
+    If it returns "None of the above", we treat it as agreement with the primary model.
+    """
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Load citation row
+    try:
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+
+    # Determine primary selection
+    primary_selected = payload.primary_selected
+    if not primary_selected:
+        try:
+            primary_col = snake_case_column(payload.question)
+            primary_val = row.get(primary_col)
+            if isinstance(primary_val, str):
+                try:
+                    primary_val = json.loads(primary_val)
+                except Exception:
+                    primary_val = {"selected": primary_val}
+            if isinstance(primary_val, dict):
+                primary_selected = primary_val.get("selected")
+        except Exception:
+            primary_selected = None
+    if not primary_selected or not isinstance(primary_selected, str) or not primary_selected.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="primary_selected is required (or must exist in llm_<question>)")
+    primary_selected = primary_selected.strip()
+
+    # Reduced option set: remove primary selection + add None of the above
+    reduced: List[str] = [opt for opt in (payload.options or []) if str(opt).strip() and str(opt).strip() != primary_selected]
+    reduced.append("None of the above")
+
+    # Build or use provided citation text
+    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(row, payload.include_columns)
+
+    # Ensure LLM client is available
+    if not azure_openai_client.is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Azure OpenAI client is not configured on the server")
+
+    options_listed = "\n".join([f"{i}. {opt}" for i, opt in enumerate(reduced)])
+
+    # SR-level extra instructions for critical agent (optional)
+    sr_cfg = (sr.get("agentic_config") or {}) if isinstance(sr, dict) else {}
+    step_cfg = sr_cfg.get((payload.screening_step or "").lower()) if isinstance(sr_cfg, dict) else None
+    critical_xtra = ""
+    if isinstance(step_cfg, dict):
+        critical_xtra = str(step_cfg.get("critical_extra_instructions") or "")
+
+    xtra = "\n".join([s for s in [payload.xtra or "", critical_xtra] if str(s).strip()]).strip()
+
+    if (payload.screening_step or "").lower() == "l2":
+        fulltext = row.get("fulltext") or ""
+
+        # Tables/Figures context
+        tables_md_lines: List[str] = []
+        figures_lines: List[str] = []
+        images: List[Tuple[bytes, str]] = []
+
+        ft_tables = row.get("fulltext_tables")
+        if isinstance(ft_tables, str):
+            try:
+                ft_tables = json.loads(ft_tables)
+            except Exception:
+                ft_tables = None
+        if isinstance(ft_tables, list):
+            for item in ft_tables:
+                if not isinstance(item, dict):
+                    continue
+                idx = item.get("index")
+                blob_addr = item.get("blob_address")
+                caption = item.get("caption")
+                if not idx or not blob_addr:
+                    continue
+                try:
+                    md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
+                except Exception:
+                    continue
+                md_txt = md_bytes.decode("utf-8", errors="replace")
+                header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
+                tables_md_lines.extend([header, md_txt, ""])
+
+        ft_figs = row.get("fulltext_figures")
+        if isinstance(ft_figs, str):
+            try:
+                ft_figs = json.loads(ft_figs)
+            except Exception:
+                ft_figs = None
+        if isinstance(ft_figs, list):
+            for item in ft_figs:
+                if not isinstance(item, dict):
+                    continue
+                idx = item.get("index")
+                blob_addr = item.get("blob_address")
+                caption = item.get("caption")
+                if not idx or not blob_addr:
+                    continue
+                figures_lines.append(f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})")
+                try:
+                    img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
+                    if img_bytes:
+                        images.append((img_bytes, "image/png"))
+                except Exception:
+                    continue
+
+        prompt = PROMPT_CRITICAL_JSON_TEMPLATE_FULLTEXT.format(
+            question=payload.question,
+            primary_selected=primary_selected,
+            options=options_listed,
+            xtra=xtra,
+            fulltext=fulltext or citation_text,
+            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
+            figures="\n".join(figures_lines) if figures_lines else "(none)",
+        )
+
+        if images:
+            llm_response = await azure_openai_client.multimodal_chat(
+                user_text=prompt,
+                images=images,
+                system_prompt=None,
+                model=payload.model,
+                max_tokens=payload.max_tokens or 2000,
+                temperature=payload.temperature or 0.0,
+            )
+        else:
+            llm_response = await azure_openai_client.simple_chat(
+                user_message=prompt,
+                system_prompt=None,
+                model=payload.model,
+                max_tokens=payload.max_tokens or 2000,
+                temperature=payload.temperature or 0.0,
+            )
+    else:
+        prompt = PROMPT_CRITICAL_JSON_TEMPLATE.format(
+            question=payload.question,
+            primary_selected=primary_selected,
+            cit=citation_text,
+            options=options_listed,
+            xtra=xtra,
+        )
+        llm_response = await azure_openai_client.simple_chat(
+            user_message=prompt,
+            system_prompt=None,
+            model=payload.model,
+            max_tokens=payload.max_tokens or 2000,
+            temperature=payload.temperature or 0.0,
+        )
+
+    # Parse JSON
+    try:
+        parsed = json.loads(llm_response)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response was not valid JSON: {llm_response[:1000]}")
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response JSON was not an object: {str(type(parsed))}")
+
+    if "selected" not in parsed:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM JSON missing 'selected' key: {json.dumps(parsed)[:1000]}")
+    selected_value = parsed.get("selected")
+    if not isinstance(selected_value, str):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM 'selected' must be a string: {str(type(selected_value))}")
+
+    selected = selected_value.strip()
+    # Ensure selection is one of reduced options (case-insensitive contains match fallback)
+    resolved = None
+    for opt in reduced:
+        if selected == opt:
+            resolved = opt
+            break
+    if resolved is None:
+        for opt in reduced:
+            if opt.lower() in selected.lower() or selected.lower() in opt.lower():
+                resolved = opt
+                break
+    if resolved is None:
+        resolved = "None of the above"
+
+    explanation = parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or ""
+    confidence_raw = parsed.get("confidence")
+    try:
+        confidence = float(confidence_raw)
+        confidence = max(0.0, min(1.0, confidence))
+    except Exception:
+        confidence = 0.0
+
+    evidence = _normalize_int_list(parsed.get("evidence_sentences"))
+    evidence_tables = _normalize_int_list(parsed.get("evidence_tables"))
+    evidence_figures = _normalize_int_list(parsed.get("evidence_figures"))
+
+    agreement = True if resolved == "None of the above" else (resolved == primary_selected)
+    if resolved != "None of the above" and resolved != primary_selected:
+        agreement = False
+
+    critical_json = {
+        "selected": resolved,
+        "explanation": explanation,
+        "confidence": confidence,
+        "agreement": agreement,
+        "primary_selected": primary_selected,
+        "evidence_sentences": evidence,
+        "evidence_tables": evidence_tables,
+        "evidence_figures": evidence_figures,
+        "llm_raw": llm_response,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+    # Persist into llm_critical_<slug>
+    base_llm_col = snake_case_column(payload.question)
+    critical_col = base_llm_col.replace("llm_", "llm_critical_", 1)
+    critical_col = critical_col[:60]
+
+    try:
+        updated = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            critical_col,
+            critical_json,
+            table_name,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "column": critical_col,
+        "critical": critical_json,
+    }
 
 
 @router.post("/{sr_id}/citations/{citation_id}/human_classify")

@@ -50,6 +50,7 @@ class SRDBService:
                     criteria JSONB,
                     criteria_yaml TEXT,
                     criteria_parsed JSONB,
+                    agentic_config JSONB,
                     screening_db JSONB,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
@@ -57,6 +58,17 @@ class SRDBService:
             """
             cur.execute(create_table_sql)
             conn.commit()
+
+            # Backwards compatible migrations (existing deployments).
+            # If the table already existed without new columns, add them.
+            try:
+                cur.execute('ALTER TABLE systematic_reviews ADD COLUMN IF NOT EXISTS agentic_config JSONB')
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 
             logger.info("Ensured systematic_reviews table exists")
         except Exception as e:
@@ -175,6 +187,22 @@ class SRDBService:
         now = datetime.utcnow().isoformat()
         criteria_parsed = self.build_criteria_parsed(criteria_obj)
 
+        # Default agentic screening config. Stored at SR-level and used by the UI for gating.
+        agentic_config = {
+            "l1": {
+                "confidence_threshold": 0.9,
+                "require_human_if_critical_disagrees": True,
+                "critical_prompt_mode": "remove_selected_add_none_of_above",
+                "critical_extra_instructions": "",
+            },
+            "l2": {
+                "confidence_threshold": 0.9,
+                "require_human_if_critical_disagrees": True,
+                "critical_prompt_mode": "remove_selected_add_none_of_above",
+                "critical_extra_instructions": "",
+            },
+        }
+
         # Build users array with owner_email
         users_list = [owner_email] if owner_email else []
 
@@ -186,8 +214,8 @@ class SRDBService:
             insert_sql = """
                 INSERT INTO systematic_reviews 
                 (id, name, description, owner_id, owner_email, users, visible, 
-                 criteria, criteria_yaml, criteria_parsed, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 criteria, criteria_yaml, criteria_parsed, agentic_config, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             cur.execute(insert_sql, (
@@ -201,6 +229,7 @@ class SRDBService:
                 json.dumps(criteria_obj) if criteria_obj else None,
                 criteria_str,
                 json.dumps(criteria_parsed),
+                json.dumps(agentic_config),
                 now,
                 now
             ))
@@ -220,6 +249,8 @@ class SRDBService:
                 sr_doc['criteria'] = json.loads(sr_doc['criteria'])
             if sr_doc.get('criteria_parsed') and isinstance(sr_doc['criteria_parsed'], str):
                 sr_doc['criteria_parsed'] = json.loads(sr_doc['criteria_parsed'])
+            if sr_doc.get('agentic_config') and isinstance(sr_doc['agentic_config'], str):
+                sr_doc['agentic_config'] = json.loads(sr_doc['agentic_config'])
             # Convert datetime objects to ISO strings
             from datetime import datetime as dt
             if sr_doc.get('created_at') and isinstance(sr_doc['created_at'], dt):
@@ -501,6 +532,8 @@ class SRDBService:
                     doc['criteria'] = json.loads(doc['criteria'])
                 if doc.get('criteria_parsed') and isinstance(doc['criteria_parsed'], str):
                     doc['criteria_parsed'] = json.loads(doc['criteria_parsed'])
+                if doc.get('agentic_config') and isinstance(doc['agentic_config'], str):
+                    doc['agentic_config'] = json.loads(doc['agentic_config'])
                 # Convert datetime objects to ISO strings
                 from datetime import datetime as dt
                 if doc.get('created_at') and isinstance(doc['created_at'], dt):
@@ -559,6 +592,8 @@ class SRDBService:
                 doc['criteria'] = json.loads(doc['criteria'])
             if doc.get('criteria_parsed') and isinstance(doc['criteria_parsed'], str):
                 doc['criteria_parsed'] = json.loads(doc['criteria_parsed'])
+            if doc.get('agentic_config') and isinstance(doc['agentic_config'], str):
+                doc['agentic_config'] = json.loads(doc['agentic_config'])
             # Convert datetime objects to ISO strings
             from datetime import datetime as dt
             if doc.get('created_at') and isinstance(doc['created_at'], dt):
@@ -737,6 +772,98 @@ class SRDBService:
                 pass
             logger.exception(f"Failed to clear screening DB info: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear screening DB info: {e}")
+        finally:
+            if conn:
+                pass
+
+    # ----------------------------
+    # Agentic screening config
+    # ----------------------------
+    def default_agentic_config(self) -> Dict[str, Any]:
+        """Default SR-level agentic screening configuration."""
+        return {
+            "l1": {
+                "confidence_threshold": 0.9,
+                "require_human_if_critical_disagrees": True,
+                "critical_prompt_mode": "remove_selected_add_none_of_above",
+                "critical_extra_instructions": "",
+            },
+            "l2": {
+                "confidence_threshold": 0.9,
+                "require_human_if_critical_disagrees": True,
+                "critical_prompt_mode": "remove_selected_add_none_of_above",
+                "critical_extra_instructions": "",
+            },
+        }
+
+    def get_agentic_config(self, sr_id: str, requester_id: str) -> Dict[str, Any]:
+        """Return SR agentic_config. If missing, return defaults.
+
+        Permissions: requester must be SR member or owner.
+        """
+        has_perm = self.user_has_sr_permission(sr_id, requester_id)
+        if not has_perm:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this systematic review")
+
+        sr = self.get_systematic_review(sr_id)
+        if not sr or not sr.get("visible", True):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
+
+        cfg = sr.get("agentic_config")
+        if not cfg or not isinstance(cfg, dict):
+            return self.default_agentic_config()
+
+        # Shallow merge with defaults so newly added keys appear.
+        d = self.default_agentic_config()
+        for k in ("l1", "l2"):
+            if isinstance(cfg.get(k), dict):
+                d[k].update(cfg[k])
+        return d
+
+    def update_agentic_config(self, sr_id: str, agentic_config: Dict[str, Any], requester_id: str) -> Dict[str, Any]:
+        """Update SR agentic_config (JSONB) and return updated SR doc."""
+        sr = self.get_systematic_review(sr_id)
+        if not sr or not sr.get("visible", True):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
+
+        has_perm = self.user_has_sr_permission(sr_id, requester_id)
+        if not has_perm:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this systematic review")
+
+        cfg_in = agentic_config if isinstance(agentic_config, dict) else {}
+        cfg = self.default_agentic_config()
+        for k in ("l1", "l2"):
+            if isinstance(cfg_in.get(k), dict):
+                cfg[k].update(cfg_in[k])
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            updated_at = datetime.utcnow().isoformat()
+            cur.execute(
+                "UPDATE systematic_reviews SET agentic_config = %s, updated_at = %s WHERE id = %s",
+                (json.dumps(cfg), updated_at, sr_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found during update")
+            conn.commit()
+            return self.get_systematic_review(sr_id)
+        except HTTPException:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            logger.exception(f"Failed to update agentic_config: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update agentic config: {e}")
         finally:
             if conn:
                 pass

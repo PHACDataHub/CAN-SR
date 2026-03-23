@@ -54,10 +54,27 @@ function humanScreenColumn(name: string) {
   return base.replace(/^llm_/, 'human_')
 }
 
+/**
+ * Critical screening column for a question.
+ * Example: question -> llm_question, llm_critical_question
+ */
+function criticalScreenColumn(name: string) {
+  const base = snakeCaseColumn(name)
+  return base.replace(/^llm_/, 'llm_critical_')
+}
+
 /* Types for local clarity */
 type CriteriaData = {
   questions: string[]
   possible_answers: string[][]
+}
+
+type AgenticConfig = {
+  l1?: {
+    confidence_threshold?: number
+    require_human_if_critical_disagrees?: boolean
+  }
+  l2?: any
 }
 
 /* Main page component */
@@ -91,6 +108,13 @@ export default function CanSrL1ScreenPage() {
   // Collapsible open state for LLM panels
   const [panelOpen, setPanelOpen] = useState<Record<number, boolean>>({})
 
+  // Critical agent panel state
+  const [criticalPanels, setCriticalPanels] = useState<Record<number, any>>({})
+  const [criticalPanelOpen, setCriticalPanelOpen] = useState<Record<number, boolean>>({})
+
+  // SR-level agentic gating config
+  const [agenticConfig, setAgenticConfig] = useState<AgenticConfig | null>(null)
+
   useEffect(() => {
     if (!srId || !citationId) {
       router.replace('/can-sr')
@@ -119,6 +143,29 @@ export default function CanSrL1ScreenPage() {
       }
     }
     loadIds()
+  }, [srId])
+
+  // Load SR agentic config (thresholds, etc.)
+  useEffect(() => {
+    if (!srId) return
+    const loadCfg = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setAgenticConfig((data as any)?.agentic_config ?? null)
+        } else {
+          setAgenticConfig(null)
+        }
+      } catch {
+        setAgenticConfig(null)
+      }
+    }
+    loadCfg()
   }, [srId])
 
   // Load citation row
@@ -221,13 +268,17 @@ export default function CanSrL1ScreenPage() {
     const newSelections: Record<number, string> = {}
     const newAiPanels: Record<number, any> = {}
     const newPanelOpen: Record<number, boolean> = {}
+    const newCriticalPanels: Record<number, any> = {}
+    const newCriticalOpen: Record<number, boolean> = {}
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
       const humanCol = humanScreenColumn(q)
+      const criticalCol = criticalScreenColumn(q)
 
       const humanRaw = (citation as any)?.[humanCol]
       const llmRaw = (citation as any)?.[llmCol]
+      const critRaw = (citation as any)?.[criticalCol]
 
       const parseMaybeJson = (v: any) => {
         if (v === undefined || v === null) return null
@@ -243,6 +294,7 @@ export default function CanSrL1ScreenPage() {
 
       const humanParsed = parseMaybeJson(humanRaw)
       const llmParsed = parseMaybeJson(llmRaw)
+      const critParsed = parseMaybeJson(critRaw)
 
       // 1) Prefer human_* for dropdown
       if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
@@ -260,6 +312,15 @@ export default function CanSrL1ScreenPage() {
         newPanelOpen[idx] = false
       }
 
+      // 2b) Populate critical panel from llm_critical_* when available
+      if (critParsed && typeof critParsed === 'object') {
+        newCriticalPanels[idx] = critParsed
+        newCriticalOpen[idx] = false
+      } else if (typeof critParsed === 'string' && critParsed) {
+        newCriticalPanels[idx] = { selected: critParsed }
+        newCriticalOpen[idx] = false
+      }
+
       // 3) If no human selection exists, allow llm_* to prefill the dropdown (UI-only).
       const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
       if (!hasSelection) {
@@ -274,6 +335,8 @@ export default function CanSrL1ScreenPage() {
     setSelections((prev) => ({ ...newSelections, ...prev }))
     setAiPanels((prev) => ({ ...newAiPanels, ...prev }))
     setPanelOpen((prev) => ({ ...newPanelOpen, ...prev }))
+    setCriticalPanels((prev) => ({ ...newCriticalPanels, ...prev }))
+    setCriticalPanelOpen((prev) => ({ ...newCriticalOpen, ...prev }))
   }, [citation, criteriaData])
 
   // Handler: change human selection
@@ -389,6 +452,64 @@ export default function CanSrL1ScreenPage() {
     }
   }
 
+  async function criticalClassifyQuestion(questionIndex: number) {
+    if (!srId || !citationId || !criteriaData) return
+    const question = criteriaData.questions[questionIndex]
+    const options = criteriaData.possible_answers[questionIndex] || []
+
+    // Attempt to read primary selected from current AI panel
+    const primarySelected = (aiPanels?.[questionIndex] as any)?.selected
+
+    try {
+      const headers = {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      }
+      const bodyPayload: any = {
+        question,
+        options,
+        include_columns: ['title', 'abstract'],
+        screening_step: 'l1',
+        primary_selected: typeof primarySelected === 'string' ? primarySelected : undefined,
+        model: selectedModel,
+        temperature: 0.0,
+        max_tokens: 1200,
+      }
+
+      const res = await fetch(
+        `/api/can-sr/screen?action=critical_classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+          citationId,
+        )}`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(bodyPayload),
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      const critical = (data as any)?.critical ?? (data as any)?.classification ?? data
+      if (critical && typeof critical === 'object') {
+        setCriticalPanels((prev) => ({ ...prev, [questionIndex]: critical }))
+        setCriticalPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
+      }
+
+      // Refresh citation row so column-backed critical data is present
+      await fetchCitationById(citationId)
+    } catch (err) {
+      console.error('Critical classify API error', err)
+    }
+  }
+
+  function needsHumanReview(questionIndex: number) {
+    const threshold = Number(agenticConfig?.l1?.confidence_threshold ?? 0.9)
+    const primary = aiPanels?.[questionIndex]
+    const crit = criticalPanels?.[questionIndex]
+    const primaryConfidence = Number((primary as any)?.confidence)
+    const lowConf = Number.isFinite(primaryConfidence) ? primaryConfidence < threshold : true
+    const disagrees = crit && (crit as any)?.agreement === false
+    return Boolean(lowConf || disagrees)
+  }
+
   // Render helpers
   const workspace = useMemo(() => {
     if (error)
@@ -469,6 +590,8 @@ export default function CanSrL1ScreenPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
+                    const critData = criticalPanels[idx]
+
                     return (
                       <div
                         key={idx}
@@ -505,6 +628,27 @@ export default function CanSrL1ScreenPage() {
                                 AI <Wand2 className="h-3 w-3" />
                               </span>
                             </button>
+
+                            <button
+                              onClick={() => criticalClassifyQuestion(idx)}
+                              className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                              title="Run critical second-opinion agent"
+                            >
+                              {dict.screening.critical ?? 'Critical'}
+                            </button>
+
+                            <span
+                              className={
+                                'text-[10px] font-medium ' +
+                                (needsHumanReview(idx)
+                                  ? 'text-amber-700'
+                                  : 'text-emerald-700')
+                              }
+                            >
+                              {needsHumanReview(idx)
+                                ? (dict.screening.needsHumanReview ?? 'Needs human review')
+                                : (dict.screening.autoPass ?? 'Auto-pass')}
+                            </span>
 
                             {saveStatus[idx] === 'saving' ? (
                               <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
@@ -560,6 +704,65 @@ export default function CanSrL1ScreenPage() {
                                   <div className="mt-1 text-sm text-gray-700">
                                     {aiData.explanation ??
                                       aiData.llm_raw ??
+                                      dict.screening.noExplanation}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {/* Critical panel: collapsible */}
+                        {critData ? (
+                          <div className="mt-3">
+                            <div
+                              onClick={() =>
+                                setCriticalPanelOpen((prev) => ({
+                                  ...prev,
+                                  [idx]: !Boolean(prev[idx]),
+                                }))
+                              }
+                              style={{ cursor: 'pointer' }}
+                              className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
+                            >
+                              <div className="text-sm">
+                                {(dict.screening.criticalSuggests ?? 'Critical suggests')}{' '}
+                                <span className="ml-1 text-sm font-medium text-gray-900">
+                                  {critData.selected ?? '(none)'}
+                                </span>
+                                {typeof (critData as any).agreement === 'boolean' ? (
+                                  <span
+                                    className={
+                                      'ml-2 text-xs ' +
+                                      ((critData as any).agreement
+                                        ? 'text-emerald-700'
+                                        : 'text-amber-700')
+                                    }
+                                  >
+                                    {(critData as any).agreement
+                                      ? '(agrees)'
+                                      : '(disagrees)'}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {criticalPanelOpen[idx]
+                                  ? dict.screening.minimize
+                                  : dict.screening.maximize}
+                              </div>
+                            </div>
+
+                            {criticalPanelOpen[idx] ? (
+                              <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
+                                <div className="mt-2">
+                                  <strong>{dict.screening.confidence}</strong>{' '}
+                                  {String((critData as any).confidence ?? '')}
+                                </div>
+                                <div className="mt-2">
+                                  <strong>{dict.screening.explanation}</strong>
+                                  <div className="mt-1 text-sm text-gray-700">
+                                    {(critData as any).explanation ??
+                                      (critData as any).llm_raw ??
                                       dict.screening.noExplanation}
                                   </div>
                                 </div>

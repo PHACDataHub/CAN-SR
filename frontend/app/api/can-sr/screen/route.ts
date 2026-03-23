@@ -7,10 +7,12 @@ import { BACKEND_URL } from '@/lib/config'
  * Routes handled:
  * - POST /api/can-sr/screen?action=classify&sr_id=<sr_id>&citation_id=<id>
  * - POST /api/can-sr/screen?action=human_classify&sr_id=<sr_id>&citation_id=<id>
+ * - POST /api/can-sr/screen?action=critical_classify&sr_id=<sr_id>&citation_id=<id>
  *
  * Forwards request to backend:
  * - POST {BACKEND_URL}/api/screen/{sr_id}/citations/{citation_id}/classify
  * - POST {BACKEND_URL}/api/screen/{sr_id}/citations/{citation_id}/human_classify
+ * - POST {BACKEND_URL}/api/screen/{sr_id}/citations/{citation_id}/critical_classify
  *
  * Authentication: forwards Authorization header if present, otherwise forwards cookie header.
  */
@@ -20,7 +22,7 @@ export async function POST(request: NextRequest) {
     const params = request.nextUrl.searchParams
     const srId = params.get('sr_id')
     const citationId = params.get('citation_id')
-    const action = params.get('action') // expected 'classify' or 'human_classify'
+    const action = params.get('action') // expected 'classify' | 'human_classify' | 'critical_classify'
 
     if (!srId || !citationId || !action) {
       return NextResponse.json(
@@ -29,9 +31,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (action !== 'classify' && action !== 'human_classify') {
+    if (
+      action !== 'classify' &&
+      action !== 'human_classify' &&
+      action !== 'critical_classify'
+    ) {
       return NextResponse.json(
-        { error: "action must be 'classify' or 'human_classify'" },
+        { error: "action must be 'classify', 'human_classify', or 'critical_classify'" },
         { status: 400 },
       )
     }
