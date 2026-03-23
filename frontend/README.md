@@ -22,6 +22,21 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Linting & Formatting
+
+This frontend uses **ESLint (flat config)** via `eslint.config.mjs`.
+
+```bash
+# Lint the source code (does not lint generated .next output)
+npm run lint
+
+# Auto-fix (when possible)
+npm run lint:fix
+
+# Format
+npm run format
+```
+
 ## Built With
 
 - [Next.js](https://nextjs.org/) - React Framework

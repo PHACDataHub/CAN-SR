@@ -194,6 +194,21 @@ docker compose up -d grobid-service sr-mongodb-service cit-pgdb-service
 uvicorn main:app --reload --port 8000
 ```
 
+### Linting (Python)
+
+We use **pylint** for backend linting.
+
+```bash
+cd backend
+
+# If you're using a virtualenv/conda env, activate it first.
+# Install deps (includes pylint)
+pip install -r requirements.txt
+
+# Run pylint on the backend package
+pylint api
+```
+
 
 
 ## Deployment Options
@@ -456,3 +471,51 @@ For deployment help and troubleshooting:
 ## License
 
 See LICENSE file in repository root for details.
+
+
+## Citation uploads (CSV and RIS)
+
+The screening database (Postgres table) can be created by uploading citations.
+
+### Endpoint
+
+- `POST /api/cite/{sr_id}/upload-citations`
+  - multipart/form-data with a `file` field
+  - accepts **.csv**, **.ris**, or RIS exported as **.txt**
+
+There is no separate CSV-only upload endpoint; use the single endpoint above.
+
+### How columns are determined
+
+#### CSV
+
+For CSV uploads, the **CSV header row becomes the screening table columns**.
+
+#### RIS
+
+For RIS uploads, the screening table columns come from the SR configuration
+`include` list (L1 include columns). The backend parses RIS using `rispy` and
+maps RIS fields into the configured include column names.
+
+This means:
+- Your criteria config must have `include:` entries that match the column names
+  you want to appear in the screening table.
+- Only those include columns will be created/populated for RIS uploads.
+
+### Default RIS mapping (include column name → rispy key)
+
+The importer currently supports these common include names:
+
+| Include column | rispy key(s) (fallback order) |
+|---|---|
+| `Title` | `title`, `primary_title`, `short_title` |
+| `Abstract` | `abstract`, `notes_abstract`, `notes` |
+| `Keywords` | `keywords` (joined) |
+| `Journal` | `secondary_title`, `journal_name`, `alternate_title1/2/3` |
+| `Type` | `type_of_reference` |
+| `Type of Work` | `type_of_work` |
+| `Notes` | `notes` |
+| `Year` | `year` (or extracted from `publication_year`/`date`) |
+
+If you put **rispy keys directly** in `include:` (e.g. `doi`, `authors`), the
+importer will also attempt to copy them through as-is.

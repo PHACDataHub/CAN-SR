@@ -22,6 +22,11 @@ import re
 from datetime import datetime
 import hashlib
 
+try:
+    import rispy  # type: ignore
+except Exception:  # pragma: no cover
+    rispy = None
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
@@ -80,6 +85,206 @@ class UploadResult(BaseModel):
     message: str
     created_at: str
 
+
+def _sniff_citations_format(filename: str, raw_bytes: bytes) -> str:
+    """Detect citations upload format.
+
+    Returns:
+      - "csv" for CSV
+      - "ris" for RIS
+
+    Rules:
+      - .csv => csv
+      - .ris/.txt => ris
+      - Otherwise sniff content for RIS markers
+    """
+
+    name = (filename or "").lower()
+    if name.endswith(".csv"):
+        return "csv"
+    if name.endswith(".ris") or name.endswith(".txt"):
+        return "ris"
+
+    try:
+        text = raw_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        text = ""
+
+    # Minimal RIS sniffing: many RIS files contain TY  - ... and ER  -
+    if "ty  -" in text.lower() and "er  -" in text.lower():
+        return "ris"
+    return "csv"
+
+
+def _join_list(v: Any, sep: str = "; ") -> str:
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return sep.join([str(x) for x in v if x is not None and str(x).strip() != ""]).strip()
+    return str(v)
+
+
+def _extract_year(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v)
+    m = re.search(r"(19|20)\d{2}", s)
+    return m.group(0) if m else ""
+
+
+def _ris_value_for_include(include_col: str, entry: Dict[str, Any]) -> Any:
+    """Map a requested include column name (human header) to rispy normalized keys."""
+
+    key = (include_col or "").strip().lower()
+
+    # Common include names in our configs
+    if key == "title":
+        return entry.get("title") or entry.get("primary_title") or entry.get("short_title")
+    if key == "abstract":
+        return entry.get("abstract") or entry.get("notes_abstract") or _join_list(entry.get("notes"), "\n")
+    if key == "keywords":
+        return _join_list(entry.get("keywords"))
+    if key == "journal":
+        return (
+            entry.get("secondary_title")
+            or entry.get("journal_name")
+            or entry.get("alternate_title1")
+            or entry.get("alternate_title2")
+            or entry.get("alternate_title3")
+        )
+    if key == "type":
+        return entry.get("type_of_reference")
+    if key in ("type of work", "type_of_work"):
+        return entry.get("type_of_work")
+    if key == "notes":
+        return _join_list(entry.get("notes"), "\n")
+    if key == "year":
+        return (
+            _extract_year(entry.get("year"))
+            or _extract_year(entry.get("publication_year"))
+            or _extract_year(entry.get("date"))
+        )
+
+    # If someone configures include columns to rispy keys directly, support that too.
+    # Example: include: ["authors", "doi"]
+    v = entry.get(key)
+    if isinstance(v, list):
+        return _join_list(v)
+    return v
+
+
+def _parse_citations_csv_bytes(raw_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except Exception:
+        text = raw_bytes.decode("utf-8", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+    cols = reader.fieldnames or []
+    return rows, cols
+
+
+def _parse_citations_ris_bytes(raw_bytes: bytes, include_columns: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    if not rispy:
+        raise RuntimeError("RIS upload requested but rispy is not installed")
+
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except Exception:
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+    entries = rispy.load(io.StringIO(text))
+    if not entries:
+        return [], include_columns
+
+    normalized_rows: list[dict[str, Any]] = []
+    for e in entries:
+        row: dict[str, Any] = {}
+        for col in include_columns:
+            try:
+                row[col] = _ris_value_for_include(col, e)
+            except Exception:
+                row[col] = None
+        normalized_rows.append(row)
+
+    return normalized_rows, include_columns
+
+
+def _default_ris_columns() -> list[str]:
+    """Canonical columns we create when ingesting RIS before criteria exists."""
+
+    return [
+        "Title",
+        "Abstract",
+        "Keywords",
+        "Journal",
+        "Year",
+        "Authors",
+        "DOI",
+        "Type",
+        "URL",
+    ]
+
+
+def _ris_value_for_canonical(col: str, entry: Dict[str, Any]) -> Any:
+    """Map canonical RIS columns to rispy normalized keys."""
+
+    key = (col or "").strip().lower()
+    if key == "title":
+        return entry.get("title") or entry.get("primary_title") or entry.get("short_title")
+    if key == "abstract":
+        return entry.get("abstract") or entry.get("notes_abstract") or _join_list(entry.get("notes"), "\n")
+    if key == "keywords":
+        return _join_list(entry.get("keywords"))
+    if key == "journal":
+        return entry.get("secondary_title") or entry.get("journal_name")
+    if key == "year":
+        return _extract_year(entry.get("year") or entry.get("publication_year") or entry.get("date"))
+    if key == "authors":
+        return _join_list(entry.get("authors"))
+    if key == "doi":
+        return entry.get("doi")
+    if key == "type":
+        return entry.get("type_of_reference")
+    if key == "url":
+        return _join_list(entry.get("urls"))
+
+    # Fallback (shouldn't happen for our canonical list)
+    v = entry.get(key)
+    return _join_list(v) if isinstance(v, list) else v
+
+
+def _parse_citations_ris_bytes_auto(raw_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse RIS into a canonical table shape.
+
+    This is used when RIS is uploaded before SR criteria/config exists.
+    """
+
+    if not rispy:
+        raise RuntimeError("RIS upload requested but rispy is not installed")
+
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except Exception:
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+    entries = rispy.load(io.StringIO(text))
+    cols = _default_ris_columns()
+    if not entries:
+        return [], cols
+
+    rows: list[dict[str, Any]] = []
+    for e in entries:
+        row: dict[str, Any] = {}
+        for c in cols:
+            try:
+                row[c] = _ris_value_for_canonical(c, e)
+            except Exception:
+                row[c] = None
+        rows.append(row)
+
+    return rows, cols
+
 def _load_include_columns_from_criteria(sr_doc: Optional[Dict[str, Any]] = None) -> List[str]:
     # Delegate to consolidated postgres service
     try:
@@ -96,56 +301,65 @@ def _create_table_and_insert_sync(table_name: str, columns: List[str], rows: Lis
     return cits_dp_service.create_table_and_insert_sync(table_name, columns, rows)
 
 
-@router.post("/{sr_id}/upload-csv", response_model=UploadResult)
-async def upload_screening_csv(
+async def _upload_screening_citations_impl(
     sr_id: str,
-    file: UploadFile = File(...),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-):
-    """
-    Upload a CSV of citations for title/abstract screening and create a dedicated Postgres table.
-
-    Requirements:
-    - Postgres must be configured via POSTGRES_MODE and POSTGRES_* env vars.
-    - The SR must exist and the user must be a member of the SR (or owner).
-    """
+    file: UploadFile,
+    current_user: Dict[str, Any],
+    *,
+    force_format: Optional[str] = None,
+) -> UploadResult:
+    """Shared implementation for citations upload (CSV or RIS)."""
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    # Check admin config (use centralized settings)
+    # Check admin config
     if not _is_postgres_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Postgres not configured. Set POSTGRES_MODE and POSTGRES_* env vars.",
         )
 
-    # Read CSV content
-    include_columns = None
+    if not file or not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is required")
+
+    # Read bytes once (UploadFile stream is not reliably seekable after read)
     try:
-        # Reset cursor for safety
-        file.file.seek(0)
-
-        # Create reader for dict (TextIOWrapper for decoding from binary to text)
-        reader = csv.DictReader(io.TextIOWrapper(file.file, encoding="utf-8"))
-
-        normalized_rows = list(reader)
-        include_columns = reader.fieldnames
+        raw = await file.read()
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to parse CSV: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read upload: {e}")
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    # Use all CSV headers as the columns for the screening DB (preserve original CSV headers)
+    fmt = (force_format or _sniff_citations_format(file.filename, raw)).lower()
+    if fmt not in ("csv", "ris"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported citations format: {fmt}")
+
+    # Parse into normalized rows + include columns
+    try:
+        if fmt == "csv":
+            normalized_rows, include_columns = _parse_citations_csv_bytes(raw)
+        else:
+            # RIS is often uploaded before criteria config exists; derive columns directly from RIS.
+            normalized_rows, include_columns = _parse_citations_ris_bytes_auto(raw)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to parse {fmt.upper()}: {e}")
+
     if len(include_columns) == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No columns found to create screening table")
 
     # Build a unique table name for this upload
     safe_sr = re.sub(r"[^0-9a-zA-Z_]", "_", sr_id)
     timestamp = int(time.time())
-    # keep within 63 chars: prefix + '_' + ts + '_citations'
     table_name = f"sr_{safe_sr}_{timestamp}_cit"
 
     # If replacing, best-effort drop previous table (if any)
@@ -154,7 +368,6 @@ async def upload_screening_csv(
         if old:
             await run_in_threadpool(cits_dp_service.drop_table, old)
     except Exception:
-        # best-effort only
         pass
 
     # Create table and insert rows in threadpool
@@ -175,15 +388,16 @@ async def upload_screening_csv(
             }
         }
 
-        # Update SR document with screening DB info using PostgreSQL
         await run_in_threadpool(
             srdb_service.update_screening_db_info,
             sr_id,
-            screening_info["screening_db"]
+            screening_info["screening_db"],
         )
     except Exception as e:
-        # DB succeeded but saving metadata failed - surface warning but allow API to succeed with caution
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Table created ({table_name}) but failed to update Systematic Review entry: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Table created ({table_name}) but failed to update Systematic Review entry: {e}",
+        )
 
     return UploadResult(
         sr_id=sr_id,
@@ -192,6 +406,28 @@ async def upload_screening_csv(
         message=f"Created screening table '{table_name}' and inserted {inserted} rows",
         created_at=datetime.utcnow().isoformat(),
     )
+
+
+@router.post("/{sr_id}/upload-citations", response_model=UploadResult)
+async def upload_screening_citations(
+    sr_id: str,
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Upload citations for screening.
+
+    Accepts:
+      - CSV (.csv)
+      - RIS (.ris) or RIS as .txt
+
+    The endpoint auto-detects format and ingests accordingly.
+
+    Notes:
+      - CSV uploads: table columns are taken from the CSV headers.
+      - RIS uploads: table columns are derived from the RIS content (canonical fields).
+    """
+
+    return await _upload_screening_citations_impl(sr_id, file, current_user)
 
 
 # Helper to list citation ids - delegated to core.postgres.list_citation_ids
