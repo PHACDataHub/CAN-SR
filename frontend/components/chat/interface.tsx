@@ -280,7 +280,6 @@ export function ChatInterface({
             isOpen={isCitationSidebarOpen}
             onClose={handleCloseCitationSidebar}
             sources={citationSources}
-            messageId={citationMessageId}
           />
         </div>
       )}

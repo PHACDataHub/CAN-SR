@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -21,6 +23,12 @@ class UserDatabaseService:
     def __init__(self):
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+        # Very small in-memory cache to avoid reading user_registry.json from storage
+        # on every authenticated request (e.g., polling endpoints).
+        self._registry_cache: Optional[Dict[str, Any]] = None
+        self._registry_cache_ts: float = 0.0
+        self._registry_cache_ttl_s: float = 30.0
+        self._registry_cache_lock = asyncio.Lock()
     @staticmethod
     def _serialize_dates(row: Dict[str, Any]) -> Dict[str, Any]:
         for field in ("created_at", "updated_at", "last_login"):
@@ -38,6 +46,41 @@ class UserDatabaseService:
     # Table initialisation (called from FastAPI startup event)
     # ------------------------------------------------------------------
 
+    async def _load_user_registry(self) -> Dict[str, Any]:
+        """Load the user registry from storage."""
+        async with self._registry_cache_lock:
+            now = asyncio.get_running_loop().time()
+            if self._registry_cache is not None and (now - self._registry_cache_ts) < self._registry_cache_ttl_s:
+                return self._registry_cache
+
+            try:
+                content, _filename = await self.storage.get_bytes_by_path(self._registry_path())
+                reg = json.loads(content.decode("utf-8"))
+            except Exception:
+                # Create empty registry if it doesn't exist / cannot be read
+                reg = {"users": {}, "email_index": {}}
+
+            self._registry_cache = reg
+            self._registry_cache_ts = now
+            return reg
+
+    async def _save_user_registry(self, registry: Dict[str, Any]) -> bool:
+        """Save the user registry to storage."""
+        try:
+            payload = json.dumps(registry, indent=2).encode("utf-8")
+            ok = await self.storage.put_bytes_by_path(
+                self._registry_path(),
+                payload,
+                content_type="application/json",
+            )
+            # Best-effort: update cache to reflect new registry
+            if ok:
+                async with self._registry_cache_lock:
+                    self._registry_cache = registry
+                    self._registry_cache_ts = asyncio.get_running_loop().time()
+            return ok
+        except Exception:
+            return False
     async def ensure_table_exists(self) -> None:
         """Create the users table if it does not already exist."""
         try:

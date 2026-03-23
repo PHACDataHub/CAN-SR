@@ -28,7 +28,13 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install -r requirements.txt --no-cache-dir
+# Work around rare base-image issues where pip's vendored modules have
+# corrupted/invalid precompiled bytecode (*.pyc) leading to:
+#   ValueError: unmarshallable object
+# Deleting pip's .pyc forces a clean import of the source modules.
+RUN find /usr/local/lib/python3.11/site-packages/pip -name "*.pyc" -delete \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -r requirements.txt --no-cache-dir
 
 # Copy application code
 COPY . .
