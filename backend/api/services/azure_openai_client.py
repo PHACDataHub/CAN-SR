@@ -379,6 +379,19 @@ class AzureOpenAIClient:
             if stream:
                 return response
             else:
+                usage = response.usage
+                completion_tokens = usage.completion_tokens if usage else 0
+                prompt_tokens = usage.prompt_tokens if usage else 0
+                total_tokens = usage.total_tokens if usage else 0
+
+                logger.info(
+                    "Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                    model,
+                    deployment,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                )
                 return {
                     "choices": [
                         {
@@ -390,15 +403,9 @@ class AzureOpenAIClient:
                         }
                     ],
                     "usage": {
-                        "completion_tokens": (
-                            response.usage.completion_tokens if response.usage else 0
-                        ),
-                        "prompt_tokens": (
-                            response.usage.prompt_tokens if response.usage else 0
-                        ),
-                        "total_tokens": (
-                            response.usage.total_tokens if response.usage else 0
-                        ),
+                        "completion_tokens": completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
                     },
                 }
 
