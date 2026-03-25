@@ -33,6 +33,15 @@ import yaml
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
+# Async client exists in modern openai SDKs (v1+ / v2+). If unavailable, we
+# will safely offload sync calls to a threadpool to avoid blocking the event loop.
+try:  # pragma: no cover
+    from openai import AsyncAzureOpenAI  # type: ignore
+except Exception:  # pragma: no cover
+    AsyncAzureOpenAI = None  # type: ignore
+
+from fastapi.concurrency import run_in_threadpool
+
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -90,6 +99,7 @@ class AzureOpenAIClient:
 
         # Cache official clients by (endpoint, api_version, auth_type)
         self._official_clients: Dict[Tuple[str, str, str], AzureOpenAI] = {}
+        self._official_async_clients: Dict[Tuple[str, str, str], Any] = {}
 
 
     # ---------------------------------------------------------------------
@@ -173,13 +183,60 @@ class AzureOpenAIClient:
         return desired
 
     def _get_model_config(self, model: str) -> Dict[str, str]:
-        """Get configuration for a specific model"""
+        """Get configuration for a specific model.
+
+        IMPORTANT:
+        - `model` is the *UI/display key* in models.yaml (e.g. "GPT-5-Mini").
+        - Some callers historically pass the *deployment* name (e.g. "gpt-5-mini").
+        - We normalize to support both without silently falling back.
+        """
+
+        # Exact match on display key
         if model in self.model_configs:
             return self.model_configs[model]
+
+        desired = (model or "").strip()
+        desired_l = desired.lower()
+
+        # Case-insensitive match on display key
+        for k, cfg in self.model_configs.items():
+            if str(k).lower() == desired_l and desired_l:
+                return cfg
+
+        # Match by deployment name (common when UI stores deployment id)
+        for _k, cfg in self.model_configs.items():
+            if str(cfg.get("deployment") or "").lower() == desired_l and desired_l:
+                return cfg
+
         # fallback to first configured model
         for _, cfg in self.model_configs.items():
             return cfg
         raise ValueError("No Azure OpenAI models are configured")
+
+    def normalize_model_key(self, model: Optional[str]) -> Optional[str]:
+        """Return the canonical models.yaml display key for a given input.
+
+        Accepts either:
+        - display key (e.g. "GPT-5-Mini")
+        - deployment id (e.g. "gpt-5-mini")
+        """
+        if not model:
+            return None
+        desired = str(model).strip()
+        desired_l = desired.lower()
+
+        if desired in self.model_configs:
+            return desired
+
+        for k in self.model_configs.keys():
+            if str(k).lower() == desired_l:
+                return str(k)
+
+        for k, cfg in self.model_configs.items():
+            if str(cfg.get("deployment") or "").lower() == desired_l:
+                return str(k)
+
+        return desired
 
     def _get_official_client(self, model: str) -> AzureOpenAI:
         """Get official Azure OpenAI client instance"""
@@ -209,6 +266,45 @@ class AzureOpenAIClient:
             self._official_clients[cache_key] = AzureOpenAI(**azure_openai_kwargs)
 
         return self._official_clients[cache_key]
+
+    def _get_official_async_client(self, model: str):
+        """Get official *async* Azure OpenAI client instance.
+
+        Falls back to raising if the installed openai SDK doesn't provide
+        AsyncAzureOpenAI.
+        """
+
+        if AsyncAzureOpenAI is None:
+            raise RuntimeError(
+                "AsyncAzureOpenAI is not available in this environment. "
+                "Upgrade the 'openai' package or use threadpool fallback."
+            )
+
+        config = self._get_model_config(model)
+        endpoint = config.get("endpoint")
+        api_version = config.get("api_version")
+        if not endpoint or not api_version:
+            raise ValueError(f"Azure OpenAI endpoint/api_version not configured for model {model}")
+
+        cache_key = (endpoint, api_version, self._auth_type)
+        if cache_key not in self._official_async_clients:
+            azure_openai_kwargs: Dict[str, Any] = {
+                "azure_endpoint": endpoint,
+                "api_version": api_version,
+            }
+
+            if self._auth_type == "entra":
+                if not self._token_provider:
+                    raise ValueError(self._config_error or "Azure AD token provider not configured")
+                azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
+            else:
+                if not self._api_key:
+                    raise ValueError("AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY")
+                azure_openai_kwargs["api_key"] = self._api_key
+
+            self._official_async_clients[cache_key] = AsyncAzureOpenAI(**azure_openai_kwargs)  # type: ignore
+
+        return self._official_async_clients[cache_key]
 
     def _build_messages(
         self, user_message: str, system_prompt: Optional[str] = None
@@ -252,7 +348,8 @@ class AzureOpenAIClient:
         deployment = config["deployment"]
 
         try:
-            client = self._get_official_client(model)
+            # Prefer true async client when available; otherwise offload the sync
+            # network call to a threadpool to avoid blocking the event loop.
             request_kwargs = {
                 "model": deployment,
                 "messages": messages,
@@ -268,11 +365,33 @@ class AzureOpenAIClient:
                 request_kwargs["max_tokens"] = max_tokens
                 request_kwargs["temperature"] = temperature
 
-            response = client.chat.completions.create(**request_kwargs)
+            if AsyncAzureOpenAI is not None:
+                client = self._get_official_async_client(model)
+                response = await client.chat.completions.create(**request_kwargs)
+            else:
+                client = self._get_official_client(model)
+
+                def _call_sync():
+                    return client.chat.completions.create(**request_kwargs)
+
+                response = await run_in_threadpool(_call_sync)
 
             if stream:
                 return response
             else:
+                usage = response.usage
+                completion_tokens = usage.completion_tokens if usage else 0
+                prompt_tokens = usage.prompt_tokens if usage else 0
+                total_tokens = usage.total_tokens if usage else 0
+
+                logger.info(
+                    "Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                    model,
+                    deployment,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                )
                 return {
                     "choices": [
                         {
@@ -284,15 +403,9 @@ class AzureOpenAIClient:
                         }
                     ],
                     "usage": {
-                        "completion_tokens": (
-                            response.usage.completion_tokens if response.usage else 0
-                        ),
-                        "prompt_tokens": (
-                            response.usage.prompt_tokens if response.usage else 0
-                        ),
-                        "total_tokens": (
-                            response.usage.total_tokens if response.usage else 0
-                        ),
+                        "completion_tokens": completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
                     },
                 }
 
@@ -381,7 +494,6 @@ class AzureOpenAIClient:
             messages = self._build_messages(user_message, system_prompt)
             model = model or self.default_model
             deployment = self._get_model_config(model)["deployment"]
-            client = self._get_official_client(model)
 
             request_kwargs: Dict[str, Any] = {
                 "stream": True,
@@ -395,13 +507,47 @@ class AzureOpenAIClient:
                 request_kwargs["max_tokens"] = max_tokens
                 request_kwargs["temperature"] = temperature
 
-            response = client.chat.completions.create(**request_kwargs)
+            # Use async streaming when available. Otherwise, move the entire
+            # blocking streaming loop into a worker thread and forward chunks.
+            if AsyncAzureOpenAI is not None:
+                client = self._get_official_async_client(model)
+                response = await client.chat.completions.create(**request_kwargs)
+                async for update in response:
+                    if update.choices:
+                        content = update.choices[0].delta.content or ""
+                        if content:
+                            yield content
+            else:
+                import asyncio
 
-            for update in response:
-                if update.choices:
-                    content = update.choices[0].delta.content or ""
-                    if content:
-                        yield content
+                client = self._get_official_client(model)
+                loop = asyncio.get_running_loop()
+                q: "asyncio.Queue[object]" = asyncio.Queue()
+                _DONE = object()
+
+                def _worker() -> None:
+                    try:
+                        resp = client.chat.completions.create(**request_kwargs)
+                        for update in resp:
+                            if not getattr(update, "choices", None):
+                                continue
+                            content = update.choices[0].delta.content or ""
+                            if content:
+                                asyncio.run_coroutine_threadsafe(q.put(content), loop).result()
+                    except Exception as e:
+                        asyncio.run_coroutine_threadsafe(q.put(e), loop).result()
+                    finally:
+                        asyncio.run_coroutine_threadsafe(q.put(_DONE), loop).result()
+
+                await run_in_threadpool(_worker)
+
+                while True:
+                    item = await q.get()
+                    if item is _DONE:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield str(item)
 
         except Exception as e:
             print(f"Error in streaming chat: {e}")
@@ -506,6 +652,26 @@ Guidelines:
             if not config.get("endpoint") or not config.get("deployment") or not config.get("api_version"):
                 continue
             out.append(model)
+        return out
+
+    def get_available_deployments(self) -> List[str]:
+        """Return the available *deployment ids* (e.g. gpt-5-mini).
+
+        This is convenient for UIs that store the deployment id instead of the
+        models.yaml display key.
+        """
+        out: List[str] = []
+        seen: set[str] = set()
+        for _model, config in self.model_configs.items():
+            if not config.get("endpoint") or not config.get("deployment") or not config.get("api_version"):
+                continue
+            dep = str(config.get("deployment") or "").strip()
+            if not dep:
+                continue
+            if dep in seen:
+                continue
+            seen.add(dep)
+            out.append(dep)
         return out
 
     def is_configured(self) -> bool:
