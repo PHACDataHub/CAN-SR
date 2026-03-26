@@ -54,18 +54,36 @@ def _normalize_int_list(v: Any) -> List[int]:
 
 class ClassifyRequest(BaseModel):
     citation_text: Optional[str] = Field(
-        None, description="Optional combined citation text. If omitted the server will build it from the screening DB row."
+        None,
+        description="Optional combined citation text. If omitted the server will build it from the screening DB row.",
     )
     include_columns: Optional[List[str]] = Field(
-        None, description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation"
+        None,
+        description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation",
     )
-    question: str = Field(..., description="L1 criteria question to apply to this citation")
-    screening_step: str = Field(..., description="Screening step identifier: 'l1' or 'l2', etc.")
-    options: List[str] = Field(..., description="List of possible options (exact strings). The model must pick one.")
-    xtra: Optional[str] = Field("", description="Additional context/instructions for the model")
-    model: Optional[str] = Field(None, description="Model to use (falls back to default configured model)")
-    temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Sampling temperature")
-    max_tokens: Optional[int] = Field(2000, ge=1, le=4000, description="Max tokens for LLM response")
+    question: str = Field(
+        ..., description="L1 criteria question to apply to this citation"
+    )
+    screening_step: str = Field(
+        ..., description="Screening step identifier: 'l1' or 'l2', etc."
+    )
+    options: List[str] = Field(
+        ...,
+        description="List of possible options (exact strings). The model must pick one.",
+    )
+    xtra: Optional[str] = Field(
+        "", description="Additional context/instructions for the model"
+    )
+    model: Optional[str] = Field(
+        None, description="Model to use (falls back to default configured model)"
+    )
+    temperature: Optional[float] = Field(
+        0.0, ge=0.0, le=1.0, description="Sampling temperature"
+    )
+    max_tokens: Optional[int] = Field(
+        2000, ge=1, le=4000, description="Max tokens for LLM response"
+    )
+
 
 class HumanClassifyRequest(BaseModel):
     """
@@ -73,22 +91,33 @@ class HumanClassifyRequest(BaseModel):
     This mirrors the shape of the LLM-based classify payload but accepts a
     direct `selected` value and optional explanation/confidence.
     """
+
     citation_text: Optional[str] = Field(
-        None, description="Optional combined citation text. If omitted the server will build it from the screening DB row."
+        None,
+        description="Optional combined citation text. If omitted the server will build it from the screening DB row.",
     )
     include_columns: Optional[List[str]] = Field(
-        None, description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation"
+        None,
+        description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation",
     )
-    question: str = Field(..., description="L1 criteria question to apply to this citation")
+    question: str = Field(
+        ..., description="L1 criteria question to apply to this citation"
+    )
     selected: str = Field(..., description="Human-selected option (string)")
-    screening_step: str = Field(..., description="Screening step identifier: 'l1' or 'l2', etc.")
-    explanation: Optional[str] = Field("", description="Optional free-text explanation from the human reviewer")
-    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional confidence (0.0 - 1.0)")
+    screening_step: str = Field(
+        ..., description="Screening step identifier: 'l1' or 'l2', etc."
+    )
+    explanation: Optional[str] = Field(
+        "", description="Optional free-text explanation from the human reviewer"
+    )
+    confidence: Optional[float] = Field(
+        None, ge=0.0, le=1.0, description="Optional confidence (0.0 - 1.0)"
+    )
     reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
-    
+
+
 # _update_sync moved to backend.api.core.postgres.update_jsonb_column
 # Use run_in_threadpool(update_jsonb_column, ...) where needed.
-
 
 
 @router.post("/{sr_id}/citations/{citation_id}/classify")
@@ -111,27 +140,47 @@ async def classify_citation(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     table_name = (screening or {}).get("table_name") or "citations"
 
     # Load citation row (needed for l2 fulltext and for building citation_text)
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+        row = await run_in_threadpool(
+            cits_dp_service.get_citation_by_id, int(citation_id), table_name
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found"
+        )
 
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
-    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(row, payload.include_columns)
+    citation_text = (
+        payload.citation_text
+        or citations_router._build_combined_citation_from_row(
+            row, payload.include_columns
+        )
+    )
 
     # Ensure LLM client is available
     if not azure_openai_client.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Azure OpenAI client is not configured on the server")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure OpenAI client is not configured on the server",
+        )
 
     # Prepare prompt (use full-text template for l2, otherwise TA/L1 template)
     options_listed = "\n".join([f"{i}. {opt}" for i, opt in enumerate(payload.options)])
@@ -242,17 +291,29 @@ async def classify_citation(
     try:
         parsed = json.loads(llm_response)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response was not valid JSON: {llm_response[:1000]}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM response was not valid JSON: {llm_response[:1000]}",
+        )
 
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response JSON was not an object: {str(type(parsed))}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM response JSON was not an object: {str(type(parsed))}",
+        )
 
     # Require 'selected' key and validate it is a string
     if "selected" not in parsed:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM JSON missing 'selected' key: {json.dumps(parsed)[:1000]}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM JSON missing 'selected' key: {json.dumps(parsed)[:1000]}",
+        )
     selected_value = parsed.get("selected")
     if not isinstance(selected_value, str):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM 'selected' must be a string: {str(type(selected_value))}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM 'selected' must be a string: {str(type(selected_value))}",
+        )
 
     s = selected_value.strip()
 
@@ -263,7 +324,9 @@ async def classify_citation(
             resolved_selected = opt
             break
 
-    explanation = parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or ""
+    explanation = (
+        parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or ""
+    )
     confidence_raw = parsed.get("confidence")
 
     # Parse confidence
@@ -298,14 +361,27 @@ async def classify_citation(
     human_col_name = f"human_{col_core_h}" if col_core_h else "human_col"
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
+        updated = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col_name,
+            classification_json,
+            table_name,
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
 
     # Auto-fill human_* from llm_* if missing (never overwrite)
     try:
@@ -326,10 +402,16 @@ async def classify_citation(
     except Exception:
         # best-effort
         pass
-    
+
     await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm")
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "column": col_name,
+        "classification": classification_json,
+    }
 
 
 @router.post("/{sr_id}/citations/{citation_id}/human_classify")
@@ -350,20 +432,32 @@ async def human_classify_citation(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     table_name = (screening or {}).get("table_name") or "citations"
 
     # Ensure citation exists and optionally build combined citation text
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+        row = await run_in_threadpool(
+            cits_dp_service.get_citation_by_id, int(citation_id), table_name
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found"
+        )
 
     citation_text = payload.citation_text
     confidence = payload.confidence
@@ -381,28 +475,48 @@ async def human_classify_citation(
     # Persist into Postgres under a dynamic column name derived from question
     # Use snake_case to create a stable core name and prefix with 'human_'
     col_core = snake_case(payload.question, max_len=56) if snake_case else None
-    col_name = f"human_{col_core}" if col_core else f"human_col" 
+    col_name = f"human_{col_core}" if col_core else f"human_col"
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
+        updated = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col_name,
+            classification_json,
+            table_name,
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
+
     await update_inclusion_decision(sr, citation_id, payload.screening_step, "human")
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "column": col_name,
+        "classification": classification_json,
+    }
+
 
 async def update_inclusion_decision(
     sr: Dict[str, Any],
     citation_id: int,
     screening_step: str,
     decision_maker: str,
-):  
+):
     table_name = (sr.get("screening_db") or {}).get("table_name") or "citations"
 
     # IMPORTANT: decision/pass computation must not be stale.
@@ -415,10 +529,15 @@ async def update_inclusion_decision(
     try:
         row = await run_in_threadpool(_get_row_fresh)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
-    
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
+
     questions = sr["criteria_parsed"][screening_step]["questions"]
     classified = True
     decision = "undecided"
@@ -435,17 +554,30 @@ async def update_inclusion_decision(
 
     if classified and decision == "undecided":
         decision = "include"
-    
+
     col_name = f"{decision_maker}_{screening_step}_decision"
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, col_name, decision, table_name)
+        updated = await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            citation_id,
+            col_name,
+            decision,
+            table_name,
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
     print(updated)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
 
     # Validation rule (B1/B2): do NOT use l1_screen/l2_screen for filtering.
     # Ensure human_l1_decision / human_l2_decision are always correct and derived
@@ -489,7 +621,9 @@ async def update_inclusion_decision(
                 except Exception:
                     selected = None
                 # Treat empty/whitespace as unanswered (UI shows "-- select --")
-                if selected is None or (isinstance(selected, str) and selected.strip() == ""):
+                if selected is None or (
+                    isinstance(selected, str) and selected.strip() == ""
+                ):
                     return "undecided"
                 if "exclude" in str(selected).lower():
                     return "exclude"
@@ -499,8 +633,20 @@ async def update_inclusion_decision(
         # Always set both human decisions on any update, so the list filters never go stale.
         h1 = _compute_human_decision("l1")
         h2 = _compute_human_decision("l2")
-        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l1_decision", h1, table_name)
-        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l2_decision", h2, table_name)
+        await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            citation_id,
+            "human_l1_decision",
+            h1,
+            table_name,
+        )
+        await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            citation_id,
+            "human_l2_decision",
+            h2,
+            table_name,
+        )
     except Exception:
         # best-effort; do not block response
         pass

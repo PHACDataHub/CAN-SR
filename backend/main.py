@@ -15,7 +15,6 @@ from api.core.config import settings
 from api.services.sr_db_service import srdb_service
 from api.services.user_db import user_db_service
 
-
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.DESCRIPTION,
@@ -29,10 +28,12 @@ async def startup_event():
     """Startup event - initialize CAN-SR systematic review database"""
     from fastapi.concurrency import run_in_threadpool
     import asyncio
-    
+
     # Reduce Azure SDK HTTP logging noise (especially during polling endpoints).
     logging.getLogger("azure").setLevel(logging.WARNING)
-    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
+        logging.WARNING
+    )
 
     print("🚀 Starting CAN-SR Backend...", flush=True)
     print("📚 Initializing systematic review database...", flush=True)
@@ -61,6 +62,7 @@ async def startup_event():
             # Keep Procrastinate open for the whole API lifespan so request handlers
             # can enqueue jobs.
             from api.jobs.procrastinate_app import PROCRASTINATE_APP
+
             await PROCRASTINATE_APP.open_async()
             await ensure_procrastinate_schema()
             await run_in_threadpool(run_all_repo.ensure_tables)
@@ -71,9 +73,14 @@ async def startup_event():
             if getattr(settings, "PROCRASTINATE_CLEAR_ON_START", True):
                 try:
                     cleared = await clear_pending_jobs(queues=["default"])
-                    print(f"🧹 Cleared {cleared} pending Procrastinate jobs", flush=True)
+                    print(
+                        f"🧹 Cleared {cleared} pending Procrastinate jobs", flush=True
+                    )
                 except Exception as e:
-                    print(f"⚠️ Failed to clear pending Procrastinate jobs: {e}", flush=True)
+                    print(
+                        f"⚠️ Failed to clear pending Procrastinate jobs: {e}",
+                        flush=True,
+                    )
 
             if workers_enabled():
                 # Run a worker loop inside the API process (dev/quick deploy).
@@ -96,8 +103,6 @@ async def shutdown_event():
     except Exception:
         pass
 
-    
-
 
 # Set up CORS
 cors_origins = (
@@ -105,7 +110,12 @@ cors_origins = (
     if isinstance(settings.CORS_ORIGINS, str)
     else [settings.CORS_ORIGINS]
 )
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY, same_site="lax", https_only=settings.IS_DEPLOYED)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    same_site="lax",
+    https_only=settings.IS_DEPLOYED,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,

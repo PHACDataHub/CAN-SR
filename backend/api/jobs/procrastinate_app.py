@@ -62,7 +62,9 @@ def workers_enabled() -> bool:
 
 def worker_concurrency() -> int:
     try:
-        return max(1, int(getattr(settings, "PROCRASTINATE_WORKER_CONCURRENCY", 1) or 1))
+        return max(
+            1, int(getattr(settings, "PROCRASTINATE_WORKER_CONCURRENCY", 1) or 1)
+        )
     except Exception:
         return 1
 
@@ -79,13 +81,11 @@ async def ensure_procrastinate_schema() -> None:
 
     async def _schema_installed() -> bool:
         try:
-            row = await PROCRASTINATE_APP.connector.execute_query_one_async(
-                """
+            row = await PROCRASTINATE_APP.connector.execute_query_one_async("""
                 SELECT
                   to_regclass('procrastinate_jobs') IS NOT NULL AS jobs_table,
                   EXISTS(SELECT 1 FROM pg_type WHERE typname = 'procrastinate_job_status') AS status_enum
-                """  # noqa: S608
-            )
+                """)  # noqa: S608
             return bool(row.get("jobs_table") and row.get("status_enum"))
         except Exception:
             return False
@@ -109,7 +109,14 @@ async def ensure_procrastinate_schema() -> None:
             # If schema is already present (possibly created by a previous run),
             # treat duplicate-object errors as success.
             cause: BaseException | None = e.__cause__
-            if isinstance(cause, (psycopg.errors.DuplicateObject, psycopg.errors.DuplicateTable, psycopg.errors.DuplicateFunction)):
+            if isinstance(
+                cause,
+                (
+                    psycopg.errors.DuplicateObject,
+                    psycopg.errors.DuplicateTable,
+                    psycopg.errors.DuplicateFunction,
+                ),
+            ):
                 if await _schema_installed():
                     return
             raise
@@ -156,7 +163,9 @@ async def clear_pending_jobs(*, queues: Optional[list[str]] = None) -> int:
             await PROCRASTINATE_APP.close_async()
 
 
-async def cancel_enqueued_jobs_for_run_all(job_id: str, *, queues: Optional[list[str]] = None) -> int:
+async def cancel_enqueued_jobs_for_run_all(
+    job_id: str, *, queues: Optional[list[str]] = None
+) -> int:
     """Best-effort: delete enqueued (todo) Procrastinate jobs for a given run-all job_id.
 
     This makes Cancel feel more responsive by removing jobs that haven't started yet.

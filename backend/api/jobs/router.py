@@ -13,14 +13,17 @@ from ..services.sr_db_service import srdb_service
 from ..services.azure_openai_client import azure_openai_client
 
 from .run_all_repo import run_all_repo
-from .procrastinate_app import cancel_enqueued_jobs_for_run_all, jobs_enabled, worker_concurrency
+from .procrastinate_app import (
+    cancel_enqueued_jobs_for_run_all,
+    jobs_enabled,
+    worker_concurrency,
+)
 
 # Import task objects so we can enqueue via Task.defer_async (Procrastinate 3.2.x)
 from .run_all_tasks import run_all_chunk, run_all_start
 
 # Import tasks so Procrastinate can discover them.
 from . import run_all_tasks  # noqa: F401
-
 
 router = APIRouter()
 
@@ -91,7 +94,9 @@ async def list_active_run_all(
     if not user_email:
         raise HTTPException(status_code=401, detail="Missing user identity")
 
-    srs = await run_in_threadpool(srdb_service.list_systematic_reviews_for_user, user_email)
+    srs = await run_in_threadpool(
+        srdb_service.list_systematic_reviews_for_user, user_email
+    )
     sr_ids = [str(sr.get("id")) for sr in (srs or []) if sr and sr.get("id")]
     if not sr_ids:
         return {"jobs": []}
@@ -99,7 +104,9 @@ async def list_active_run_all(
     jobs = await run_in_threadpool(run_all_repo.list_active_jobs_for_srs, sr_ids)
 
     # Attach SR name for nicer UI.
-    sr_name_map = {str(sr.get("id")): sr.get("name") for sr in (srs or []) if sr and sr.get("id")}
+    sr_name_map = {
+        str(sr.get("id")): sr.get("name") for sr in (srs or []) if sr and sr.get("id")
+    }
     for j in jobs:
         sid = str(j.get("sr_id"))
         if sid in sr_name_map:
@@ -122,7 +129,9 @@ async def start_run_all(
 
     step = (payload.step or "").lower().strip()
     if step not in {"l1", "l2", "extract"}:
-        raise HTTPException(status_code=400, detail="step must be one of: l1, l2, extract")
+        raise HTTPException(
+            status_code=400, detail="step must be one of: l1, l2, extract"
+        )
 
     # Authz: ensure user can access SR
     try:
@@ -189,7 +198,9 @@ async def start_run_all(
         # If another request won the race, the partial unique index on
         # (sr_id) WHERE status IN ('queued','running','paused') will throw.
         if _is_unique_violation(e):
-            existing = await run_in_threadpool(run_all_repo.get_active_job_for_sr, sr_id)
+            existing = await run_in_threadpool(
+                run_all_repo.get_active_job_for_sr, sr_id
+            )
             if existing:
                 return {
                     "job_id": existing.get("job_id"),
@@ -209,7 +220,9 @@ async def start_run_all(
             await run_in_threadpool(run_all_repo.set_status, job_id, "paused")
         else:
             await run_in_threadpool(run_all_repo.set_status, job_id, "running")
-        await run_in_threadpool(run_all_repo.update_phase, job_id, f"enqueued {len(sanitized_ids)}")
+        await run_in_threadpool(
+            run_all_repo.update_phase, job_id, f"enqueued {len(sanitized_ids)}"
+        )
 
         # Fair scheduling: persist chunks and only enqueue the *next* chunk.
         # This prevents one job from flooding the global queue.
@@ -228,7 +241,9 @@ async def start_run_all(
                 )
                 if next_chunk_id is None:
                     break
-                await run_all_chunk.defer_async(job_id=job_id, chunk_id=int(next_chunk_id))
+                await run_all_chunk.defer_async(
+                    job_id=job_id, chunk_id=int(next_chunk_id)
+                )
 
         # Helpful operator logging
         print(
@@ -348,7 +363,9 @@ async def run_all_dismiss(
 
     st = str(job.get("status") or "").lower()
     if st not in {"finished", "failed"}:
-        raise HTTPException(status_code=400, detail="Only finished/failed jobs can be dismissed")
+        raise HTTPException(
+            status_code=400, detail="Only finished/failed jobs can be dismissed"
+        )
 
     await run_in_threadpool(run_all_repo.set_status, job_id, "done")
     return {"status": "done", "job_id": job_id}

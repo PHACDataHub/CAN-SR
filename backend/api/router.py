@@ -37,4 +37,6 @@ api_router.include_router(extract_router, prefix="/extract", tags=["Extraction"]
 api_router.include_router(jobs_router, prefix="/jobs", tags=["Jobs"])
 
 # Database Search API
-api_router.include_router(database_search_router, prefix="/database_search", tags=["Database Search"])
+api_router.include_router(
+    database_search_router, prefix="/database_search", tags=["Database Search"]
+)

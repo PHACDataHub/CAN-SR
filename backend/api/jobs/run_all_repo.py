@@ -30,8 +30,7 @@ class RunAllRepo:
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS run_all_jobs (
                     id UUID PRIMARY KEY,
                     sr_id TEXT NOT NULL,
@@ -50,15 +49,13 @@ class RunAllRepo:
                     started_at TIMESTAMP WITH TIME ZONE,
                     finished_at TIMESTAMP WITH TIME ZONE
                 )
-                """
-            )
+                """)
 
             # Migration safety: older deployments may have allowed multiple active
             # jobs per SR. Creating the partial unique index would fail if such
             # duplicates exist. Before creating the index, we dedupe by keeping
             # the most recent active job per sr_id and canceling older ones.
-            cur.execute(
-                """
+            cur.execute("""
                 WITH ranked AS (
                     SELECT id,
                            sr_id,
@@ -76,22 +73,18 @@ class RunAllRepo:
                 FROM ranked r
                 WHERE j.id = r.id
                   AND r.rn > 1
-                """
-            )
+                """)
 
             # Enforce: only one active run-all job per SR at a time.
             # Active statuses are queued/running/paused.
             # This is the critical concurrency guard (race-safe across users).
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS run_all_jobs_one_active_per_sr
                 ON run_all_jobs (sr_id)
                 WHERE status IN ('queued', 'running', 'paused')
-                """
-            )
+                """)
             # Store only failures as requested
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS run_all_job_errors (
                     id BIGSERIAL PRIMARY KEY,
                     job_id UUID NOT NULL REFERENCES run_all_jobs(id) ON DELETE CASCADE,
@@ -100,14 +93,12 @@ class RunAllRepo:
                     error TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
                 )
-                """
-            )
+                """)
 
             # Chunk scheduling table (fairness): store chunk definitions and status.
             # Each run-all job will only enqueue a small number of chunks at a time
             # (prefetch) so multiple run-all jobs can make progress concurrently.
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS run_all_job_chunks (
                     id BIGSERIAL PRIMARY KEY,
                     job_id UUID NOT NULL REFERENCES run_all_jobs(id) ON DELETE CASCADE,
@@ -120,15 +111,12 @@ class RunAllRepo:
                     finished_at TIMESTAMP WITH TIME ZONE,
                     UNIQUE(job_id, chunk_index)
                 )
-                """
-            )
+                """)
 
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS run_all_job_chunks_lookup
                 ON run_all_job_chunks (job_id, status, chunk_index)
-                """
-            )
+                """)
             conn.commit()
         except Exception:
             _safe_rollback(conn)
@@ -211,7 +199,9 @@ class RunAllRepo:
             # Serialize claims per job to avoid races where multiple workers
             # simultaneously observe the same doing-count and over-claim.
             # (Row-level locking on the parent job is cheap and safe.)
-            cur.execute("SELECT 1 FROM run_all_jobs WHERE id = %s FOR UPDATE", (job_id,))
+            cur.execute(
+                "SELECT 1 FROM run_all_jobs WHERE id = %s FOR UPDATE", (job_id,)
+            )
 
             # Enforce prefetch limit: claim a todo chunk only if currently
             # doing_count < pf.
@@ -325,13 +315,11 @@ class RunAllRepo:
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT COUNT(1)
                 FROM run_all_jobs
                 WHERE status IN ('queued', 'running', 'paused')
-                """
-            )
+                """)
             row = cur.fetchone()
             return int(row[0] or 0) if row else 0
         except Exception:
@@ -491,7 +479,9 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def set_status(self, job_id: str, status: str, *, error: Optional[str] = None) -> None:
+    def set_status(
+        self, job_id: str, status: str, *, error: Optional[str] = None
+    ) -> None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -553,7 +543,9 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def inc_counts(self, job_id: str, *, done: int = 0, skipped: int = 0, failed: int = 0) -> None:
+    def inc_counts(
+        self, job_id: str, *, done: int = 0, skipped: int = 0, failed: int = 0
+    ) -> None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -590,7 +582,9 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def add_error(self, job_id: str, *, citation_id: Optional[int], stage: str, error: str) -> None:
+    def add_error(
+        self, job_id: str, *, citation_id: Optional[int], stage: str, error: str
+    ) -> None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -600,7 +594,12 @@ class RunAllRepo:
                 INSERT INTO run_all_job_errors (job_id, citation_id, stage, error)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (job_id, int(citation_id) if citation_id is not None else None, stage, error[:8000]),
+                (
+                    job_id,
+                    int(citation_id) if citation_id is not None else None,
+                    stage,
+                    error[:8000],
+                ),
             )
             conn.commit()
         except Exception:

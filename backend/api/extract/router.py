@@ -33,40 +33,55 @@ from ..core.docint_coords import normalize_bounding_regions_to_boxes
 # Import consolidated Postgres helpers if available (optional)
 from ..services.cit_db_service import cits_dp_service, snake_case_param
 
-
-
 router = APIRouter()
 
 
 class ParameterExtractRequest(BaseModel):
     fulltext: Optional[str] = Field(
         None,
-        description="Full text with numbered sentences (e.g. '[0] First sentence\\n[1] Second sentence'). If omitted the endpoint will try to read fulltext_url from the screening DB row."
+        description="Full text with numbered sentences (e.g. '[0] First sentence\\n[1] Second sentence'). If omitted the endpoint will try to read fulltext_url from the screening DB row.",
     )
-    parameter_name: str = Field(..., description="Short name for the parameter (used as column name slug)")
-    parameter_description: str = Field(..., description="Human-friendly description of what to extract")
+    parameter_name: str = Field(
+        ..., description="Short name for the parameter (used as column name slug)"
+    )
+    parameter_description: str = Field(
+        ..., description="Human-friendly description of what to extract"
+    )
     model: Optional[str] = Field(None, description="Model to use")
     temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0)
     max_tokens: Optional[int] = Field(512, ge=1, le=4000)
 
     # Optional artifacts context (if omitted, server will read from citation row when available)
-    tables: Optional[str] = Field(None, description="Optional numbered tables text (markdown).")
-    figures: Optional[str] = Field(None, description="Optional numbered figure captions text.")
-    attach_figures: Optional[bool] = Field(True, description="If true, attach figure images to the LLM request when available")
-
-
+    tables: Optional[str] = Field(
+        None, description="Optional numbered tables text (markdown)."
+    )
+    figures: Optional[str] = Field(
+        None, description="Optional numbered figure captions text."
+    )
+    attach_figures: Optional[bool] = Field(
+        True,
+        description="If true, attach figure images to the LLM request when available",
+    )
 
 
 class HumanParameterRequest(BaseModel):
     fulltext: Optional[str] = Field(
         None,
-        description="Optional numbered full text. If omitted the server will try to read fulltext_url from the screening DB row."
+        description="Optional numbered full text. If omitted the server will try to read fulltext_url from the screening DB row.",
     )
-    parameter_name: str = Field(..., description="Short name for the parameter (used as column name slug)")
+    parameter_name: str = Field(
+        ..., description="Short name for the parameter (used as column name slug)"
+    )
     found: bool = Field(..., description="Whether the parameter was found (boolean)")
-    value: Optional[str] = Field(None, description="Human-provided value (string) or null")
-    explanation: Optional[str] = Field("", description="Optional explanation from the human reviewer")
-    evidence_sentences: Optional[List[int]] = Field(None, description="Optional list of evidence sentence indices")
+    value: Optional[str] = Field(
+        None, description="Human-provided value (string) or null"
+    )
+    explanation: Optional[str] = Field(
+        "", description="Optional explanation from the human reviewer"
+    )
+    evidence_sentences: Optional[List[int]] = Field(
+        None, description="Optional list of evidence sentence indices"
+    )
     reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
 
 
@@ -98,7 +113,10 @@ async def extract_parameter_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     table_name = (screening or {}).get("table_name") or "citations"
 
@@ -107,18 +125,30 @@ async def extract_parameter_endpoint(
     row = None
     if not fulltext:
         try:
-            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+            row = await run_in_threadpool(
+                cits_dp_service.get_citation_by_id, int(citation_id), table_name
+            )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to query screening DB: {e}",
+            )
 
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found"
+            )
 
         fulltext = row.get("fulltext") if "fulltext" in row else None
         if not fulltext:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Full text not provided and not available for this citation")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Full text not provided and not available for this citation",
+            )
 
     # Build tables/figures context: prefer payload fields, else fetch from DB row (if loaded)
     tables_text = payload.tables
@@ -127,7 +157,9 @@ async def extract_parameter_endpoint(
 
     if (tables_text is None or figures_text is None) and row is None:
         try:
-            row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+            row = await run_in_threadpool(
+                cits_dp_service.get_citation_by_id, int(citation_id), table_name
+            )
         except Exception:
             row = None
 
@@ -153,7 +185,9 @@ async def extract_parameter_endpoint(
                     try:
                         md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                         md_txt = md_bytes.decode("utf-8", errors="replace")
-                        header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
+                        header = f"Table [T{idx}]" + (
+                            f" caption: {caption}" if caption else ""
+                        )
                         tables_md_lines.extend([header, md_txt, ""])
                     except Exception:
                         continue
@@ -182,7 +216,9 @@ async def extract_parameter_endpoint(
                     )
                     if payload.attach_figures:
                         try:
-                            img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
+                            img_bytes, _ = await storage_service.get_bytes_by_path(
+                                blob_addr
+                            )
                             if img_bytes:
                                 images.append((img_bytes, "image/png"))
                         except Exception:
@@ -202,7 +238,10 @@ async def extract_parameter_endpoint(
     )
 
     if not azure_openai_client.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Azure OpenAI client is not configured on the server")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure OpenAI client is not configured on the server",
+        )
 
     try:
         if images:
@@ -223,7 +262,10 @@ async def extract_parameter_endpoint(
                 temperature=payload.temperature or 0.0,
             )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"LLM call failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"LLM call failed: {e}",
+        )
 
     # Parse JSON with robustness: tolerate code fences or preamble text
     def _extract_json_object(text: str) -> Optional[str]:
@@ -244,7 +286,7 @@ async def extract_parameter_endpoint(
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    return t[start:i+1]
+                    return t[start : i + 1]
         return None
 
     parsed = None
@@ -258,10 +300,16 @@ async def extract_parameter_endpoint(
             except Exception:
                 parsed = None
         if parsed is None:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response was not valid JSON: {llm_response[:1000]}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"LLM response was not valid JSON: {llm_response[:1000]}",
+            )
 
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM response JSON was not an object")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM response JSON was not an object",
+        )
 
     # Normalize and validate keys and types (tolerate minor deviations)
     found_raw = parsed.get("found", None)
@@ -272,7 +320,10 @@ async def extract_parameter_endpoint(
     elif isinstance(found_raw, (int, float)):
         found_val = bool(found_raw)
     else:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM JSON missing or invalid 'found' key")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM JSON missing or invalid 'found' key",
+        )
 
     # value may be string or null; coerce common primitives to string
     val = parsed.get("value")
@@ -283,7 +334,10 @@ async def extract_parameter_endpoint(
             try:
                 val = str(val)
             except Exception:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="'value' must be a string or null")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="'value' must be a string or null",
+                )
 
     explanation = parsed.get("explanation") or ""
     if not isinstance(explanation, str):
@@ -307,7 +361,10 @@ async def extract_parameter_endpoint(
                 # skip unsupported types
                 continue
     else:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="'evidence_sentences' must be a list")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="'evidence_sentences' must be a list",
+        )
 
     # Normalize evidence tables/figures
     def _norm_int_list(v: Any) -> List[int]:
@@ -351,14 +408,27 @@ async def extract_parameter_endpoint(
     col_name = snake_case_param(payload.parameter_name)
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
+        updated = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col_name,
+            stored,
+            table_name,
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
 
     # Auto-fill human_param_* from llm_param_* if missing (never overwrite)
     try:
@@ -380,7 +450,13 @@ async def extract_parameter_endpoint(
     except Exception:
         pass
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "extraction": stored}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "column": col_name,
+        "extraction": stored,
+    }
 
 
 @router.post("/{sr_id}/citations/{citation_id}/human-extract-parameter")
@@ -403,20 +479,32 @@ async def human_extract_parameter(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     table_name = (screening or {}).get("table_name") or "citations"
 
     # Ensure citation exists (we won't require full_text for human input but check row presence)
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+        row = await run_in_threadpool(
+            cits_dp_service.get_citation_by_id, int(citation_id), table_name
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found"
+        )
 
     # Normalize value
     val = payload.value
@@ -424,12 +512,18 @@ async def human_extract_parameter(
         try:
             val = str(val)
         except Exception:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="'value' must be a string or null")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="'value' must be a string or null",
+            )
 
     # Normalize evidence_sentences
     evidence = payload.evidence_sentences or []
     if not isinstance(evidence, list) or not all(isinstance(i, int) for i in evidence):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="'evidence_sentences' must be a list of integers")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'evidence_sentences' must be a list of integers",
+        )
 
     explanation = payload.explanation or ""
     if not isinstance(explanation, str):
@@ -458,22 +552,42 @@ async def human_extract_parameter(
         # fallback core name
         try:
             from ..services.cit_db_service import snake_case as _snake_case
+
             core = _snake_case(payload.parameter_name) if _snake_case else ""
         except Exception:
             core = ""
         col_name = f"human_param_{core}" if core else "human_param_param"
 
     try:
-        updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
+        updated = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col_name,
+            stored,
+            table_name,
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "extraction": stored}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "column": col_name,
+        "extraction": stored,
+    }
 
 
 @router.post("/{sr_id}/citations/{citation_id}/extract-fulltext")
@@ -493,34 +607,58 @@ async def extract_fulltext_from_storage(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     table_name = (screening or {}).get("table_name") or "citations"
 
     # fetch citation row
     try:
-        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
+        row = await run_in_threadpool(
+            cits_dp_service.get_citation_by_id, int(citation_id), table_name
+        )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found"
+        )
 
     # Determine storage path for the citation PDF
     storage_path = row.get("fulltext_url")
     if not storage_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No fulltext storage path found on citation row")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No fulltext storage path found on citation row",
+        )
 
     try:
         content, _filename = await storage_service.get_bytes_by_path(storage_path)
     except FileNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fulltext file not found in storage")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fulltext file not found in storage",
+        )
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unrecognized storage path format",
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download from storage: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download from storage: {e}",
+        )
 
     # If the citation row already contains an extracted full text in the "fulltext" column,
     # only use it if the stored md5 matches the pdf we just downloaded.
@@ -555,8 +693,15 @@ async def extract_fulltext_from_storage(
 
         async def _run_docint():
             if not azure_docint_client or not azure_docint_client.is_available():
-                return {"success": False, "error": "Azure DI not configured", "figures": [], "tables": []}
-            return await azure_docint_client.extract_citation_artifacts(tmp.name, source_type="file")
+                return {
+                    "success": False,
+                    "error": "Azure DI not configured",
+                    "figures": [],
+                    "tables": [],
+                }
+            return await azure_docint_client.extract_citation_artifacts(
+                tmp.name, source_type="file"
+            )
 
         try:
             (coords, pages), docint_res = await asyncio.gather(
@@ -564,7 +709,10 @@ async def extract_fulltext_from_storage(
                 _run_docint(),
             )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fulltext processing failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Fulltext processing failed: {e}",
+            )
 
         # filter sentence annotations
         annotations = [a for a in coords if a.get("type") == "s" and a.get("text")]
@@ -579,7 +727,11 @@ async def extract_fulltext_from_storage(
         artifact_coords: List[Dict[str, Any]] = []
 
         try:
-            if docint_res and isinstance(docint_res, dict) and docint_res.get("success"):
+            if (
+                docint_res
+                and isinstance(docint_res, dict)
+                and docint_res.get("success")
+            ):
                 pages_meta = docint_res.get("pages") or []
                 # Determine artifact base path from the fulltext_url directory
                 # storage_path is "container/blob".
@@ -589,7 +741,7 @@ async def extract_fulltext_from_storage(
                 artifacts_prefix = artifacts_prefix.replace("//", "/").rstrip("/")
 
                 # Figures: write png
-                for fig in (docint_res.get("figures") or []):
+                for fig in docint_res.get("figures") or []:
                     try:
                         idx = int(fig.get("index"))
                     except Exception:
@@ -634,7 +786,7 @@ async def extract_fulltext_from_storage(
                         )
 
                 # Tables: write markdown (.md)
-                for tbl in (docint_res.get("tables") or []):
+                for tbl in docint_res.get("tables") or []:
                     try:
                         idx = int(tbl.get("index"))
                     except Exception:
@@ -687,20 +839,63 @@ async def extract_fulltext_from_storage(
     # persist full_text_str and coordinates/pages into citation row
     try:
         coords_for_overlay = list(annotations) + list(artifact_coords)
-        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext", full_text_str, table_name)
-        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext_md5", current_md5, table_name)
-        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_coords", coords_for_overlay, table_name)
-        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_pages", pages, table_name)
-        updated5 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_figures", fulltext_figures, table_name)
-        updated6 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_tables", fulltext_tables, table_name)
+        updated1 = await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            citation_id,
+            "fulltext",
+            full_text_str,
+            table_name,
+        )
+        updated2 = await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            citation_id,
+            "fulltext_md5",
+            current_md5,
+            table_name,
+        )
+        updated3 = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            "fulltext_coords",
+            coords_for_overlay,
+            table_name,
+        )
+        updated4 = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            "fulltext_pages",
+            pages,
+            table_name,
+        )
+        updated5 = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            "fulltext_figures",
+            fulltext_figures,
+            table_name,
+        )
+        updated6 = await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            "fulltext_tables",
+            fulltext_tables,
+            table_name,
+        )
         updated = updated1 or updated2 or updated3 or updated4 or updated5 or updated6
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row with full text: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row with full text: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update"
+        )
 
     return {
         "status": "success",

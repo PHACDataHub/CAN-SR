@@ -39,6 +39,7 @@ oauth.register(
     client_kwargs={"scope": "openid profile email"},
 )
 
+
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -83,13 +84,17 @@ async def login(login_data: LoginRequest) -> Any:
 
     return {"access_token": access_token, "token_type": "Bearer"}
 
+
 @router.get("/microsoft-sso")
 async def login_microsoft_sso(request: StarletteRequest, lang: str):
     """
     Start Microsoft OAuth2 flow by redirecting the user to Microsoft login.
     """
     request.session["lang"] = lang
-    return await oauth.microsoft.authorize_redirect(request, f"{settings.API_URL}/api/auth/sso-authorize")
+    return await oauth.microsoft.authorize_redirect(
+        request, f"{settings.API_URL}/api/auth/sso-authorize"
+    )
+
 
 @router.get("/sso-authorize")
 async def microsoft_authorize(request: StarletteRequest):
@@ -121,6 +126,7 @@ async def microsoft_authorize(request: StarletteRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error during Microsoft OAuth callback",
         )
+
 
 @router.post("/register", response_model=UserRead)
 async def register_user(register_data: RegisterRequest) -> Any:

@@ -36,7 +36,9 @@ class DocumentService:
         result["processor_used"] = "azure_doc_intelligence"
         return result
 
-    async def get_raw_analysis_result(self, conversion_id: str) -> Optional[Dict[str, Any]]:
+    async def get_raw_analysis_result(
+        self, conversion_id: str
+    ) -> Optional[Dict[str, Any]]:
         if not azure_docint_client:
             return None
         return await azure_docint_client.get_raw_analysis_result(conversion_id)
