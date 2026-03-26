@@ -43,7 +43,7 @@ pylint==3.3.8
 grobid-client-python==0.1.4
 
 # Network
-requests==2.32.5
+requests==2.33.0
 
 # Agent framework dependencies
 langchain==1.2.7
