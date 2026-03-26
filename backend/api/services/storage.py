@@ -23,7 +23,11 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 try:
     from azure.core.exceptions import ResourceNotFoundError
     from azure.identity import DefaultAzureCredential
-    from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
+    from azure.storage.blob import (
+        BlobSasPermissions,
+        BlobServiceClient,
+        generate_blob_sas,
+    )
 except Exception:  # pragma: no cover
     # Allow local-storage deployments/environments to import without azure packages.
     ResourceNotFoundError = Exception  # type: ignore
@@ -44,16 +48,28 @@ class StorageService(Protocol):
     container_name: str
 
     async def create_user_directory(self, user_id: str) -> bool: ...
-    async def save_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> bool: ...
+    async def save_user_profile(
+        self, user_id: str, profile_data: Dict[str, Any]
+    ) -> bool: ...
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]: ...
-    async def upload_user_document(self, user_id: str, filename: str, file_content: bytes) -> Optional[str]: ...
-    async def get_user_document(self, user_id: str, doc_id: str, filename: str) -> Optional[bytes]: ...
+    async def upload_user_document(
+        self, user_id: str, filename: str, file_content: bytes
+    ) -> Optional[str]: ...
+    async def get_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> Optional[bytes]: ...
     async def list_user_documents(self, user_id: str) -> List[Dict[str, Any]]: ...
-    async def delete_user_document(self, user_id: str, doc_id: str, filename: str) -> bool: ...
-    async def put_bytes_by_path(self, path: str, content: bytes, content_type: str = "application/octet-stream") -> bool: ...
+    async def delete_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> bool: ...
+    async def put_bytes_by_path(
+        self, path: str, content: bytes, content_type: str = "application/octet-stream"
+    ) -> bool: ...
     async def get_bytes_by_path(self, path: str) -> Tuple[bytes, str]: ...
     async def delete_by_path(self, path: str) -> bool: ...
-    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]: ...
+    async def generate_signed_url(
+        self, path: str, expiry_minutes: int = 5
+    ) -> Optional[str]: ...
 
 
 # =============================================================================
@@ -64,36 +80,50 @@ class StorageService(Protocol):
 class AzureStorageService:
     """Service for managing user data in Azure Blob Storage."""
 
-    def __init__(self, *, account_url: str | None = None, connection_string: str | None = None, container_name: str):
+    def __init__(
+        self,
+        *,
+        account_url: str | None = None,
+        connection_string: str | None = None,
+        container_name: str,
+    ):
         if not BlobServiceClient:
             raise RuntimeError(
                 "Azure storage libraries are not installed. Install azure-identity and azure-storage-blob, or use STORAGE_MODE=local."
             )
 
         if bool(account_url) == bool(connection_string):
-            raise ValueError("Exactly one of account_url or connection_string must be provided")
+            raise ValueError(
+                "Exactly one of account_url or connection_string must be provided"
+            )
 
         self._account_key: str | None = None
         self._credential: Any = None
 
         if connection_string:
-            self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-            self._account_key = self._get_account_key_from_connection_str(connection_string)
+            self.blob_service_client = BlobServiceClient.from_connection_string(
+                connection_string
+            )
+            self._account_key = self._get_account_key_from_connection_str(
+                connection_string
+            )
         else:
             if not DefaultAzureCredential:
                 raise RuntimeError(
                     "azure-identity is not installed. Install azure-identity, or use STORAGE_MODE=azure (connection string) or local."
                 )
             self._credential = DefaultAzureCredential()
-            self.blob_service_client = BlobServiceClient(account_url=account_url, credential=self._credential)
+            self.blob_service_client = BlobServiceClient(
+                account_url=account_url, credential=self._credential
+            )
 
         self.container_name = container_name
         self._ensure_container_exists()
-    
+
     def _get_account_key_from_connection_str(self, connection_str):
         for part in connection_str.split(";"):
             if part.startswith("AccountKey="):
-                return part[len("AccountKey="):]
+                return part[len("AccountKey=") :]
         return None
 
     def _ensure_container_exists(self):
@@ -116,17 +146,23 @@ class AzureStorageService:
 
             # Create placeholder file to establish directory structure
             blob_name = f"users/{user_id}/documents/.placeholder"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_client.upload_blob(b"", overwrite=True)
             return True
         except Exception as e:
             logger.error("Error creating user directory for %s: %s", user_id, e)
             return False
 
-    async def save_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> bool:
+    async def save_user_profile(
+        self, user_id: str, profile_data: Dict[str, Any]
+    ) -> bool:
         try:
             blob_name = f"users/{user_id}/profile.json"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_client.upload_blob(json.dumps(profile_data, indent=2), overwrite=True)
             return True
         except Exception as e:
@@ -136,7 +172,9 @@ class AzureStorageService:
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         try:
             blob_name = f"users/{user_id}/profile.json"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_data = blob_client.download_blob().readall()
             return json.loads(blob_data.decode("utf-8"))
         except ResourceNotFoundError:
@@ -145,11 +183,15 @@ class AzureStorageService:
             logger.error("Error getting user profile for %s: %s", user_id, e)
             return None
 
-    async def upload_user_document(self, user_id: str, filename: str, file_content: bytes) -> Optional[str]:
+    async def upload_user_document(
+        self, user_id: str, filename: str, file_content: bytes
+    ) -> Optional[str]:
         try:
             doc_id = str(uuid.uuid4())
             blob_name = f"users/{user_id}/documents/{doc_id}_{filename}"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_client.upload_blob(file_content, overwrite=True)
 
             file_metadata = create_file_metadata(
@@ -166,30 +208,42 @@ class AzureStorageService:
             profile = await self.get_user_profile(user_id)
             if profile:
                 profile["document_count"] = int(profile.get("document_count", 0)) + 1
-                profile["storage_used"] = int(profile.get("storage_used", 0)) + len(file_content)
+                profile["storage_used"] = int(profile.get("storage_used", 0)) + len(
+                    file_content
+                )
                 profile["last_updated"] = datetime.now(timezone.utc).isoformat()
                 await self.save_user_profile(user_id, profile)
 
             return doc_id
         except Exception as e:
-            logger.error("Error uploading document %s for user %s: %s", filename, user_id, e)
+            logger.error(
+                "Error uploading document %s for user %s: %s", filename, user_id, e
+            )
             return None
 
-    async def get_user_document(self, user_id: str, doc_id: str, filename: str) -> Optional[bytes]:
+    async def get_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> Optional[bytes]:
         try:
             blob_name = f"users/{user_id}/documents/{doc_id}_{filename}"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             return blob_client.download_blob().readall()
         except ResourceNotFoundError:
             return None
         except Exception as e:
-            logger.error("Error getting document %s for user %s: %s", doc_id, user_id, e)
+            logger.error(
+                "Error getting document %s for user %s: %s", doc_id, user_id, e
+            )
             return None
 
     async def list_user_documents(self, user_id: str) -> List[Dict[str, Any]]:
         try:
             prefix = f"users/{user_id}/documents/"
-            blobs = self.blob_service_client.get_container_client(self.container_name).list_blobs(name_starts_with=prefix)
+            blobs = self.blob_service_client.get_container_client(
+                self.container_name
+            ).list_blobs(name_starts_with=prefix)
 
             documents: List[Dict[str, Any]] = []
             for blob in blobs:
@@ -218,10 +272,14 @@ class AzureStorageService:
             logger.error("Error listing user documents for %s: %s", user_id, e)
             return []
 
-    async def delete_user_document(self, user_id: str, doc_id: str, filename: str) -> bool:
+    async def delete_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> bool:
         try:
             doc_blob_name = f"users/{user_id}/documents/{doc_id}_{filename}"
-            doc_blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=doc_blob_name)
+            doc_blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=doc_blob_name
+            )
 
             try:
                 doc_size = doc_blob_client.get_blob_properties().size
@@ -233,30 +291,44 @@ class AzureStorageService:
 
             profile = await self.get_user_profile(user_id)
             if profile:
-                profile["document_count"] = max(0, int(profile.get("document_count", 0)) - 1)
-                profile["storage_used"] = max(0, int(profile.get("storage_used", 0)) - int(doc_size))
+                profile["document_count"] = max(
+                    0, int(profile.get("document_count", 0)) - 1
+                )
+                profile["storage_used"] = max(
+                    0, int(profile.get("storage_used", 0)) - int(doc_size)
+                )
                 profile["last_updated"] = datetime.now(timezone.utc).isoformat()
                 await self.save_user_profile(user_id, profile)
 
             return True
         except Exception as e:
-            logger.error("Error deleting document %s for user %s: %s", doc_id, user_id, e)
+            logger.error(
+                "Error deleting document %s for user %s: %s", doc_id, user_id, e
+            )
             return False
 
-    async def save_file_hash_metadata(self, user_id: str, document_id: str, file_metadata: Dict[str, Any]) -> bool:
+    async def save_file_hash_metadata(
+        self, user_id: str, document_id: str, file_metadata: Dict[str, Any]
+    ) -> bool:
         try:
             blob_name = f"users/{user_id}/metadata/{document_id}_metadata.json"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_client.upload_blob(json.dumps(file_metadata, indent=2), overwrite=True)
             return True
         except Exception as e:
             logger.error("Error saving file metadata for %s: %s", document_id, e)
             return False
 
-    async def get_file_hash_metadata(self, user_id: str, document_id: str) -> Optional[Dict[str, Any]]:
+    async def get_file_hash_metadata(
+        self, user_id: str, document_id: str
+    ) -> Optional[Dict[str, Any]]:
         try:
             blob_name = f"users/{user_id}/metadata/{document_id}_metadata.json"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             metadata_json = blob_client.download_blob().readall().decode("utf-8")
             return json.loads(metadata_json)
         except ResourceNotFoundError:
@@ -268,7 +340,9 @@ class AzureStorageService:
     async def delete_file_hash_metadata(self, user_id: str, document_id: str) -> bool:
         try:
             blob_name = f"users/{user_id}/metadata/{document_id}_metadata.json"
-            blob_client = self.blob_service_client.get_blob_client(container=self.container_name, blob=blob_name)
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=blob_name
+            )
             blob_client.delete_blob()
             return True
         except ResourceNotFoundError:
@@ -277,12 +351,16 @@ class AzureStorageService:
             logger.error("Error deleting file metadata for %s: %s", document_id, e)
             return False
 
-    async def put_bytes_by_path(self, path: str, content: bytes, content_type: str = "application/octet-stream") -> bool:
+    async def put_bytes_by_path(
+        self, path: str, content: bytes, content_type: str = "application/octet-stream"
+    ) -> bool:
         """Write blob by storage path 'container/blob'."""
         if not path or "/" not in path:
             raise ValueError("Invalid storage path")
         container, blob = path.split("/", 1)
-        blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob)
+        blob_client = self.blob_service_client.get_blob_client(
+            container=container, blob=blob
+        )
         blob_client.upload_blob(content, overwrite=True, content_type=content_type)
         return True
 
@@ -292,7 +370,9 @@ class AzureStorageService:
             raise ValueError("Invalid storage path")
         container, blob = path.split("/", 1)
 
-        blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob)
+        blob_client = self.blob_service_client.get_blob_client(
+            container=container, blob=blob
+        )
         content = blob_client.download_blob().readall()
         filename = os.path.basename(blob) or "download"
         return content, filename
@@ -302,11 +382,15 @@ class AzureStorageService:
         if not path or "/" not in path:
             raise ValueError("Invalid storage path")
         container, blob = path.split("/", 1)
-        blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob)
+        blob_client = self.blob_service_client.get_blob_client(
+            container=container, blob=blob
+        )
         blob_client.delete_blob()
         return True
 
-    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]:
+    async def generate_signed_url(
+        self, path: str, expiry_minutes: int = 5
+    ) -> Optional[str]:
         """Generate a read-only SAS URL for a blob. Path format: 'container/blob'."""
         if not path or "/" not in path:
             raise ValueError("Invalid storage path")
@@ -323,13 +407,17 @@ class AzureStorageService:
             "expiry": expiry,
         }
         if self._account_key:
-            sas_token = generate_blob_sas(**blob_sas_kwargs, account_key=self._account_key)
+            sas_token = generate_blob_sas(
+                **blob_sas_kwargs, account_key=self._account_key
+            )
         elif self._credential:
             delegation_key = self.blob_service_client.get_user_delegation_key(
                 key_start_time=datetime.now(timezone.utc) - timedelta(minutes=1),
                 key_expiry_time=expiry,
             )
-            sas_token = generate_blob_sas(**blob_sas_kwargs, user_delegation_key=delegation_key)
+            sas_token = generate_blob_sas(
+                **blob_sas_kwargs, user_delegation_key=delegation_key
+            )
         else:
             raise RuntimeError("No credentials available for SAS generation")
 
@@ -387,10 +475,14 @@ class LocalStorageService:
             logger.error("Error creating user directory for %s: %s", user_id, e)
             return False
 
-    async def save_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> bool:
+    async def save_user_profile(
+        self, user_id: str, profile_data: Dict[str, Any]
+    ) -> bool:
         try:
             self._profile_path(user_id).parent.mkdir(parents=True, exist_ok=True)
-            self._profile_path(user_id).write_text(json.dumps(profile_data, indent=2), encoding="utf-8")
+            self._profile_path(user_id).write_text(
+                json.dumps(profile_data, indent=2), encoding="utf-8"
+            )
             return True
         except Exception as e:
             logger.error("Error saving user profile for %s: %s", user_id, e)
@@ -406,7 +498,9 @@ class LocalStorageService:
             logger.error("Error getting user profile for %s: %s", user_id, e)
             return None
 
-    async def upload_user_document(self, user_id: str, filename: str, file_content: bytes) -> Optional[str]:
+    async def upload_user_document(
+        self, user_id: str, filename: str, file_content: bytes
+    ) -> Optional[str]:
         try:
             await self.create_user_directory(user_id)
             doc_id = str(uuid.uuid4())
@@ -428,23 +522,31 @@ class LocalStorageService:
             profile = await self.get_user_profile(user_id)
             if profile:
                 profile["document_count"] = int(profile.get("document_count", 0)) + 1
-                profile["storage_used"] = int(profile.get("storage_used", 0)) + len(file_content)
+                profile["storage_used"] = int(profile.get("storage_used", 0)) + len(
+                    file_content
+                )
                 profile["last_updated"] = datetime.now(timezone.utc).isoformat()
                 await self.save_user_profile(user_id, profile)
 
             return doc_id
         except Exception as e:
-            logger.error("Error uploading document %s for user %s: %s", filename, user_id, e)
+            logger.error(
+                "Error uploading document %s for user %s: %s", filename, user_id, e
+            )
             return None
 
-    async def get_user_document(self, user_id: str, doc_id: str, filename: str) -> Optional[bytes]:
+    async def get_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> Optional[bytes]:
         try:
             p = self._doc_path(user_id, doc_id, filename)
             if not p.exists():
                 return None
             return p.read_bytes()
         except Exception as e:
-            logger.error("Error getting document %s for user %s: %s", doc_id, user_id, e)
+            logger.error(
+                "Error getting document %s for user %s: %s", doc_id, user_id, e
+            )
             return None
 
     async def list_user_documents(self, user_id: str) -> List[Dict[str, Any]]:
@@ -468,8 +570,12 @@ class LocalStorageService:
                     "document_id": doc_id,
                     "filename": filename,
                     "file_size": stat.st_size,
-                    "upload_date": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                    "last_modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "upload_date": datetime.fromtimestamp(
+                        stat.st_mtime, tz=timezone.utc
+                    ).isoformat(),
+                    "last_modified": datetime.fromtimestamp(
+                        stat.st_mtime, tz=timezone.utc
+                    ).isoformat(),
                 }
                 if hash_metadata:
                     doc_info["file_hash"] = hash_metadata.get("file_hash")
@@ -483,7 +589,9 @@ class LocalStorageService:
             logger.error("Error listing user documents for %s: %s", user_id, e)
             return []
 
-    async def delete_user_document(self, user_id: str, doc_id: str, filename: str) -> bool:
+    async def delete_user_document(
+        self, user_id: str, doc_id: str, filename: str
+    ) -> bool:
         try:
             p = self._doc_path(user_id, doc_id, filename)
             doc_size = p.stat().st_size if p.exists() else 0
@@ -493,16 +601,24 @@ class LocalStorageService:
 
             profile = await self.get_user_profile(user_id)
             if profile:
-                profile["document_count"] = max(0, int(profile.get("document_count", 0)) - 1)
-                profile["storage_used"] = max(0, int(profile.get("storage_used", 0)) - int(doc_size))
+                profile["document_count"] = max(
+                    0, int(profile.get("document_count", 0)) - 1
+                )
+                profile["storage_used"] = max(
+                    0, int(profile.get("storage_used", 0)) - int(doc_size)
+                )
                 profile["last_updated"] = datetime.now(timezone.utc).isoformat()
                 await self.save_user_profile(user_id, profile)
             return True
         except Exception as e:
-            logger.error("Error deleting document %s for user %s: %s", doc_id, user_id, e)
+            logger.error(
+                "Error deleting document %s for user %s: %s", doc_id, user_id, e
+            )
             return False
 
-    async def save_file_hash_metadata(self, user_id: str, document_id: str, file_metadata: Dict[str, Any]) -> bool:
+    async def save_file_hash_metadata(
+        self, user_id: str, document_id: str, file_metadata: Dict[str, Any]
+    ) -> bool:
         try:
             p = self._metadata_path(user_id, document_id)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -512,7 +628,9 @@ class LocalStorageService:
             logger.error("Error saving file metadata for %s: %s", document_id, e)
             return False
 
-    async def get_file_hash_metadata(self, user_id: str, document_id: str) -> Optional[Dict[str, Any]]:
+    async def get_file_hash_metadata(
+        self, user_id: str, document_id: str
+    ) -> Optional[Dict[str, Any]]:
         try:
             p = self._metadata_path(user_id, document_id)
             if not p.exists():
@@ -532,7 +650,9 @@ class LocalStorageService:
             logger.error("Error deleting file metadata for %s: %s", document_id, e)
             return False
 
-    async def put_bytes_by_path(self, path: str, content: bytes, content_type: str = "application/octet-stream") -> bool:
+    async def put_bytes_by_path(
+        self, path: str, content: bytes, content_type: str = "application/octet-stream"
+    ) -> bool:
         """Write file by storage path 'container/blob'."""
         if not path or "/" not in path:
             raise ValueError("Invalid storage path")
@@ -585,7 +705,9 @@ class LocalStorageService:
         p.unlink()
         return True
 
-    async def generate_signed_url(self, path: str, expiry_minutes: int = 5) -> Optional[str]:
+    async def generate_signed_url(
+        self, path: str, expiry_minutes: int = 5
+    ) -> Optional[str]:
         """Local storage cannot generate signed URLs; returns None to signal streaming fallback."""
         return None
 
@@ -605,8 +727,13 @@ def _build_storage_service() -> Optional[StorageService]:
             return None
     if stype == "azure":
         try:
-            if not settings.AZURE_STORAGE_ACCOUNT_NAME or not settings.AZURE_STORAGE_ACCOUNT_KEY:
-                raise ValueError("STORAGE_MODE=azure requires AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY")
+            if (
+                not settings.AZURE_STORAGE_ACCOUNT_NAME
+                or not settings.AZURE_STORAGE_ACCOUNT_KEY
+            ):
+                raise ValueError(
+                    "STORAGE_MODE=azure requires AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY"
+                )
             connection_string = (
                 "DefaultEndpointsProtocol=https;"
                 f"AccountName={settings.AZURE_STORAGE_ACCOUNT_NAME};"
@@ -618,13 +745,19 @@ def _build_storage_service() -> Optional[StorageService]:
                 container_name=settings.STORAGE_CONTAINER_NAME,
             )
         except Exception as e:
-            logger.exception("Failed to initialize AzureStorageService (connection string): %s", e)
+            logger.exception(
+                "Failed to initialize AzureStorageService (connection string): %s", e
+            )
             return None
     if stype == "entra":
         try:
             if not settings.AZURE_STORAGE_ACCOUNT_NAME:
-                raise ValueError("STORAGE_MODE=entra requires AZURE_STORAGE_ACCOUNT_NAME")
-            account_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+                raise ValueError(
+                    "STORAGE_MODE=entra requires AZURE_STORAGE_ACCOUNT_NAME"
+                )
+            account_url = (
+                f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+            )
             return AzureStorageService(
                 account_url=account_url,
                 container_name=settings.STORAGE_CONTAINER_NAME,

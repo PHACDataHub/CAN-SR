@@ -48,7 +48,10 @@ export default function CanSrIndexPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/can-sr/reviews/list', { method: 'GET', headers: getAuthHeaders() })
+      const res = await fetch('/api/can-sr/reviews/list', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      })
       if (!res.ok) {
         throw new Error(`Failed to fetch (${res.status})`)
       }
@@ -93,7 +96,9 @@ export default function CanSrIndexPage() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}))
         // backend FastAPI may return detail or error fields
-        throw new Error(errBody?.detail || errBody?.error || `Create failed: ${res.status}`)
+        throw new Error(
+          errBody?.detail || errBody?.error || `Create failed: ${res.status}`,
+        )
       }
 
       await res.json().catch(() => ({}))
@@ -173,26 +178,31 @@ export default function CanSrIndexPage() {
         showSettings={false}
         showExport={false}
         showBack={true}
-        backHref='/'
+        backHref="/"
         backLabel={dict.cansr.backToHome}
         right={rightNode}
       />
 
       <main className="mx-auto max-w-4xl px-6 py-10">
         <div className="mb-6">
-          <h3 className="text-2xl font-bold text-gray-900">{dict.cansr.yourReviews}</h3>
+          <h3 className="text-2xl font-bold text-gray-900">
+            {dict.cansr.yourReviews}
+          </h3>
           <p className="mt-1 text-sm text-gray-600">
             {dict.cansr.yourReviewsDesc}
           </p>
         </div>
 
         {loading ? (
-          <div className="rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-700">{dict.cansr.loadingReviews}</div>
+          <div className="rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-700">
+            {dict.cansr.loadingReviews}
+          </div>
         ) : error ? (
-          <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+          <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
         ) : reviews.length === 0 ? (
           <div className="space-y-4">
-            
             <div className="rounded-md border border-gray-200 bg-white p-6 text-sm text-gray-700">
               {dict.cansr.noReviews}
             </div>
@@ -208,13 +218,21 @@ export default function CanSrIndexPage() {
         ) : (
           <div className="space-y-3">
             {reviews.map((r, idx) => {
-              const title = r.name || r.title || `Review ${r.sr_id || r.id || idx + 1}`
+              const title =
+                r.name || r.title || `Review ${r.sr_id || r.id || idx + 1}`
               const desc = r.description || r.title || undefined
               // Link to SR page: use sr_id or id if present, else fallback to '#'
               const id = r.sr_id || r.id
-              const href = id ? `/can-sr/sr?sr_id=${encodeURIComponent(id)}` : '/can-sr/sr'
+              const href = id
+                ? `/can-sr/sr?sr_id=${encodeURIComponent(id)}`
+                : '/can-sr/sr'
               return (
-                <StackingCard key={id || idx} title={title} description={desc} href={href} />
+                <StackingCard
+                  key={id || idx}
+                  title={title}
+                  description={desc}
+                  href={href}
+                />
               )
             })}
           </div>
@@ -234,31 +252,39 @@ export default function CanSrIndexPage() {
             }}
           />
           <div className="relative z-10 w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-            <h4 className="text-lg font-semibold text-gray-900">{dict.cansr.createNewReview}</h4>
+            <h4 className="text-lg font-semibold text-gray-900">
+              {dict.cansr.createNewReview}
+            </h4>
             <form className="mt-4 space-y-4" onSubmit={(e) => handleCreate(e)}>
               <div>
-                <label className="block text-sm font-medium text-gray-700">{dict.cansr.reviewName}</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  {dict.cansr.reviewName}
+                </label>
                 <input
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                   placeholder={dict.cansr.reviewNamePlaceholder}
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">{dict.cansr.reviewDescription}</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  {dict.cansr.reviewDescription}
+                </label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={3}
-                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
 
-              {error ? <div className="text-sm text-red-600">{error}</div> : null}
+              {error ? (
+                <div className="text-sm text-red-600">{error}</div>
+              ) : null}
 
               <div className="flex justify-end space-x-2">
                 <button

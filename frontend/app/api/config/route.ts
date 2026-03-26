@@ -3,7 +3,6 @@ import { API_ENDPOINTS, HEALTH_ENDPOINTS } from '@/lib/config'
 
 export async function GET(request: NextRequest) {
   try {
-
     // Call backend config API
     const response = await fetch(HEALTH_ENDPOINTS.MAIN_API, {
       method: 'GET',

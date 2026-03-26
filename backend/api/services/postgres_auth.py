@@ -71,8 +71,14 @@ class PostgresServer:
         #   psycopg2.errors.InFailedSqlTransaction
         # Heal it proactively so one bad request cannot poison the process.
         try:
-            if self._conn and self._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
-                logger.warning("Postgres connection in aborted transaction; rolling back")
+            if (
+                self._conn
+                and self._conn.get_transaction_status()
+                == psycopg2.extensions.TRANSACTION_STATUS_INERROR
+            ):
+                logger.warning(
+                    "Postgres connection in aborted transaction; rolling back"
+                )
                 self._conn.rollback()
         except Exception:
             # If rollback fails, reconnect.
@@ -128,7 +134,9 @@ class PostgresServer:
                 )
             token = self._credential.get_token(self._AZURE_POSTGRES_SCOPE)
             self._token = token.token
-            self._token_expiration = token.expires_on - self._TOKEN_REFRESH_BUFFER_SECONDS
+            self._token_expiration = (
+                token.expires_on - self._TOKEN_REFRESH_BUFFER_SECONDS
+            )
         return self._token
 
     @staticmethod
@@ -167,7 +175,12 @@ class PostgresServer:
             kwargs["password"] = prof.get("password")
 
         # Sanity checks
-        required = [kwargs.get("host"), kwargs.get("database"), kwargs.get("user"), kwargs.get("port")]
+        required = [
+            kwargs.get("host"),
+            kwargs.get("database"),
+            kwargs.get("user"),
+            kwargs.get("port"),
+        ]
         if not all(required):
             raise RuntimeError(f"Incomplete Postgres config for mode={mode}")
 
@@ -188,7 +201,9 @@ class PostgresServer:
         try:
             return self._connect_with_mode(primary_mode)
         except Exception as e:
-            logger.error("Postgres connect failed (mode=%s): %s", primary_mode, e, exc_info=True)
+            logger.error(
+                "Postgres connect failed (mode=%s): %s", primary_mode, e, exc_info=True
+            )
             raise psycopg2.OperationalError(
                 f"Could not connect to Postgres for mode={primary_mode}"
             )
@@ -200,13 +215,14 @@ class PostgresServer:
         Commits automatically on clean exit, rolls back on exception.
         """
         kwargs = self._candidate_kwargs(self._mode(), psycopg3=True)
-        async with await psycopg.AsyncConnection.connect(**kwargs, row_factory=dict_row) as conn:
+        async with await psycopg.AsyncConnection.connect(
+            **kwargs, row_factory=dict_row
+        ) as conn:
             yield conn
 
     def __repr__(self) -> str:
         status = "open" if self._conn and not self._conn.closed else "closed"
-        return (
-            f"<PostgresServer mode={settings.POSTGRES_MODE} conn={status}>"
-        )
+        return f"<PostgresServer mode={settings.POSTGRES_MODE} conn={status}>"
+
 
 postgres_server = PostgresServer()

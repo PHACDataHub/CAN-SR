@@ -5,7 +5,9 @@ import { useState, useEffect, useRef } from 'react'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { ModelSelector } from '@/components/chat'
-import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
+import PDFBoundingBoxViewer, {
+  PDFBoundingBoxViewerHandle,
+} from '@/components/can-sr/PDFBoundingBoxViewer'
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
@@ -78,7 +80,8 @@ export default function CanSrL2ScreenPage() {
     return llmCol.replace('llm_param_', 'human_param_')
   }
 
-  const [parametersParsed, setParametersParsed] = useState<ParametersParsed | null>(null)
+  const [parametersParsed, setParametersParsed] =
+    useState<ParametersParsed | null>(null)
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
   const [savingParam, setSavingParam] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<Record<string, string>>({})
@@ -91,7 +94,9 @@ export default function CanSrL2ScreenPage() {
   const [aiPanels, setAiPanels] = useState<Record<string, any>>({})
   const [panelOpen, setPanelOpen] = useState<Record<string, boolean>>({})
   const [fulltextCoords, setFulltextCoords] = useState<any[] | null>(null)
-  const [fulltextPages, setFulltextPages] = useState<{ width: number; height: number }[] | null>(null)
+  const [fulltextPages, setFulltextPages] = useState<
+    { width: number; height: number }[] | null
+  >(null)
   const [fulltextStr, setFulltextStr] = useState<string | null>(null)
   const viewerRef = useRef<PDFBoundingBoxViewerHandle | null>(null)
 
@@ -100,9 +105,14 @@ export default function CanSrL2ScreenPage() {
   const [fulltextFigures, setFulltextFigures] = useState<any[] | null>(null)
 
   const scrollToArtifact = (kind: 'table' | 'figure', idx: number) => {
-    const list = kind === 'table' ? (fulltextTables || []) : (fulltextFigures || [])
+    const list = kind === 'table' ? fulltextTables || [] : fulltextFigures || []
     const item = list.find((x: any) => Number(x?.index) === Number(idx))
-    console.log('[artifact-click]', { kind, idx, hasViewer: !!viewerRef.current, item })
+    console.log('[artifact-click]', {
+      kind,
+      idx,
+      hasViewer: !!viewerRef.current,
+      item,
+    })
     if (!item || !viewerRef.current) return
     const bbox = item?.bounding_box
     const first = Array.isArray(bbox) ? bbox[0] : null
@@ -112,7 +122,10 @@ export default function CanSrL2ScreenPage() {
   }
 
   const [runningAllAI, setRunningAllAI] = useState(false)
-  const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
+  const [runAllProgress, setRunAllProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
 
   // Cache full text so single-param and run-all don’t repeatedly trigger extraction/DB reads
   const fullTextCacheRef = useRef<string | null>(null)
@@ -176,11 +189,11 @@ export default function CanSrL2ScreenPage() {
 
   const suggestParam = async (name: string, description: string) => {
     if (!citationId || !srId) return
-    setAiStatus(prev => ({ ...prev, [name]: 'extracting' }))
+    setAiStatus((prev) => ({ ...prev, [name]: 'extracting' }))
     try {
       const headers = getAuthHeaders()
       const fullText = await ensureFullText()
-      setAiStatus(prev => ({ ...prev, [name]: 'suggesting' }))
+      setAiStatus((prev) => ({ ...prev, [name]: 'suggesting' }))
       const res = await fetch(
         `/api/can-sr/extract?action=extract-parameter&sr_id=${encodeURIComponent(
           srId || '',
@@ -201,16 +214,16 @@ export default function CanSrL2ScreenPage() {
       const data = await res.json().catch(() => ({}))
       const ext = data?.extraction || data
       if (res.ok && ext) {
-        setParamValues(prev => ({ ...prev, [name]: ext?.value ?? '' }))
-        setParamFound(prev => ({ ...prev, [name]: !!ext?.found }))
-        setAiPanels(prev => ({ ...prev, [name]: ext }))
-        setPanelOpen(prev => ({ ...prev, [name]: false }))
-        setAiStatus(prev => ({ ...prev, [name]: 'suggested' }))
+        setParamValues((prev) => ({ ...prev, [name]: ext?.value ?? '' }))
+        setParamFound((prev) => ({ ...prev, [name]: !!ext?.found }))
+        setAiPanels((prev) => ({ ...prev, [name]: ext }))
+        setPanelOpen((prev) => ({ ...prev, [name]: false }))
+        setAiStatus((prev) => ({ ...prev, [name]: 'suggested' }))
       } else {
-        setAiStatus(prev => ({ ...prev, [name]: 'error' }))
+        setAiStatus((prev) => ({ ...prev, [name]: 'error' }))
       }
     } catch {
-      setAiStatus(prev => ({ ...prev, [name]: 'error' }))
+      setAiStatus((prev) => ({ ...prev, [name]: 'error' }))
     }
   }
 
@@ -224,7 +237,11 @@ export default function CanSrL2ScreenPage() {
         const desc = parametersParsed.descriptions?.[i]?.[j] || ''
         const cleanDesc = desc.replace(/<\/?desc>/g, '')
         const paramName =
-          typeof param === 'string' ? param : Array.isArray(param) ? param[0] : String(param)
+          typeof param === 'string'
+            ? param
+            : Array.isArray(param)
+              ? param[0]
+              : String(param)
         params.push({ name: paramName, description: cleanDesc })
       })
     })
@@ -258,7 +275,11 @@ export default function CanSrL2ScreenPage() {
         const data = await res.json().catch(() => ({}))
         const parsed = data?.criteria_parsed || data?.criteria || {}
         const paramsInfo = parsed?.parameters
-        if (paramsInfo && paramsInfo.categories && paramsInfo.possible_parameters) {
+        if (
+          paramsInfo &&
+          paramsInfo.categories &&
+          paramsInfo.possible_parameters
+        ) {
           setParametersParsed(paramsInfo)
           const defaults: Record<string, string> = {}
           paramsInfo.possible_parameters.forEach((arr: string[]) => {
@@ -266,14 +287,14 @@ export default function CanSrL2ScreenPage() {
               defaults[name] = defaults[name] || ''
             })
           })
-          setParamValues(prev => ({ ...defaults, ...prev }))
+          setParamValues((prev) => ({ ...defaults, ...prev }))
           const defaultFound: Record<string, boolean> = {}
           paramsInfo.possible_parameters.forEach((arr: string[]) => {
             arr.forEach((name: string) => {
               defaultFound[name] = defaultFound[name] ?? false
             })
           })
-          setParamFound(prev => ({ ...defaultFound, ...prev }))
+          setParamFound((prev) => ({ ...defaultFound, ...prev }))
         }
       } catch (err) {
         console.warn('Failed to load parameters', err)
@@ -333,29 +354,39 @@ export default function CanSrL2ScreenPage() {
         })
 
         if (Object.keys(nextFound).length) {
-          setParamFound(prev => ({ ...prev, ...nextFound }))
+          setParamFound((prev) => ({ ...prev, ...nextFound }))
         }
         if (Object.keys(nextValues).length) {
-          setParamValues(prev => ({ ...prev, ...nextValues }))
+          setParamValues((prev) => ({ ...prev, ...nextValues }))
         }
         if (Object.keys(nextAIPanels).length) {
-          setAiPanels(prev => ({ ...prev, ...nextAIPanels }))
+          setAiPanels((prev) => ({ ...prev, ...nextAIPanels }))
         }
 
         // extract coords/pages/fulltext and artifacts for PDF overlay
-        const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
+        const ft =
+          typeof (row as any).fulltext === 'string'
+            ? (row as any).fulltext
+            : null
         if (ft) setFulltextStr(ft)
 
-        const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
+        const tablesAny =
+          parseJson((row as any).fulltext_tables) ??
+          (row as any).fulltext_tables
         if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
 
-        const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
+        const figsAny =
+          parseJson((row as any).fulltext_figures) ??
+          (row as any).fulltext_figures
         if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
 
-        const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
+        const coordsAny =
+          parseJson((row as any).fulltext_coords) ??
+          (row as any).fulltext_coords
         if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
 
-        const pagesAny = parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
+        const pagesAny =
+          parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
         if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
       } catch (err) {
         console.warn('Failed to prefill citation params', err)
@@ -387,24 +418,37 @@ export default function CanSrL2ScreenPage() {
           }
         }
 
-        const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
+        const ft =
+          typeof (row as any).fulltext === 'string'
+            ? (row as any).fulltext
+            : null
         if (ft) setFulltextStr(ft)
 
-        const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
+        const tablesAny =
+          parseJson((row as any).fulltext_tables) ??
+          (row as any).fulltext_tables
         if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
 
-        const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
+        const figsAny =
+          parseJson((row as any).fulltext_figures) ??
+          (row as any).fulltext_figures
         if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
 
-        const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
+        const coordsAny =
+          parseJson((row as any).fulltext_coords) ??
+          (row as any).fulltext_coords
         if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
 
-        const pagesAny = parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
+        const pagesAny =
+          parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
         if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
 
         // If coords/pages are missing, trigger backend extraction to populate them, then refetch
         const needExtract =
-          !Array.isArray(coordsAny) || coordsAny.length === 0 || !Array.isArray(pagesAny) || pagesAny.length === 0
+          !Array.isArray(coordsAny) ||
+          coordsAny.length === 0 ||
+          !Array.isArray(pagesAny) ||
+          pagesAny.length === 0
 
         if (needExtract) {
           try {
@@ -423,14 +467,23 @@ export default function CanSrL2ScreenPage() {
               )
               const row2 = await res3.json().catch(() => ({}))
 
-              const ft2 = typeof (row2 as any).fulltext === 'string' ? (row2 as any).fulltext : null
+              const ft2 =
+                typeof (row2 as any).fulltext === 'string'
+                  ? (row2 as any).fulltext
+                  : null
               if (ft2) setFulltextStr(ft2)
 
-              const coordsAny2 = parseJson((row2 as any).fulltext_coords) ?? (row2 as any).fulltext_coords
-              if (coordsAny2 && Array.isArray(coordsAny2)) setFulltextCoords(coordsAny2)
+              const coordsAny2 =
+                parseJson((row2 as any).fulltext_coords) ??
+                (row2 as any).fulltext_coords
+              if (coordsAny2 && Array.isArray(coordsAny2))
+                setFulltextCoords(coordsAny2)
 
-              const pagesAny2 = parseJson((row2 as any).fulltext_pages) ?? (row2 as any).fulltext_pages
-              if (pagesAny2 && Array.isArray(pagesAny2)) setFulltextPages(pagesAny2)
+              const pagesAny2 =
+                parseJson((row2 as any).fulltext_pages) ??
+                (row2 as any).fulltext_pages
+              if (pagesAny2 && Array.isArray(pagesAny2))
+                setFulltextPages(pagesAny2)
             }
           } catch (err) {
             console.warn('Failed to extract fulltext for overlay', err)
@@ -443,13 +496,13 @@ export default function CanSrL2ScreenPage() {
   }, [srId, citationId])
 
   const updateValue = (name: string, val: string) => {
-    setParamValues(prev => ({ ...prev, [name]: val }))
+    setParamValues((prev) => ({ ...prev, [name]: val }))
   }
 
   const saveParam = async (name: string) => {
     if (!citationId || !srId) return
     setSavingParam(name)
-    setSaveStatus(prev => ({ ...prev, [name]: 'saving' }))
+    setSaveStatus((prev) => ({ ...prev, [name]: 'saving' }))
     try {
       const headers = getAuthHeaders()
       const res = await fetch(
@@ -470,9 +523,9 @@ export default function CanSrL2ScreenPage() {
         },
       )
       await res.json().catch(() => ({}))
-      setSaveStatus(prev => ({ ...prev, [name]: res.ok ? 'saved' : 'error' }))
+      setSaveStatus((prev) => ({ ...prev, [name]: res.ok ? 'saved' : 'error' }))
     } catch {
-      setSaveStatus(prev => ({ ...prev, [name]: 'error' }))
+      setSaveStatus((prev) => ({ ...prev, [name]: 'error' }))
     } finally {
       setSavingParam(null)
     }
@@ -488,7 +541,7 @@ export default function CanSrL2ScreenPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
-      <SRHeader 
+      <SRHeader
         title={dict.screening.parameterExtraction}
         srName=""
         backHref={`/can-sr/extract?sr_id=${encodeURIComponent(srId || '')}`}
@@ -500,41 +553,43 @@ export default function CanSrL2ScreenPage() {
         }
       />
 
-      <main className="mx-auto max-w-8xl px-3 py-3">
+      <main className="max-w-8xl mx-auto px-3 py-3">
         <div className="grid grid-cols-12 gap-3">
           {/* Workspace (left) */}
           <div className="col-span-9">
             {/* <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm"> */}
-              {/* <div className="border-b pb-4 mb-4 text-center">
+            {/* <div className="border-b pb-4 mb-4 text-center">
                 <h3 className="text-lg font-semibold text-gray-900">Workspace</h3>
                 <p className="mt-2 text-sm text-gray-600">
                   This area displays the full text (PDF) and is a flexible workspace for viewing and selecting parameter regions.
                 </p>
               </div> */}
 
-              <PDFBoundingBoxViewer
-                srId={srId || ''}
-                citationId={citationId ?? ''}
-                conversionId={null}
-                fileName={"Fulltext"}
-                coords={fulltextCoords || []}
-                pages={fulltextPages || []}
-                aiPanels={aiPanels}
-                panelOpen={panelOpen}
-                fulltext={fulltextStr || ''}
-                defaultFitToWidth={true}
-                ref={viewerRef}
-              />
+            <PDFBoundingBoxViewer
+              srId={srId || ''}
+              citationId={citationId ?? ''}
+              conversionId={null}
+              fileName={'Fulltext'}
+              coords={fulltextCoords || []}
+              pages={fulltextPages || []}
+              aiPanels={aiPanels}
+              panelOpen={panelOpen}
+              fulltext={fulltextStr || ''}
+              defaultFitToWidth={true}
+              ref={viewerRef}
+            />
 
             {/* </div> */}
           </div>
 
           {/* Selection sidebar (right) */}
           <aside className="col-span-3">
-            <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
+            <div className="flex h-full flex-col space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-xl font-semibold text-gray-900">{dict.extract.parameters}</h4>
+                  <h4 className="text-xl font-semibold text-gray-900">
+                    {dict.extract.parameters}
+                  </h4>
                   <button
                     type="button"
                     onClick={runAllAI}
@@ -559,219 +614,312 @@ export default function CanSrL2ScreenPage() {
                 </p> */}
               </div>
 
-              <div className="rounded-md border border-gray-100 p-3 h-[680px] overflow-y-auto">
+              <div className="h-[680px] overflow-y-auto rounded-md border border-gray-100 p-3">
                 {parametersParsed ? (
                   <div className="space-y-4">
                     {parametersParsed.categories.map((cat, i) => (
                       <div key={cat} className="space-y-2">
-                        <h5 className="text-sm font-semibold text-gray-900">{cat}</h5>
+                        <h5 className="text-sm font-semibold text-gray-900">
+                          {cat}
+                        </h5>
                         <div className="space-y-3">
-                          {(parametersParsed.possible_parameters[i] || []).map((param, j) => {
-                            const desc = parametersParsed.descriptions?.[i]?.[j] || ''
-                            const cleanDesc = desc.replace(/<\/?desc>/g, '')
-                            const paramName = typeof param === 'string' ? param : Array.isArray(param) ? param[0] : String(param)
-                            return (
-                              <div key={paramName} className="rounded-md border border-gray-200 p-2">
-                                <div className="flex items-start justify-between">
-                                  <div className="text-xs font-medium text-gray-700 flex items-center gap-1">
-                                    {paramName}
-                                    {cleanDesc ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleDesc(paramName)}
-                                        className="ml-1 inline-flex items-center text-gray-400 hover:text-gray-600"
-                                        aria-label={descOpen[paramName] ? dict.extract.hideDescription : dict.extract.showDescription}
-                                        title={descOpen[paramName] ? dict.extract.hideDescription : dict.extract.showDescription}
-                                      >
-                                        {descOpen[paramName] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                      </button>
-                                    ) : null}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-gray-500">
-                                      {saveStatus[paramName] === 'saved'
-                                        ? dict.extract.saved
-                                        : saveStatus[paramName] === 'error'
-                                        ? dict.extract.error
-                                        : saveStatus[paramName] === 'saving'
-                                        ? dict.extract.saving
-                                        : ''}
-                                    </span>
-                                    <span className="text-xs text-gray-500">
-                                      {aiStatus[paramName] === 'extracting'
-                                        ? dict.extract.extractingFullText
-                                        : aiStatus[paramName] === 'suggesting' || aiStatus[paramName] === 'loading'
-                                        ? dict.extract.suggesting
-                                        : aiStatus[paramName] === 'suggested'
-                                        ? dict.extract.finished
-                                        : aiStatus[paramName] === 'error'
-                                        ? dict.extract.aiError
-                                        : ''}
-                                    </span>
-                                    <button
-                                      onClick={() => suggestParam(paramName, cleanDesc)}
-                                      disabled={
-                                        runningAllAI ||
-                                        aiStatus[paramName] === 'loading' ||
-                                        aiStatus[paramName] === 'extracting' ||
-                                        aiStatus[paramName] === 'suggesting'
-                                      }
-                                      className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
-                                    >
-                                      <span className="inline-flex items-center gap-1">
-                                        AI <Wand2 className="h-3 w-3" />
-                                      </span>
-                                    </button>
-                                    <button
-                                      onClick={() => saveParam(paramName)}
-                                      disabled={savingParam === paramName}
-                                      className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                                    >
-                                      {dict.common.save}
-                                    </button>
-                                  </div>
-                                </div>
-                                {cleanDesc && descOpen[paramName] ? (
-                                  <p className="mt-1 text-xs text-gray-500">{cleanDesc}</p>
-                                ) : null}
-                                <input
-                                  type="text"
-                                  value={paramValues[paramName] || ''}
-                                  onChange={(e) => updateValue(paramName, e.target.value)}
-                                  placeholder={dict.extract.enterValue}
-                                  className="mt-2 w-full rounded-md border px-2 py-1 text-sm"
-                                />
-
-                                {aiPanels[paramName] ? (
-                                  <div className="mt-2">
-                                    <div
-                                      onClick={() =>
-                                        setPanelOpen((prev) => ({
-                                          ...prev,
-                                          [paramName]: !Boolean(prev[paramName]),
-                                        }))
-                                      }
-                                      style={{ cursor: 'pointer' }}
-                                      className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
-                                    >
-                                      <div className="text-xs">
-                                        {typeof aiPanels[paramName]?.value === 'string' && aiPanels[paramName]?.value.trim().length > 0 ? (
-                                          <>
-                                            {dict.extract.aiSuggested}{' '}
-                                            <span className="ml-1 text-xs font-medium text-emerald-600">
-                                              {aiPanels[paramName]?.value}
-                                            </span>
-                                          </>
-                                        ) : (
-                                          <span className="text-xs text-gray-600">{dict.extract.noAISuggestion}</span>
-                                        )}
-                                      </div>
-                                      <div className="text-xs text-gray-500">
-                                        {panelOpen[paramName] ? dict.screening.minimize : dict.screening.maximize}
-                                      </div>
+                          {(parametersParsed.possible_parameters[i] || []).map(
+                            (param, j) => {
+                              const desc =
+                                parametersParsed.descriptions?.[i]?.[j] || ''
+                              const cleanDesc = desc.replace(/<\/?desc>/g, '')
+                              const paramName =
+                                typeof param === 'string'
+                                  ? param
+                                  : Array.isArray(param)
+                                    ? param[0]
+                                    : String(param)
+                              return (
+                                <div
+                                  key={paramName}
+                                  className="rounded-md border border-gray-200 p-2"
+                                >
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex items-center gap-1 text-xs font-medium text-gray-700">
+                                      {paramName}
+                                      {cleanDesc ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleDesc(paramName)}
+                                          className="ml-1 inline-flex items-center text-gray-400 hover:text-gray-600"
+                                          aria-label={
+                                            descOpen[paramName]
+                                              ? dict.extract.hideDescription
+                                              : dict.extract.showDescription
+                                          }
+                                          title={
+                                            descOpen[paramName]
+                                              ? dict.extract.hideDescription
+                                              : dict.extract.showDescription
+                                          }
+                                        >
+                                          {descOpen[paramName] ? (
+                                            <ChevronDown size={14} />
+                                          ) : (
+                                            <ChevronRight size={14} />
+                                          )}
+                                        </button>
+                                      ) : null}
                                     </div>
-                                    {panelOpen[paramName] ? (
-                                      <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-xs whitespace-pre-wrap text-gray-800">
-                                        <div className="mt-2">
-                                          <strong>{dict.screening.explanation}</strong>
-                                          <div className="mt-1 text-xs text-gray-700">
-                                            {aiPanels[paramName]?.explanation ??
-                                              aiPanels[paramName]?.llm_raw ??
-                                              dict.screening.noExplanation}
-                                          </div>
-                                        </div>
-{Array.isArray(aiPanels[paramName]?.evidence_sentences) ? (
-  <div className="mt-2">
-    <strong>{dict.screening.evidence}</strong>
-    <div className="mt-1 flex flex-wrap gap-1">
-      {aiPanels[paramName].evidence_sentences.map((item: any, k: number) => {
-        const isCoord = item && typeof item === 'object'
-        const label = isCoord
-          ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
-          : `${dict.screening.sentence} ${String(item)}`
-        const onClick = () => {
-          if (!viewerRef.current) return
-          if (isCoord) {
-            viewerRef.current.scrollToCoord(item)
-          } else {
-            const idx = Number(item)
-            if (!Number.isNaN(idx)) {
-              viewerRef.current.scrollToSentenceIndex(idx)
-            }
-          }
-        }
-        return (
-          <button
-            key={k}
-            onClick={onClick}
-            className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
-            title={label}
-            type="button"
-          >
-            {label}
-          </button>
-        )
-      })}
-    </div>
-  </div>
-) : null}
-
-{Array.isArray(aiPanels[paramName]?.evidence_tables) && aiPanels[paramName].evidence_tables.length > 0 ? (
-  <div className="mt-2">
-    <strong>Evidence tables:</strong>
-    <div className="mt-1 flex flex-wrap gap-1">
-      {aiPanels[paramName].evidence_tables.map((t: any, k: number) => {
-        const label = `Table T${String(t)}`
-        return (
-          <button
-            key={k}
-            type="button"
-            onClick={() => scrollToArtifact('table', Number(t))}
-            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-            title={label}
-          >
-            {label}
-          </button>
-        )
-      })}
-    </div>
-  </div>
-) : null}
-
-{Array.isArray(aiPanels[paramName]?.evidence_figures) && aiPanels[paramName].evidence_figures.length > 0 ? (
-  <div className="mt-2">
-    <strong>Evidence figures:</strong>
-    <div className="mt-1 flex flex-wrap gap-1">
-      {aiPanels[paramName].evidence_figures.map((f: any, k: number) => {
-        const label = `Figure F${String(f)}`
-        return (
-          <button
-            key={k}
-            type="button"
-            onClick={() => scrollToArtifact('figure', Number(f))}
-            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-            title={label}
-          >
-            {label}
-          </button>
-        )
-      })}
-    </div>
-  </div>
-) : null}
-                                      </div>
-                                    ) : null}
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500">
+                                        {saveStatus[paramName] === 'saved'
+                                          ? dict.extract.saved
+                                          : saveStatus[paramName] === 'error'
+                                            ? dict.extract.error
+                                            : saveStatus[paramName] === 'saving'
+                                              ? dict.extract.saving
+                                              : ''}
+                                      </span>
+                                      <span className="text-xs text-gray-500">
+                                        {aiStatus[paramName] === 'extracting'
+                                          ? dict.extract.extractingFullText
+                                          : aiStatus[paramName] ===
+                                                'suggesting' ||
+                                              aiStatus[paramName] === 'loading'
+                                            ? dict.extract.suggesting
+                                            : aiStatus[paramName] ===
+                                                'suggested'
+                                              ? dict.extract.finished
+                                              : aiStatus[paramName] === 'error'
+                                                ? dict.extract.aiError
+                                                : ''}
+                                      </span>
+                                      <button
+                                        onClick={() =>
+                                          suggestParam(paramName, cleanDesc)
+                                        }
+                                        disabled={
+                                          runningAllAI ||
+                                          aiStatus[paramName] === 'loading' ||
+                                          aiStatus[paramName] ===
+                                            'extracting' ||
+                                          aiStatus[paramName] === 'suggesting'
+                                        }
+                                        className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                                      >
+                                        <span className="inline-flex items-center gap-1">
+                                          AI <Wand2 className="h-3 w-3" />
+                                        </span>
+                                      </button>
+                                      <button
+                                        onClick={() => saveParam(paramName)}
+                                        disabled={savingParam === paramName}
+                                        className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                                      >
+                                        {dict.common.save}
+                                      </button>
+                                    </div>
                                   </div>
-                                ) : null}
-                              </div>
-                            )
-                          })}
+                                  {cleanDesc && descOpen[paramName] ? (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      {cleanDesc}
+                                    </p>
+                                  ) : null}
+                                  <input
+                                    type="text"
+                                    value={paramValues[paramName] || ''}
+                                    onChange={(e) =>
+                                      updateValue(paramName, e.target.value)
+                                    }
+                                    placeholder={dict.extract.enterValue}
+                                    className="mt-2 w-full rounded-md border px-2 py-1 text-sm"
+                                  />
+
+                                  {aiPanels[paramName] ? (
+                                    <div className="mt-2">
+                                      <div
+                                        onClick={() =>
+                                          setPanelOpen((prev) => ({
+                                            ...prev,
+                                            [paramName]: !Boolean(
+                                              prev[paramName],
+                                            ),
+                                          }))
+                                        }
+                                        style={{ cursor: 'pointer' }}
+                                        className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
+                                      >
+                                        <div className="text-xs">
+                                          {typeof aiPanels[paramName]?.value ===
+                                            'string' &&
+                                          aiPanels[paramName]?.value.trim()
+                                            .length > 0 ? (
+                                            <>
+                                              {dict.extract.aiSuggested}{' '}
+                                              <span className="ml-1 text-xs font-medium text-emerald-600">
+                                                {aiPanels[paramName]?.value}
+                                              </span>
+                                            </>
+                                          ) : (
+                                            <span className="text-xs text-gray-600">
+                                              {dict.extract.noAISuggestion}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-xs text-gray-500">
+                                          {panelOpen[paramName]
+                                            ? dict.screening.minimize
+                                            : dict.screening.maximize}
+                                        </div>
+                                      </div>
+                                      {panelOpen[paramName] ? (
+                                        <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-xs whitespace-pre-wrap text-gray-800">
+                                          <div className="mt-2">
+                                            <strong>
+                                              {dict.screening.explanation}
+                                            </strong>
+                                            <div className="mt-1 text-xs text-gray-700">
+                                              {aiPanels[paramName]
+                                                ?.explanation ??
+                                                aiPanels[paramName]?.llm_raw ??
+                                                dict.screening.noExplanation}
+                                            </div>
+                                          </div>
+                                          {Array.isArray(
+                                            aiPanels[paramName]
+                                              ?.evidence_sentences,
+                                          ) ? (
+                                            <div className="mt-2">
+                                              <strong>
+                                                {dict.screening.evidence}
+                                              </strong>
+                                              <div className="mt-1 flex flex-wrap gap-1">
+                                                {aiPanels[
+                                                  paramName
+                                                ].evidence_sentences.map(
+                                                  (item: any, k: number) => {
+                                                    const isCoord =
+                                                      item &&
+                                                      typeof item === 'object'
+                                                    const label = isCoord
+                                                      ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
+                                                      : `${dict.screening.sentence} ${String(item)}`
+                                                    const onClick = () => {
+                                                      if (!viewerRef.current)
+                                                        return
+                                                      if (isCoord) {
+                                                        viewerRef.current.scrollToCoord(
+                                                          item,
+                                                        )
+                                                      } else {
+                                                        const idx = Number(item)
+                                                        if (
+                                                          !Number.isNaN(idx)
+                                                        ) {
+                                                          viewerRef.current.scrollToSentenceIndex(
+                                                            idx,
+                                                          )
+                                                        }
+                                                      }
+                                                    }
+                                                    return (
+                                                      <button
+                                                        key={k}
+                                                        onClick={onClick}
+                                                        className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
+                                                        title={label}
+                                                        type="button"
+                                                      >
+                                                        {label}
+                                                      </button>
+                                                    )
+                                                  },
+                                                )}
+                                              </div>
+                                            </div>
+                                          ) : null}
+
+                                          {Array.isArray(
+                                            aiPanels[paramName]
+                                              ?.evidence_tables,
+                                          ) &&
+                                          aiPanels[paramName].evidence_tables
+                                            .length > 0 ? (
+                                            <div className="mt-2">
+                                              <strong>Evidence tables:</strong>
+                                              <div className="mt-1 flex flex-wrap gap-1">
+                                                {aiPanels[
+                                                  paramName
+                                                ].evidence_tables.map(
+                                                  (t: any, k: number) => {
+                                                    const label = `Table T${String(t)}`
+                                                    return (
+                                                      <button
+                                                        key={k}
+                                                        type="button"
+                                                        onClick={() =>
+                                                          scrollToArtifact(
+                                                            'table',
+                                                            Number(t),
+                                                          )
+                                                        }
+                                                        className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                        title={label}
+                                                      >
+                                                        {label}
+                                                      </button>
+                                                    )
+                                                  },
+                                                )}
+                                              </div>
+                                            </div>
+                                          ) : null}
+
+                                          {Array.isArray(
+                                            aiPanels[paramName]
+                                              ?.evidence_figures,
+                                          ) &&
+                                          aiPanels[paramName].evidence_figures
+                                            .length > 0 ? (
+                                            <div className="mt-2">
+                                              <strong>Evidence figures:</strong>
+                                              <div className="mt-1 flex flex-wrap gap-1">
+                                                {aiPanels[
+                                                  paramName
+                                                ].evidence_figures.map(
+                                                  (f: any, k: number) => {
+                                                    const label = `Figure F${String(f)}`
+                                                    return (
+                                                      <button
+                                                        key={k}
+                                                        type="button"
+                                                        onClick={() =>
+                                                          scrollToArtifact(
+                                                            'figure',
+                                                            Number(f),
+                                                          )
+                                                        }
+                                                        className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                        title={label}
+                                                      >
+                                                        {label}
+                                                      </button>
+                                                    )
+                                                  },
+                                                )}
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )
+                            },
+                          )}
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-sm text-gray-600 text-center py-6">
+                  <div className="py-6 text-center text-sm text-gray-600">
                     {dict.extract.noParameters}
                   </div>
                 )}

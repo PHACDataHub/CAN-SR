@@ -42,6 +42,7 @@ except ImportError:
     from typing import Any as DocumentIntelligenceClient  # type: ignore
     from typing import Any as AnalyzeDocumentRequest  # type: ignore
     from typing import Any as AzureKeyCredential  # type: ignore
+
     print(
         "Azure Document Intelligence SDK not installed. Install with: pip install azure-ai-documentintelligence azure-core"
     )
@@ -63,13 +64,13 @@ class AzureDocIntelligenceService:
         """Initialize Azure Document Intelligence client"""
         if not AZURE_DOC_INTELLIGENCE_AVAILABLE:
             return None
-        
+
         if settings.AZURE_DOC_INT_MODE not in ["key", "entra"]:
             print(
                 f"Invalid AZURE_DOC_INT_MODE: {settings.AZURE_DOC_INT_MODE}. Must be 'key' or 'entra'."
             )
             return None
-        
+
         if not settings.AZURE_DOC_INT_ENDPOINT:
             print(
                 "Azure Document Intelligence endpoint not found. Set AZURE_DOC_INT_ENDPOINT environment variable."
@@ -81,11 +82,13 @@ class AzureDocIntelligenceService:
                 "Azure Document Intelligence API key not found. Set AZURE_DOC_INT_API_KEY for key-based auth."
             )
             return None
-        
+
         doc_int_kwargs = {"endpoint": settings.AZURE_DOC_INT_ENDPOINT}
 
         if settings.AZURE_DOC_INT_MODE == "key":
-            doc_int_kwargs["credential"] = AzureKeyCredential(settings.AZURE_DOC_INT_API_KEY)
+            doc_int_kwargs["credential"] = AzureKeyCredential(
+                settings.AZURE_DOC_INT_API_KEY
+            )
         elif settings.AZURE_DOC_INT_MODE == "entra":
             doc_int_kwargs["credential"] = DefaultAzureCredential()
 
@@ -680,7 +683,9 @@ class AzureDocIntelligenceService:
         table_pattern = r"<table>.*?</table>"
         return re.findall(table_pattern, markdown, re.DOTALL)
 
-    def _download_figure_bytes_sync(self, result_id: str, figure_id: str) -> Optional[bytes]:
+    def _download_figure_bytes_sync(
+        self, result_id: str, figure_id: str
+    ) -> Optional[bytes]:
         """Download a single figure image from Azure DI as bytes (sync)."""
         try:
             stream = self.client.get_analyze_result_figure(
@@ -719,7 +724,10 @@ class AzureDocIntelligenceService:
         """
 
         if not self.client:
-            return {"success": False, "error": "Azure Document Intelligence client not available"}
+            return {
+                "success": False,
+                "error": "Azure Document Intelligence client not available",
+            }
 
         # We need figures in output.
         output_param = ["figures"]
@@ -754,7 +762,9 @@ class AzureDocIntelligenceService:
         for i, md in enumerate(md_tables, start=1):
             bbox = None
             if i - 1 < len(raw_tables):
-                bbox = raw_tables[i - 1].get("boundingRegions") or raw_tables[i - 1].get("bounding_regions")
+                bbox = raw_tables[i - 1].get("boundingRegions") or raw_tables[
+                    i - 1
+                ].get("bounding_regions")
             tables_out.append(
                 {
                     "index": i,
@@ -783,7 +793,7 @@ class AzureDocIntelligenceService:
 
             bounding_regions = []
             try:
-                for region in (getattr(fig, "bounding_regions", None) or []):
+                for region in getattr(fig, "bounding_regions", None) or []:
                     bounding_regions.append(
                         {"page_number": region.page_number, "polygon": region.polygon}
                     )
@@ -792,7 +802,9 @@ class AzureDocIntelligenceService:
 
             png_bytes = None
             if result_id:
-                png_bytes = await asyncio.to_thread(self._download_figure_bytes_sync, result_id, azure_id)
+                png_bytes = await asyncio.to_thread(
+                    self._download_figure_bytes_sync, result_id, azure_id
+                )
 
             if not png_bytes:
                 # If we couldn't download, skip storing bytes (still return metadata)
@@ -815,8 +827,13 @@ class AzureDocIntelligenceService:
                     {
                         "index": idx,
                         "azure_id": fig.get("id") or f"raw_{idx}",
-                        "caption": (fig.get("caption", {}) or {}).get("content") if isinstance(fig.get("caption"), dict) else None,
-                        "bounding_box": fig.get("boundingRegions") or fig.get("bounding_regions"),
+                        "caption": (
+                            (fig.get("caption", {}) or {}).get("content")
+                            if isinstance(fig.get("caption"), dict)
+                            else None
+                        ),
+                        "bounding_box": fig.get("boundingRegions")
+                        or fig.get("bounding_regions"),
                         "png_bytes": b"",
                     }
                 )

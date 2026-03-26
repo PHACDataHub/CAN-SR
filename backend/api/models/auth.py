@@ -1,6 +1,7 @@
 """
 Authentication and user models for the API.
 """
+
 from typing import Optional
 from datetime import datetime
 

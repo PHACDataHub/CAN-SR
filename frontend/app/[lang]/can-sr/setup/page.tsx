@@ -8,14 +8,17 @@ import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
 import { useDictionary } from '../../DictionaryProvider'
+import { CriteriaBuilder } from '@/components/can-sr/setup/criteria-builder'
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
   const tokenType = getTokenType()
-  return token ? { Authorization: `${tokenType} ${token}` } : ({} as Record<string, string>)
+  return token
+    ? { Authorization: `${tokenType} ${token}` }
+    : ({} as Record<string, string>)
 }
 
- // CSV preview removed - client-side preview disabled
+// CSV preview removed - client-side preview disabled
 
 export default function CanSrSetupPage() {
   const router = useRouter()
@@ -40,7 +43,9 @@ export default function CanSrSetupPage() {
   // auth headers and SR state for Manage Users popup (mirrors sr/page.tsx)
   const token = getAuthToken()
   const tokenType = getTokenType()
-  const authHeaders: Record<string, string> | undefined = token ? { Authorization: `${tokenType} ${token}` } : undefined
+  const authHeaders: Record<string, string> | undefined = token
+    ? { Authorization: `${tokenType} ${token}` }
+    : undefined
 
   const [sr, setSr] = useState<any>(null)
   const [, setSrLoading] = useState<boolean>(true)
@@ -57,7 +62,11 @@ export default function CanSrSetupPage() {
         )
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}))
-          throw new Error(errBody?.detail || errBody?.error || `Failed to fetch SR (${res.status})`)
+          throw new Error(
+            errBody?.detail ||
+              errBody?.error ||
+              `Failed to fetch SR (${res.status})`,
+          )
         }
         const data = await res.json().catch(() => ({}))
         setSr(data)
@@ -143,15 +152,19 @@ export default function CanSrSetupPage() {
 
       const headers = getAuthHeaders()
       // Do NOT set Content-Type; browser will set multipart boundary
-      const res = await fetch(`/api/can-sr/citations/upload?sr_id=${encodeURIComponent(srId)}`, {
-        method: 'POST',
-        headers: headers,
-        body: fd as any,
-      })
+      const res = await fetch(
+        `/api/can-sr/citations/upload?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'POST',
+          headers: headers,
+          body: fd as any,
+        },
+      )
 
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const errMsg = data?.error || data?.detail || `Upload failed (${res.status})`
+        const errMsg =
+          data?.error || data?.detail || `Upload failed (${res.status})`
         setUploadError(errMsg)
       } else {
         setUploadResult(data)
@@ -178,14 +191,20 @@ export default function CanSrSetupPage() {
 
       const headers = getAuthHeaders()
       // Do NOT set Content-Type so browser adds multipart/form-data boundary
-      const res = await fetch(`/api/can-sr/reviews/edit?sr_id=${encodeURIComponent(srId)}`, {
-        method: 'PUT',
-        headers,
-        body: fd as any,
-      })
+      const res = await fetch(
+        `/api/can-sr/reviews/edit?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'PUT',
+          headers,
+          body: fd as any,
+        },
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setYamlSaveMessage((data && (data.error || data.detail)) || `Save failed (${res.status})`)
+        setYamlSaveMessage(
+          (data && (data.error || data.detail)) ||
+            `Save failed (${res.status})`,
+        )
       } else {
         setYamlSaveMessage('Saved successfully')
       }
@@ -208,7 +227,7 @@ export default function CanSrSetupPage() {
     )
     const data = await res.json().catch(() => ({}))
     const criteria_yaml = data.criteria_yaml
-    if(!criteria_yaml) {
+    if (!criteria_yaml) {
       return SAMPLE_YAML
     } else {
       return criteria_yaml
@@ -229,7 +248,7 @@ export default function CanSrSetupPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
-      <SRHeader 
+      <SRHeader
         title={dict.setup.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={
@@ -247,20 +266,24 @@ export default function CanSrSetupPage() {
       />
 
       <main className="mx-auto max-w-4xl px-6 py-10">
-        <h3 className="text-xl font-semibold text-gray-900">{dict.setup.pageTitle}</h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {dict.setup.pageDesc}
-        </p>
+        <h3 className="text-xl font-semibold text-gray-900">
+          {dict.setup.pageTitle}
+        </h3>
+        <p className="mt-2 text-sm text-gray-600">{dict.setup.pageDesc}</p>
 
         <div className="mt-6 space-y-6">
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-            <label className="block text-sm font-medium text-gray-700">{dict.setup.uploadCitations}</label>
+            <label className="block text-sm font-medium text-gray-700">
+              {dict.setup.uploadCitations}
+            </label>
             <div className="mt-3 flex items-center gap-3">
               <input
                 ref={fileInputRef}
                 type="file"
                 accept=".csv,.ris,.txt,text/csv,text/plain,application/x-research-info-systems"
-                onChange={(e) => handleFileSelected(e.target.files ? e.target.files[0] : null)}
+                onChange={(e) =>
+                  handleFileSelected(e.target.files ? e.target.files[0] : null)
+                }
                 className="hidden"
               />
               <button
@@ -275,35 +298,48 @@ export default function CanSrSetupPage() {
                   onClick={handleUpload}
                   disabled={!file || uploading}
                   className={`rounded-md px-3 py-2 text-sm font-medium text-white ${
-                    !file || uploading ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'
+                    !file || uploading
+                      ? 'bg-emerald-300'
+                      : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
-                  {uploading ? dict.setup.uploading : dict.setup.uploadCitationsButton}
+                  {uploading
+                    ? dict.setup.uploading
+                    : dict.setup.uploadCitationsButton}
                 </button>
               </div>
             </div>
 
             {file ? (
-              <div className="mt-3 text-sm text-gray-600">{dict.setup.selectedFile} {file.name}</div>
+              <div className="mt-3 text-sm text-gray-600">
+                {dict.setup.selectedFile} {file.name}
+              </div>
             ) : (
-              <div className="mt-3 text-sm text-gray-500">{dict.setup.noFileSelected}</div>
+              <div className="mt-3 text-sm text-gray-500">
+                {dict.setup.noFileSelected}
+              </div>
             )}
 
-            {uploadError ? <div className="mt-3 text-sm text-red-600">{uploadError}</div> : null}
+            {uploadError ? (
+              <div className="mt-3 text-sm text-red-600">{uploadError}</div>
+            ) : null}
             {uploadResult ? (
               <div className="mt-3 rounded-md bg-green-50 p-3 text-sm text-green-800">
                 {uploadResult.message || 'Upload succeeded'}
               </div>
             ) : null}
-
           </div>
 
           {/* YAML editor */}
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <label className="text-sm font-medium text-gray-700">{dict.setup.criteriaConfig}</label>
-                <p className="mt-1 text-xs text-gray-500">{dict.setup.criteriaConfigDesc}</p>
+                <label className="text-sm font-medium text-gray-700">
+                  {dict.setup.criteriaConfig}
+                </label>
+                <p className="mt-1 text-xs text-gray-500">
+                  {dict.setup.criteriaConfigDesc}
+                </p>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -311,7 +347,11 @@ export default function CanSrSetupPage() {
                   ref={yamlInputRef}
                   type="file"
                   accept=".yaml,.yml,text/yaml"
-                  onChange={(e) => handleYamlSelected(e.target.files ? e.target.files[0] : null)}
+                  onChange={(e) =>
+                    handleYamlSelected(
+                      e.target.files ? e.target.files[0] : null,
+                    )
+                  }
                   className="hidden"
                 />
 
@@ -331,24 +371,22 @@ export default function CanSrSetupPage() {
               </div>
             </div>
 
-              <div className="mt-3">
-              <textarea
-                value={yamlText}
-                onChange={(e) => setYamlText(e.target.value)}
-                className="w-full min-h-[220px] resize-y rounded-md border border-gray-200 bg-white px-3 py-2 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                placeholder="# criteria yaml"
-              />
+            <div className="mt-3 space-y-3">
+              <CriteriaBuilder yamlText={yamlText} onYamlChange={setYamlText} />
+
               {yamlLoading ? (
-                <div className="mt-2 text-sm text-gray-500">Loading example...</div>
+                <div className="text-sm text-gray-500">Loading example...</div>
               ) : yamlSaveMessage ? (
-                <div className="mt-2 text-sm text-gray-600">{yamlSaveMessage}</div>
+                <div className="text-sm text-gray-600">{yamlSaveMessage}</div>
               ) : null}
 
-              <div className="mt-3 flex items-center space-x-2">
+              <div className="flex items-center space-x-2">
                 <button
                   onClick={() => {
                     try {
-                      const blob = new Blob([yamlText || ''], { type: 'text/yaml;charset=utf-8' })
+                      const blob = new Blob([yamlText || ''], {
+                        type: 'text/yaml;charset=utf-8',
+                      })
                       const url = URL.createObjectURL(blob)
                       const a = document.createElement('a')
                       a.href = url
@@ -371,7 +409,11 @@ export default function CanSrSetupPage() {
                 <button
                   onClick={saveYaml}
                   disabled={yamlSaving}
-                  className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                  className={`rounded-md px-3 py-2 text-sm font-medium text-white ${
+                    yamlSaving
+                      ? 'bg-emerald-300'
+                      : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
                 >
                   {yamlSaving ? dict.setup.saving : dict.setup.saveCriteria}
                 </button>
@@ -389,16 +431,17 @@ export default function CanSrSetupPage() {
               </button>
             </div>
           </div> */}
-
         </div>
       </main>
       <ManageUsersPopup
-          open={manageOpen}
-          onClose={() => setManageOpen(false)}
-          srId={srId}
-          initialEmails={(sr && (sr.users || sr.user_emails || sr.allowed_users)) || []}
-          authHeaders={authHeaders}
-        />
+        open={manageOpen}
+        onClose={() => setManageOpen(false)}
+        srId={srId}
+        initialEmails={
+          (sr && (sr.users || sr.user_emails || sr.allowed_users)) || []
+        }
+        authHeaders={authHeaders}
+      />
     </div>
   )
 }

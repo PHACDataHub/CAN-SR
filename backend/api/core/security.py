@@ -90,7 +90,9 @@ async def update_user(user_id: str, user_in: UserUpdate) -> Optional[UserRead]:
     return UserRead.model_validate(updated_user_data)
 
 
-async def authenticate_user(email: str, password: str, sso: bool = False) -> Optional[Dict[str, Any]]:
+async def authenticate_user(
+    email: str, password: str, sso: bool = False
+) -> Optional[Dict[str, Any]]:
     """Authenticate a user"""
     email = email.lower()
     if not user_db_service:

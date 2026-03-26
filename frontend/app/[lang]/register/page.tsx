@@ -26,7 +26,7 @@ export default function RegisterPage() {
   const router = useRouter()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -121,9 +121,7 @@ export default function RegisterPage() {
             <h2 className="text-3xl font-bold text-gray-900">
               {dict.register.formTitle}
             </h2>
-            <p className="mt-2 text-gray-600">
-              {dict.register.formSubtitle}
-            </p>
+            <p className="mt-2 text-gray-600">{dict.register.formSubtitle}</p>
           </div>
 
           {error && (
@@ -250,7 +248,9 @@ export default function RegisterPage() {
               className="w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
               disabled={isLoading}
             >
-              {isLoading ? dict.register.creatingAccount : dict.register.createAccount}
+              {isLoading
+                ? dict.register.creatingAccount
+                : dict.register.createAccount}
             </Button>
           </form>
 

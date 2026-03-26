@@ -21,7 +21,7 @@ export default function LoginPage() {
   const dict = useDictionary()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   // For language swaps
   const currentPathname = usePathname()
@@ -93,11 +93,11 @@ export default function LoginPage() {
       </div>
 
       {/* Right side - Login Form */}
-      <div className="flex relative w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
+      <div className="relative flex w-full items-center justify-center overflow-y-auto bg-white p-6 md:p-10 lg:w-2/5">
         <div className="absolute top-5 right-5">
           <Link
             href={nextLangPath}
-            className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+            className="text-right text-base text-blue-600 underline transition-colors hover:text-blue-800"
           >
             {dict.common.languageSwitch}
           </Link>
@@ -106,7 +106,7 @@ export default function LoginPage() {
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-3xl font-bold text-gray-900">
-              { dict.login.formTitle }
+              {dict.login.formTitle}
             </h2>
           </div>
 
@@ -173,10 +173,10 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
-            <div className='flex gap-3'>
+            <div className="flex gap-3">
               <Button
                 type="submit"
-                className="flex-1 w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
+                className="w-full flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
                 disabled={isLoading}
               >
                 {isLoading ? dict.login.signingIn : dict.common.signIn}
@@ -184,11 +184,24 @@ export default function LoginPage() {
 
               <Button
                 className="flex-1 rounded-lg bg-blue-600 py-3 font-medium text-white transition-all duration-200 hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 focus:outline-none"
-                onClick={() => { window.location.href = `${API_ENDPOINTS.AUTH.MICROSOFT_SSO}?lang=${lang}`}}
+                onClick={() => {
+                  window.location.href = `${API_ENDPOINTS.AUTH.MICROSOFT_SSO}?lang=${lang}`
+                }}
                 type="button"
               >
-                <div className='flex items-center gap-1'>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><title>MS-SymbolLockup</title><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
+                <div className="flex items-center gap-1">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="21"
+                    height="21"
+                    viewBox="0 0 21 21"
+                  >
+                    <title>MS-SymbolLockup</title>
+                    <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+                    <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+                    <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+                    <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+                  </svg>
                   <p>{dict.common.signInWith}</p>
                 </div>
               </Button>

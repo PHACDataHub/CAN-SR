@@ -9,7 +9,7 @@ export default function HomePage() {
   const dict = useDictionary()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   useEffect(() => {
     // Check if user is logged in

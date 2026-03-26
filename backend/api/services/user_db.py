@@ -16,7 +16,6 @@ from .postgres_auth import postgres_server
 logger = logging.getLogger(__name__)
 
 
-
 class UserDatabaseService:
     """Service for managing user data in PostgreSQL via psycopg3 async."""
 
@@ -29,6 +28,7 @@ class UserDatabaseService:
         self._registry_cache_ts: float = 0.0
         self._registry_cache_ttl_s: float = 30.0
         self._registry_cache_lock = asyncio.Lock()
+
     @staticmethod
     def _serialize_dates(row: Dict[str, Any]) -> Dict[str, Any]:
         for field in ("created_at", "updated_at", "last_login"):
@@ -50,11 +50,16 @@ class UserDatabaseService:
         """Load the user registry from storage."""
         async with self._registry_cache_lock:
             now = asyncio.get_running_loop().time()
-            if self._registry_cache is not None and (now - self._registry_cache_ts) < self._registry_cache_ttl_s:
+            if (
+                self._registry_cache is not None
+                and (now - self._registry_cache_ts) < self._registry_cache_ttl_s
+            ):
                 return self._registry_cache
 
             try:
-                content, _filename = await self.storage.get_bytes_by_path(self._registry_path())
+                content, _filename = await self.storage.get_bytes_by_path(
+                    self._registry_path()
+                )
                 reg = json.loads(content.decode("utf-8"))
             except Exception:
                 # Create empty registry if it doesn't exist / cannot be read
@@ -81,12 +86,12 @@ class UserDatabaseService:
             return ok
         except Exception:
             return False
+
     async def ensure_table_exists(self) -> None:
         """Create the users table if it does not already exist."""
         try:
             async with postgres_server.aconn() as conn:
-                await conn.execute(
-                    """
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id              TEXT PRIMARY KEY,
                         email           TEXT UNIQUE NOT NULL,
@@ -98,8 +103,7 @@ class UserDatabaseService:
                         updated_at      TIMESTAMP WITH TIME ZONE DEFAULT now(),
                         last_login      TIMESTAMP WITH TIME ZONE
                     )
-                    """
-                )
+                    """)
             logger.info("Ensured users table exists")
         except Exception as e:
             logger.exception("Failed to ensure users table exists: %s", e)
@@ -129,8 +133,17 @@ class UserDatabaseService:
                          created_at, updated_at, last_login)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (user_id, email, user_data.full_name, hashed_password,
-                     True, False, now, now, None),
+                    (
+                        user_id,
+                        email,
+                        user_data.full_name,
+                        hashed_password,
+                        True,
+                        False,
+                        now,
+                        now,
+                        None,
+                    ),
                 )
             return UserRead(
                 id=user_id,
@@ -178,7 +191,9 @@ class UserDatabaseService:
                 row = await cur.fetchone()
                 if not row:
                     return None
-                if not sso and not self._verify_password(password, row["hashed_password"]):
+                if not sso and not self._verify_password(
+                    password, row["hashed_password"]
+                ):
                     return None
                 now = datetime.now(timezone.utc)
                 await conn.execute(
@@ -193,8 +208,12 @@ class UserDatabaseService:
         self, user_id: str, update_data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         allowed_fields = {
-            "full_name", "email", "hashed_password",
-            "is_active", "is_superuser", "last_login",
+            "full_name",
+            "email",
+            "hashed_password",
+            "is_active",
+            "is_superuser",
+            "last_login",
         }
         fields = {k: v for k, v in update_data.items() if k in allowed_fields}
         if not fields:

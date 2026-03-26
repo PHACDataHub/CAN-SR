@@ -9,7 +9,12 @@ from .procrastinate_app import PROCRASTINATE_APP
 from .run_all_repo import run_all_repo
 from .procrastinate_app import worker_concurrency
 from ..services.sr_db_service import srdb_service
-from ..services.cit_db_service import cits_dp_service, snake_case_column, snake_case_param, snake_case
+from ..services.cit_db_service import (
+    cits_dp_service,
+    snake_case_column,
+    snake_case_param,
+    snake_case,
+)
 from ..citations import router as citations_router
 from ..services.azure_openai_client import azure_openai_client
 from ..services.storage import storage_service
@@ -93,12 +98,16 @@ def _eligible_ids(*, sr_id: str, table_name: str, step: str) -> List[int]:
     elif step == "extract":
         filter_step = "l2"
 
-    ids = cits_dp_service.list_citation_ids(filter_step if filter_step else None, table_name)
+    ids = cits_dp_service.list_citation_ids(
+        filter_step if filter_step else None, table_name
+    )
 
     # PDF gating for l2/extract
     if step in ("l2", "extract"):
         # keep only rows with fulltext_url
-        rows = cits_dp_service.get_citations_by_ids(ids, table_name, fields=["id", "fulltext_url"])
+        rows = cits_dp_service.get_citations_by_ids(
+            ids, table_name, fields=["id", "fulltext_url"]
+        )
         ok = []
         for r in rows:
             try:
@@ -121,7 +130,9 @@ async def _run_l1_for_citation(
     force: bool,
 ) -> tuple[int, int, int]:
     """Returns (done, skipped, failed) increments for this citation."""
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row:
         return (0, 0, 1)
 
@@ -129,7 +140,9 @@ async def _run_l1_for_citation(
     if not include_cols:
         include_cols = ["title", "abstract"]
 
-    citation_text = citations_router._build_combined_citation_from_row(row, include_cols)
+    citation_text = citations_router._build_combined_citation_from_row(
+        row, include_cols
+    )
 
     cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
     l1 = cp.get("l1") if isinstance(cp, dict) else None
@@ -149,7 +162,9 @@ async def _run_l1_for_citation(
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise RunAllCanceled()
         await _wait_if_paused(job_id)
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        opts = (
+            possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        )
         xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
         col = snake_case_column(q)
         existing = row.get(col)
@@ -160,7 +175,9 @@ async def _run_l1_for_citation(
             raise RuntimeError("Azure OpenAI client not configured")
 
         options_listed = "\n".join([f"{j}. {opt}" for j, opt in enumerate(opts)])
-        prompt = PROMPT_JSON_TEMPLATE.format(question=q, cit=citation_text, options=options_listed, xtra=xtra)
+        prompt = PROMPT_JSON_TEMPLATE.format(
+            question=q, cit=citation_text, options=options_listed, xtra=xtra
+        )
         llm_response = await azure_openai_client.simple_chat(
             user_message=prompt,
             system_prompt=None,
@@ -181,15 +198,28 @@ async def _run_l1_for_citation(
 
         classification_json = {
             "selected": resolved_selected,
-            "explanation": parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or "",
-            "confidence": float(parsed.get("confidence") or 0.0) if str(parsed.get("confidence") or "").strip() else 0.0,
+            "explanation": parsed.get("explanation")
+            or parsed.get("reason")
+            or parsed.get("explain")
+            or "",
+            "confidence": (
+                float(parsed.get("confidence") or 0.0)
+                if str(parsed.get("confidence") or "").strip()
+                else 0.0
+            ),
             "evidence_sentences": parsed.get("evidence_sentences") or [],
             "evidence_tables": parsed.get("evidence_tables") or [],
             "evidence_figures": parsed.get("evidence_figures") or [],
             "llm_raw": llm_response,
         }
 
-        await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)
+        await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col,
+            classification_json,
+            table_name,
+        )
 
         # Best-effort autofill human_ if empty
         try:
@@ -229,7 +259,9 @@ async def _ensure_fulltext_if_needed(
     force: bool,
 ) -> bool:
     """Ensure fulltext artifacts exist. Returns True if available after this call."""
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row:
         return False
     if not row.get("fulltext_url"):
@@ -242,9 +274,13 @@ async def _ensure_fulltext_if_needed(
         await extract_fulltext_from_storage(sr_id, citation_id, current_user=current_user)  # type: ignore
     except Exception:
         # It's okay if DI/grobid fails; L2/extract depends on fulltext text though.
-        row2 = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+        row2 = await run_in_threadpool(
+            cits_dp_service.get_citation_by_id, citation_id, table_name
+        )
         return bool(row2 and row2.get("fulltext"))
-    row3 = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row3 = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     return bool(row3 and row3.get("fulltext"))
 
 
@@ -258,18 +294,28 @@ async def _run_l2_for_citation(
     model: Optional[str],
     force: bool,
 ) -> tuple[int, int, int]:
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row or not row.get("fulltext_url"):
         return (0, 1, 0)
 
     # fake current_user for storage service paths (it only uses id in upload; extract reads by path)
     current_user = {"id": "system", "email": "system"}
     await _wait_if_paused(job_id)
-    ok = await _ensure_fulltext_if_needed(sr_id=sr_id, citation_id=citation_id, current_user=current_user, table_name=table_name, force=force)
+    ok = await _ensure_fulltext_if_needed(
+        sr_id=sr_id,
+        citation_id=citation_id,
+        current_user=current_user,
+        table_name=table_name,
+        force=force,
+    )
     if not ok:
         return (0, 1, 0)
 
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row:
         return (0, 0, 1)
 
@@ -284,8 +330,13 @@ async def _run_l2_for_citation(
     if not questions:
         return (0, 1, 0)
 
-    include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or ["title", "abstract"]
-    citation_text = citations_router._build_combined_citation_from_row(row, include_cols)
+    include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
+        "title",
+        "abstract",
+    ]
+    citation_text = citations_router._build_combined_citation_from_row(
+        row, include_cols
+    )
     fulltext = row.get("fulltext") or citation_text
 
     # Tables/Figures context from row
@@ -333,7 +384,9 @@ async def _run_l2_for_citation(
             caption = item.get("caption")
             if not idx or not blob_addr:
                 continue
-            figures_lines.append(f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})")
+            figures_lines.append(
+                f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})"
+            )
             try:
                 img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                 if img_bytes:
@@ -347,7 +400,9 @@ async def _run_l2_for_citation(
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise RunAllCanceled()
         await _wait_if_paused(job_id)
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        opts = (
+            possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        )
         xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
         col = snake_case_column(q)
         existing = row.get(col)
@@ -392,15 +447,28 @@ async def _run_l2_for_citation(
 
         classification_json = {
             "selected": resolved_selected,
-            "explanation": parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or "",
-            "confidence": float(parsed.get("confidence") or 0.0) if str(parsed.get("confidence") or "").strip() else 0.0,
+            "explanation": parsed.get("explanation")
+            or parsed.get("reason")
+            or parsed.get("explain")
+            or "",
+            "confidence": (
+                float(parsed.get("confidence") or 0.0)
+                if str(parsed.get("confidence") or "").strip()
+                else 0.0
+            ),
             "evidence_sentences": parsed.get("evidence_sentences") or [],
             "evidence_tables": parsed.get("evidence_tables") or [],
             "evidence_figures": parsed.get("evidence_figures") or [],
             "llm_raw": llm_response,
         }
 
-        await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)
+        await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            citation_id,
+            col,
+            classification_json,
+            table_name,
+        )
 
         # Best-effort autofill human
         try:
@@ -440,24 +508,36 @@ async def _run_extract_for_citation(
     model: Optional[str],
     force: bool,
 ) -> tuple[int, int, int]:
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row or not row.get("fulltext_url"):
         return (0, 1, 0)
 
     current_user = {"id": "system", "email": "system"}
     await _wait_if_paused(job_id)
-    ok = await _ensure_fulltext_if_needed(sr_id=sr_id, citation_id=citation_id, current_user=current_user, table_name=table_name, force=force)
+    ok = await _ensure_fulltext_if_needed(
+        sr_id=sr_id,
+        citation_id=citation_id,
+        current_user=current_user,
+        table_name=table_name,
+        force=force,
+    )
     if not ok:
         return (0, 1, 0)
 
-    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    row = await run_in_threadpool(
+        cits_dp_service.get_citation_by_id, citation_id, table_name
+    )
     if not row:
         return (0, 0, 1)
 
     cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
     params = cp.get("parameters") if isinstance(cp, dict) else None
     categories = (params or {}).get("categories") if isinstance(params, dict) else []
-    possible = (params or {}).get("possible_parameters") if isinstance(params, dict) else []
+    possible = (
+        (params or {}).get("possible_parameters") if isinstance(params, dict) else []
+    )
     descs = (params or {}).get("descriptions") if isinstance(params, dict) else []
     categories = categories if isinstance(categories, list) else []
     possible = possible if isinstance(possible, list) else []
@@ -528,7 +608,9 @@ async def _run_extract_for_citation(
             caption = item.get("caption")
             if not idx or not blob_addr:
                 continue
-            flines.append(f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})")
+            flines.append(
+                f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})"
+            )
             try:
                 img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                 if img_bytes:
@@ -621,7 +703,9 @@ async def _run_extract_for_citation(
             "llm_raw": str(llm_response)[:4000],
         }
 
-        await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, stored, table_name)
+        await run_in_threadpool(
+            cits_dp_service.update_jsonb_column, citation_id, col, stored, table_name
+        )
 
         # best-effort autofill human_param
         try:
@@ -664,16 +748,23 @@ async def run_all_start(job_id: str) -> None:
         ids = []
 
         sr, table_name = await _load_sr_and_table(sr_id)
-        ids = await run_in_threadpool(_eligible_ids, sr_id=sr_id, table_name=table_name, step=step)
+        ids = await run_in_threadpool(
+            _eligible_ids, sr_id=sr_id, table_name=table_name, step=step
+        )
         await run_in_threadpool(run_all_repo.set_total, job_id, len(ids))
-        print(f"[run-all] kickoff job_id={job_id} step={step} eligible={len(ids)}", flush=True)
+        print(
+            f"[run-all] kickoff job_id={job_id} step={step} eligible={len(ids)}",
+            flush=True,
+        )
 
         # If user paused before kickoff, preserve paused status.
         if await run_in_threadpool(run_all_repo.is_paused, job_id):
             await run_in_threadpool(run_all_repo.set_status, job_id, "paused")
         else:
             await run_in_threadpool(run_all_repo.set_status, job_id, "running")
-        await run_in_threadpool(run_all_repo.update_phase, job_id, f"enqueued {len(ids)}")
+        await run_in_threadpool(
+            run_all_repo.update_phase, job_id, f"enqueued {len(ids)}"
+        )
 
         # Fair scheduling: persist chunks and enqueue only the next chunk.
         chunks = [ids[i : i + chunk_size] for i in range(0, len(ids), chunk_size)]
@@ -689,7 +780,9 @@ async def run_all_start(job_id: str) -> None:
                 )
                 if next_chunk_id is None:
                     break
-                await run_all_chunk.defer_async(job_id=job_id, chunk_id=int(next_chunk_id))
+                await run_all_chunk.defer_async(
+                    job_id=job_id, chunk_id=int(next_chunk_id)
+                )
 
     except Exception as e:
         await run_in_threadpool(run_all_repo.set_status, job_id, "failed", error=str(e))
@@ -739,18 +832,49 @@ async def run_all_chunk(job_id: str, chunk_id: int) -> None:
         try:
             await _wait_if_paused(job_id)
             if step == "l1":
-                d, s, f = await _run_l1_for_citation(job_id=job_id, sr=sr, table_name=table_name, citation_id=int(cid), model=model, force=force)
+                d, s, f = await _run_l1_for_citation(
+                    job_id=job_id,
+                    sr=sr,
+                    table_name=table_name,
+                    citation_id=int(cid),
+                    model=model,
+                    force=force,
+                )
             elif step == "l2":
-                d, s, f = await _run_l2_for_citation(job_id=job_id, sr=sr, table_name=table_name, sr_id=sr_id, citation_id=int(cid), model=model, force=force)
+                d, s, f = await _run_l2_for_citation(
+                    job_id=job_id,
+                    sr=sr,
+                    table_name=table_name,
+                    sr_id=sr_id,
+                    citation_id=int(cid),
+                    model=model,
+                    force=force,
+                )
             elif step == "extract":
-                d, s, f = await _run_extract_for_citation(job_id=job_id, sr=sr, table_name=table_name, sr_id=sr_id, citation_id=int(cid), model=model, force=force)
+                d, s, f = await _run_extract_for_citation(
+                    job_id=job_id,
+                    sr=sr,
+                    table_name=table_name,
+                    sr_id=sr_id,
+                    citation_id=int(cid),
+                    model=model,
+                    force=force,
+                )
             else:
                 d, s, f = (0, 1, 0)
-            await run_in_threadpool(run_all_repo.inc_counts, job_id, done=d, skipped=s, failed=f)
+            await run_in_threadpool(
+                run_all_repo.inc_counts, job_id, done=d, skipped=s, failed=f
+            )
         except RunAllCanceled:
             return
         except Exception as e:
-            await run_in_threadpool(run_all_repo.add_error, job_id, citation_id=int(cid), stage=step, error=str(e))
+            await run_in_threadpool(
+                run_all_repo.add_error,
+                job_id,
+                citation_id=int(cid),
+                stage=step,
+                error=str(e),
+            )
             await run_in_threadpool(run_all_repo.inc_counts, job_id, failed=1)
             chunk_failed = True
             chunk_error = str(e)
@@ -763,7 +887,11 @@ async def run_all_chunk(job_id: str, chunk_id: int) -> None:
     # Mark chunk complete and schedule more work (up to prefetch).
     try:
         if chunk_failed:
-            await run_in_threadpool(run_all_repo.mark_chunk_failed, int(chunk_id), error=chunk_error or "chunk had failures")
+            await run_in_threadpool(
+                run_all_repo.mark_chunk_failed,
+                int(chunk_id),
+                error=chunk_error or "chunk had failures",
+            )
         else:
             await run_in_threadpool(run_all_repo.mark_chunk_done, int(chunk_id))
     except Exception:
@@ -802,7 +930,11 @@ async def run_all_chunk(job_id: str, chunk_id: int) -> None:
             # Successful completion should remain visible in the UI until the
             # user dismisses it. We model that as a terminal-but-sticky status
             # called "finished". Dismissal transitions "finished" -> "done".
-            if total > 0 and (done + skipped + failed) >= total and not await run_in_threadpool(run_all_repo.is_canceled, job_id):
+            if (
+                total > 0
+                and (done + skipped + failed) >= total
+                and not await run_in_threadpool(run_all_repo.is_canceled, job_id)
+            ):
                 await run_in_threadpool(run_all_repo.set_status, job_id, "finished")
     except Exception:
         pass

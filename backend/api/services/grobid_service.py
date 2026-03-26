@@ -16,7 +16,7 @@ COLORS = {
     "formula": "rgba(255, 165, 0, 1)",  # Orange
     "figure": "rgba(165, 42, 42, 1)",  # Brown
     "title": "rgba(255, 0, 0, 1)",  # Red
-    "affiliation": "rgba(255, 165, 0, 1)"  # red-orengi
+    "affiliation": "rgba(255, 165, 0, 1)",  # red-orengi
 }
 
 
@@ -27,10 +27,12 @@ def get_color(name, param):
 
     return color
 
+
 def exclude_tags(tag):
     ret = False
-    ret |= tag.name != 'abstract' # exclude the abstract
+    ret |= tag.name != "abstract"  # exclude the abstract
     return ret
+
 
 class GrobidService:
     def __init__(self):
@@ -77,16 +79,20 @@ class GrobidService:
 
     async def process_structure(self, input_path) -> (dict, list):
         if not self.grobid_client:
-            raise RuntimeError("GROBID client is not available (service not configured or down)")
-        pdf_file, status, text = self.grobid_client.process_pdf("processFulltextDocument",
-                                                                input_path,
-                                                                consolidate_header=True,
-                                                                consolidate_citations=False,
-                                                                segment_sentences=True,
-                                                                tei_coordinates=True,
-                                                                include_raw_citations=False,
-                                                                include_raw_affiliations=False,
-                                                                generateIDs=True)
+            raise RuntimeError(
+                "GROBID client is not available (service not configured or down)"
+            )
+        pdf_file, status, text = self.grobid_client.process_pdf(
+            "processFulltextDocument",
+            input_path,
+            consolidate_header=True,
+            consolidate_citations=False,
+            segment_sentences=True,
+            tei_coordinates=True,
+            include_raw_citations=False,
+            include_raw_affiliations=False,
+            generateIDs=True,
+        )
 
         if status != 200:
             return
@@ -99,23 +105,29 @@ class GrobidService:
     @staticmethod
     def box_to_dict(box, color=None, type=None, text=None):
 
-        item = {"page": box[0], "x": box[1], "y": box[2], "width": box[3], "height": box[4]}
+        item = {
+            "page": box[0],
+            "x": box[1],
+            "y": box[2],
+            "width": box[3],
+            "height": box[4],
+        }
         if color is not None:
-            item['color'] = color
+            item["color"] = color
 
         if type:
-            item['type'] = type
+            item["type"] = type
 
         if text:
-            item['text'] = text
+            item["text"] = text
 
         return item
 
     async def get_coordinates(self, text):
-        soup = BeautifulSoup(text, 'xml')
+        soup = BeautifulSoup(text, "xml")
 
         # exclude certain tag names
-        all_blocks_with_coordinates = soup.find('text').find_all(coords=True)
+        all_blocks_with_coordinates = soup.find("text").find_all(coords=True)
         # all_blocks_with_coordinates = soup.find_all()
 
         # if use_sentences:
@@ -124,26 +136,34 @@ class GrobidService:
         coordinates = []
         count = 0
         for block_id, block in enumerate(all_blocks_with_coordinates):
-            for box in filter(lambda c: len(c) > 0 and c[0] != "", block['coords'].split(";")):
+            for box in filter(
+                lambda c: len(c) > 0 and c[0] != "", block["coords"].split(";")
+            ):
                 coordinates.append(
                     self.box_to_dict(
                         box.split(","),
                         get_color(block.name, count % 2 == 0),
                         type=block.name,
-                        text=block.text
+                        text=block.text,
                     ),
                 )
             count += 1
         return coordinates
 
     async def get_pages(self, text):
-        soup = BeautifulSoup(text, 'xml')
+        soup = BeautifulSoup(text, "xml")
         pages_infos = soup.find_all("surface")
 
-        pages = [{'width': float(page['lrx']) - float(page['ulx']), 'height': float(page['lry']) - float(page['uly'])}
-             for page in pages_infos]
+        pages = [
+            {
+                "width": float(page["lrx"]) - float(page["ulx"]),
+                "height": float(page["lry"]) - float(page["uly"]),
+            }
+            for page in pages_infos
+        ]
 
         return pages
+
 
 # Global instance
 try:

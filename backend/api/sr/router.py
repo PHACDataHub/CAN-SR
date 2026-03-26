@@ -28,6 +28,7 @@ from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
 
+
 class SystematicReviewCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -53,10 +54,9 @@ class SystematicReviewRead(BaseModel):
     criteria_parsed: Optional[Dict[str, Any]] = None
 
 
-
-
-
-@router.post("/create", response_model=SystematicReviewRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/create", response_model=SystematicReviewRead, status_code=status.HTTP_201_CREATED
+)
 async def create_systematic_review(
     name: str = Form(...),
     description: Optional[str] = Form(None),
@@ -78,7 +78,9 @@ async def create_systematic_review(
     """
 
     if not name or not name.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
+        )
 
     # Load YAML criteria
     criteria_str: Optional[str] = None
@@ -103,7 +105,8 @@ async def create_systematic_review(
                 )
     except yaml.YAMLError as ye:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid YAML provided: {ye}",
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -121,7 +124,10 @@ async def create_systematic_review(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create systematic review: {e}",
+        )
 
     return SystematicReviewRead(
         id=sr_doc.get("id"),
@@ -164,27 +170,45 @@ async def add_user_to_systematic_review(
     """
 
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     # resolve user
     target_user_id = None
     if payload.user_email:
         target_user_id = payload.user_email
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email"
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(
+            srdb_service.add_user, sr_id, target_user_id, current_user.get("id")
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to add user: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "added_user_id": target_user_id, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "added_user_id": target_user_id,
+        "matched_count": res.get("matched_count"),
+        "modified_count": res.get("modified_count"),
+    }
 
 
 @router.post("/{sr_id}/remove-user")
@@ -201,31 +225,52 @@ async def remove_user_from_systematic_review(
     The owner cannot be removed via this endpoint.
     """
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
-    
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
+
     # resolve user
     target_user_id = None
     if payload.user_email:
         target_user_id = payload.user_email
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email"
+        )
 
     # do not allow removing the owner
     if target_user_id == sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove the owner from the systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove the owner from the systematic review",
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(
+            srdb_service.remove_user, sr_id, target_user_id, current_user.get("id")
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove user: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "removed_user_id": target_user_id, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "removed_user_id": target_user_id,
+        "matched_count": res.get("matched_count"),
+        "modified_count": res.get("modified_count"),
+    }
 
 
 @router.get("/mine", response_model=List[SystematicReviewRead])
@@ -240,11 +285,16 @@ async def list_systematic_reviews_for_user(
     user_id = current_user.get("email")
     results = []
     try:
-        docs = await run_in_threadpool(srdb_service.list_systematic_reviews_for_user, user_id)
+        docs = await run_in_threadpool(
+            srdb_service.list_systematic_reviews_for_user, user_id
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list systematic reviews: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list systematic reviews: {e}",
+        )
 
     for doc in docs:
         results.append(
@@ -268,17 +318,24 @@ async def list_systematic_reviews_for_user(
 
 
 @router.get("/{sr_id}", response_model=SystematicReviewRead)
-async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+async def get_systematic_review(
+    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
     Get a single systematic review by id. User must be a member to view.
     """
 
     try:
-        doc, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        doc, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     return SystematicReviewRead(
         id=doc.get("id"),
@@ -308,11 +365,16 @@ async def get_systematic_review_criteria_parsed(
     """
 
     try:
-        doc, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        doc, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     cp = doc.get("criteria_parsed") or {}
     return {"criteria_parsed": cp}
@@ -334,11 +396,16 @@ async def update_systematic_review_criteria(
     """
 
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     # Load YAML criteria
     criteria_str: Optional[str] = None
@@ -352,7 +419,10 @@ async def update_systematic_review_criteria(
             criteria_str = criteria_yaml
 
         if not criteria_str:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either criteria_file or criteria_yaml must be provided")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either criteria_file or criteria_yaml must be provided",
+            )
 
         criteria_obj = yaml.safe_load(criteria_str)
         if criteria_obj is None:
@@ -364,18 +434,28 @@ async def update_systematic_review_criteria(
             )
     except yaml.YAMLError as ye:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid YAML provided: {ye}",
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     # perform update
     try:
-        doc = await run_in_threadpool(srdb_service.update_criteria, sr_id, criteria_obj, criteria_str, current_user.get("id"))
+        doc = await run_in_threadpool(
+            srdb_service.update_criteria,
+            sr_id,
+            criteria_obj,
+            criteria_str,
+            current_user.get("id"),
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update criteria: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update criteria: {e}",
+        )
 
     return SystematicReviewRead(
         id=doc.get("id"),
@@ -394,7 +474,9 @@ async def update_systematic_review_criteria(
 
 
 @router.delete("/{sr_id}")
-async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+async def delete_systematic_review(
+    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
     Soft-delete a systematic review by marking its 'visible' flag as False.
 
@@ -402,28 +484,49 @@ async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = De
     """
 
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        sr, screening = await load_sr_and_check(
+            sr_id, current_user, srdb_service, require_screening=False
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     requester_id = current_user.get("id")
     if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may delete this systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner may delete this systematic review",
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.soft_delete_systematic_review, sr_id, requester_id)
+        res = await run_in_threadpool(
+            srdb_service.soft_delete_systematic_review, sr_id, requester_id
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete systematic review: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "deleted": True, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "deleted": True,
+        "matched_count": res.get("matched_count"),
+        "modified_count": res.get("modified_count"),
+    }
 
 
 @router.post("/{sr_id}/undelete")
-async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+async def undelete_systematic_review(
+    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
     Undelete (restore) a systematic review by marking its 'visible' flag as True.
 
@@ -431,28 +534,53 @@ async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = 
     """
 
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
+        sr, screening = await load_sr_and_check(
+            sr_id,
+            current_user,
+            srdb_service,
+            require_screening=False,
+            require_visible=False,
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     requester_id = current_user.get("id")
     if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may undelete this systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner may undelete this systematic review",
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.undelete_systematic_review, sr_id, requester_id)
+        res = await run_in_threadpool(
+            srdb_service.undelete_systematic_review, sr_id, requester_id
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to undelete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to undelete systematic review: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "undeleted": True, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "undeleted": True,
+        "matched_count": res.get("matched_count"),
+        "modified_count": res.get("modified_count"),
+    }
 
 
 @router.delete("/{sr_id}/hard")
-async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+async def hard_delete_systematic_review(
+    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
     Permanently remove the systematic review document from MongoDB.
 
@@ -463,15 +591,27 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
     """
 
     try:
-        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False, require_visible=False)
+        sr, screening = await load_sr_and_check(
+            sr_id,
+            current_user,
+            srdb_service,
+            require_screening=False,
+            require_visible=False,
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     requester_id = current_user.get("id")
     if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may hard-delete this systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner may hard-delete this systematic review",
+        )
 
     # Attempt to perform screening resources cleanup prior to deleting the SR document.
     cleanup_result = None
@@ -492,15 +632,23 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
         cleanup_result = {"status": "cleanup_import_failed", "error": str(e)}
 
     try:
-        res = await run_in_threadpool(srdb_service.hard_delete_systematic_review, sr_id, requester_id)
+        res = await run_in_threadpool(
+            srdb_service.hard_delete_systematic_review, sr_id, requester_id
+        )
         deleted_count = res.get("deleted_count")
         if not deleted_count:
             # If backend reported zero deletions, raise NotFound to match prior behavior
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found during hard delete")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Systematic review not found during hard delete",
+            )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to hard-delete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to hard-delete systematic review: {e}",
+        )
 
     return {
         "status": "success",

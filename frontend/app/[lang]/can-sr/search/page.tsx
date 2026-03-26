@@ -42,14 +42,11 @@ export default function Search() {
       database: selectedDatabase,
       search_term: searchStrings[selectedDatabase],
     }
-    await fetch(
-      `/api/can-sr/search?sr_id=${encodeURIComponent(srId)}`,
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(bodyPayload),
-      },
-    )
+    await fetch(`/api/can-sr/search?sr_id=${encodeURIComponent(srId)}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(bodyPayload),
+    })
   }
 
   const handleTextChange = (database: string, value: string) => {

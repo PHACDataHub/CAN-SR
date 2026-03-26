@@ -6,8 +6,8 @@ import { BACKEND_URL } from '@/lib/config'
  *
  * Routes handled:
  * - POST    /api/can-sr/reviews/create                              -> create SR (multipart or JSON)
- * - GET     /api/can-sr/reviews/create?sr_id=                       -> get single SR by id 
- * - GET     /api/can-sr/reviews/create?sr_id=...?criteria_parsed=1  -> get single SR criteria by id 
+ * - GET     /api/can-sr/reviews/create?sr_id=                       -> get single SR by id
+ * - GET     /api/can-sr/reviews/create?sr_id=...?criteria_parsed=1  -> get single SR criteria by id
  *
  * Notes:
  * - For file uploads, send multipart/form-data to this route; it will forward FormData to backend.
@@ -79,7 +79,10 @@ export async function POST(request: NextRequest) {
     }
   } catch (error) {
     console.error('SR create API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }
 
@@ -93,7 +96,7 @@ export async function GET(request: NextRequest) {
         { status: 401 },
       )
     }
-    
+
     const params = request.nextUrl.searchParams
     const srId = params.get('sr_id')
     const criteriaParsed = params.get('criteria_parsed')
@@ -143,12 +146,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(data, { status: res.status })
     }
 
-    return NextResponse.json(
-      { error: "No sr_id provided." },
-      { status: 400 },
-    )
+    return NextResponse.json({ error: 'No sr_id provided.' }, { status: 400 })
   } catch (error) {
     console.error('SR create GET API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }

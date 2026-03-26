@@ -99,7 +99,13 @@ export async function GET(request: NextRequest) {
           parsed = { raw: text }
         }
         return NextResponse.json(
-          { error: parsed?.error || parsed?.detail || text || 'Failed to load citation' },
+          {
+            error:
+              parsed?.error ||
+              parsed?.detail ||
+              text ||
+              'Failed to load citation',
+          },
           { status: citationRes.status },
         )
       }
@@ -115,7 +121,10 @@ export async function GET(request: NextRequest) {
       console.debug('Resolved citation:', { url: citationUrl, citation })
       // Try common fields: document_id, documentId, fulltext_url, storage_path
       const documentId =
-        citation?.document_id || citation?.documentId || citation?.document || null
+        citation?.document_id ||
+        citation?.documentId ||
+        citation?.document ||
+        null
       // Prefer the explicit fulltext_url field when present (backend stores the citation's PDF path there).
       // Fallback to legacy storage_path/storagePath/fulltext if needed.
       const storagePath = citation?.fulltext_url || null
@@ -154,9 +163,6 @@ export async function GET(request: NextRequest) {
       method: 'GET',
       headers: fetchOptions.headers,
     })
-
-    
-
 
     if (!backendRes.ok) {
       // Read the backend response body for diagnostics and return it raw to the client
@@ -226,7 +232,10 @@ export async function GET(request: NextRequest) {
     })
   } catch (err: any) {
     console.error('Fulltext proxy GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }
 

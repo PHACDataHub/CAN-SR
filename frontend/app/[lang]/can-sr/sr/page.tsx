@@ -68,7 +68,7 @@ export default function CanSrLandingPage() {
 
       <SRHeader
         title={dict.cansr.title}
-        srName={loading ? "" : sr.name}
+        srName={loading ? '' : sr.name}
         showSettings={false}
         showExport={true}
         showBack={true}

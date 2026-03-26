@@ -19,13 +19,7 @@ const eslintConfig = [
 
   // Global ignores (Flat Config)
   {
-    ignores: [
-      '.next/**',
-      'node_modules/**',
-      'out/**',
-      'dist/**',
-      'build/**',
-    ],
+    ignores: ['.next/**', 'node_modules/**', 'out/**', 'dist/**', 'build/**'],
   },
 
   // Add custom rules override

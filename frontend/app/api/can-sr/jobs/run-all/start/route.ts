@@ -33,6 +33,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data, { status: res.status })
   } catch (error) {
     console.error('Run-all start proxy error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }

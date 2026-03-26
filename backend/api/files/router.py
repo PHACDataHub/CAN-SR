@@ -1,6 +1,7 @@
 """
 Files router for document management in CAN-SR.
 """
+
 from typing import List, Dict, Any, Optional
 import os
 import logging
@@ -28,6 +29,7 @@ router = APIRouter()
 
 class DocumentUploadResponse(BaseModel):
     """Response model for document upload"""
+
     document_id: str
     filename: str
     file_size: int
@@ -37,6 +39,7 @@ class DocumentUploadResponse(BaseModel):
 
 class DocumentInfo(BaseModel):
     """Document information model"""
+
     document_id: str
     filename: str
     file_size: int
@@ -45,6 +48,7 @@ class DocumentInfo(BaseModel):
 
 class DocumentListResponse(BaseModel):
     """Response model for document list"""
+
     total_documents: int
     documents: List[DocumentInfo]
 
@@ -60,8 +64,7 @@ async def upload_document(
     try:
         if not file.filename:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Filename is required"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Filename is required"
             )
 
         file_content = await file.read()
@@ -129,8 +132,7 @@ async def list_documents(
             document_infos.append(document_info)
 
         return DocumentListResponse(
-            total_documents=len(document_infos),
-            documents=document_infos
+            total_documents=len(document_infos), documents=document_infos
         )
 
     except HTTPException:
@@ -165,8 +167,7 @@ async def download_document(
 
         if not document:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
             )
 
         file_content = await storage_service.get_user_document(
@@ -222,9 +223,13 @@ async def download_by_path(
         try:
             signed_url = await storage_service.generate_signed_url(path)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path"
+            )
         except Exception as e:
-            logger.warning("Signed URL generation failed, falling back to streaming: %s", e)
+            logger.warning(
+                "Signed URL generation failed, falling back to streaming: %s", e
+            )
             signed_url = None
 
         if signed_url:
@@ -234,20 +239,26 @@ async def download_by_path(
         try:
             content, filename = await storage_service.get_bytes_by_path(path)
         except FileNotFoundError:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+            )
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path"
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to download: {e}",
+            )
+
         def gen():
             yield content
 
         return StreamingResponse(
             gen(),
             media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            },
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except HTTPException:
         raise
@@ -281,8 +292,7 @@ async def delete_document(
 
         if not document:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
             )
 
         success = await storage_service.delete_user_document(

@@ -96,17 +96,25 @@ class Settings(BaseSettings):
     # Background jobs (Procrastinate)
     # ---------------------------------------------------------------------
     # Enable Procrastinate-backed background jobs (required for /api/jobs/*)
-    ENABLE_PROCRASTINATE: bool = os.getenv("ENABLE_PROCRASTINATE", "false").lower().strip() == "true"
+    ENABLE_PROCRASTINATE: bool = (
+        os.getenv("ENABLE_PROCRASTINATE", "false").lower().strip() == "true"
+    )
 
     # Embedded worker loop (dev-friendly). Keep this OFF by default.
-    ENABLE_PROCRASTINATE_WORKER: bool = os.getenv("ENABLE_PROCRASTINATE_WORKER", "false").lower().strip() == "true"
+    ENABLE_PROCRASTINATE_WORKER: bool = (
+        os.getenv("ENABLE_PROCRASTINATE_WORKER", "false").lower().strip() == "true"
+    )
 
     # Worker concurrency (only used when ENABLE_PROCRASTINATE_WORKER=true)
-    PROCRASTINATE_WORKER_CONCURRENCY: int = int(os.getenv("PROCRASTINATE_WORKER_CONCURRENCY", "1"))
+    PROCRASTINATE_WORKER_CONCURRENCY: int = int(
+        os.getenv("PROCRASTINATE_WORKER_CONCURRENCY", "1")
+    )
 
     # Optional dev cleanup: clear out leftover queued/doing tasks on API startup.
     # IMPORTANT: default is true if the env var is absent.
-    PROCRASTINATE_CLEAR_ON_START: bool = os.getenv("PROCRASTINATE_CLEAR_ON_START", "true").lower().strip() == "true"
+    PROCRASTINATE_CLEAR_ON_START: bool = (
+        os.getenv("PROCRASTINATE_CLEAR_ON_START", "true").lower().strip() == "true"
+    )
 
     # Run-All job chunk size: citations per Procrastinate chunk task.
     # Larger values reduce overhead but can reduce fairness/responsiveness.
@@ -123,7 +131,9 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # Select primary Postgres mode.
     # docker/local use password auth; azure uses Entra token auth.
-    POSTGRES_MODE: str = os.getenv("POSTGRES_MODE", "docker").lower().strip()  # docker|local|azure
+    POSTGRES_MODE: str = (
+        os.getenv("POSTGRES_MODE", "docker").lower().strip()
+    )  # docker|local|azure
 
     # Canonical Postgres connection settings (single profile; values vary by environment)
     POSTGRES_HOST: Optional[str] = os.getenv("POSTGRES_HOST")
@@ -153,7 +163,9 @@ class Settings(BaseSettings):
             raise ValueError("POSTGRES_MODE must be one of: docker, local, azure")
 
         # Provide sensible defaults for host depending on mode.
-        default_host = "pgdb-service" if m == "docker" else "localhost" if m == "local" else None
+        default_host = (
+            "pgdb-service" if m == "docker" else "localhost" if m == "local" else None
+        )
 
         prof = {
             "mode": m,
@@ -179,7 +191,7 @@ class Settings(BaseSettings):
     JOB_ID_PUBMED: str = os.getenv("JOB_ID_PUBMED", "")
     JOB_ID_SCOPUS: str = os.getenv("JOB_ID_SCOPUS", "")
 
-    #search function 
+    # search function
     ENTREZ_EMAIL: str = os.getenv("ENTREZ_EMAIL")
     ENTREZ_API_KEY: str = os.getenv("ENTREZ_API_KEY")
 

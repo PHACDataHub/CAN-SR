@@ -31,7 +31,6 @@ export function ModelSelector({
   selectedModel,
   onModelChange,
 }: ModelSelectorProps) {
-
   const dict = useDictionary()
 
   // Azure OpenAI model configurations with descriptions
@@ -69,7 +68,7 @@ export function ModelSelector({
           throw new Error('Failed to fetch models')
         }
 
-        const {config} = await response.json()
+        const { config } = await response.json()
         // Backend may return either:
         // - available_deployments: ["gpt-5-mini", ...] (preferred)
         // - available_models: ["GPT-5-Mini", ...] (models.yaml display keys)
@@ -104,7 +103,9 @@ export function ModelSelector({
   useEffect(() => {
     const modelIds = availableModels.map((m) => m.id)
     if (modelIds.length > 0 && !modelIds.includes(selectedModel)) {
-      const defaultModel = modelIds.includes('gpt-5-mini') ? 'gpt-5-mini' : modelIds[0]
+      const defaultModel = modelIds.includes('gpt-5-mini')
+        ? 'gpt-5-mini'
+        : modelIds[0]
       onModelChange(defaultModel)
     }
   }, [availableModels, selectedModel, onModelChange])

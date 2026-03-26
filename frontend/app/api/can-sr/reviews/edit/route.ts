@@ -64,7 +64,10 @@ export async function PUT(request: NextRequest) {
     const params = request.nextUrl.searchParams
     const srId = params.get('sr_id')
     if (!srId) {
-      return NextResponse.json({ error: 'sr_id query parameter is required' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'sr_id query parameter is required' },
+        { status: 400 },
+      )
     }
 
     const url = `${BACKEND_URL}/api/sr/${encodeURIComponent(srId)}/criteria`
@@ -77,6 +80,9 @@ export async function PUT(request: NextRequest) {
     }
   } catch (error) {
     console.error('SR edit PUT API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }

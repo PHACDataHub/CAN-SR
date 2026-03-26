@@ -132,7 +132,8 @@ export default function RunAllFloatingPanel() {
       const headers = getAuthHeaders()
       const st = String(job.status || '').toLowerCase()
       const next = st === 'paused' ? 'resume' : 'pause'
-      await fetch(`/api/can-sr/jobs/run-all/${next}?job_id=${encodeURIComponent(job.job_id)}`,
+      await fetch(
+        `/api/can-sr/jobs/run-all/${next}?job_id=${encodeURIComponent(job.job_id)}`,
         {
           method: 'POST',
           headers,
@@ -154,7 +155,8 @@ export default function RunAllFloatingPanel() {
       setActingJobId(job.job_id)
       ensurePolling()
       const headers = getAuthHeaders()
-      await fetch(`/api/can-sr/jobs/run-all/cancel?job_id=${encodeURIComponent(job.job_id)}`,
+      await fetch(
+        `/api/can-sr/jobs/run-all/cancel?job_id=${encodeURIComponent(job.job_id)}`,
         {
           method: 'POST',
           headers,
@@ -200,14 +202,15 @@ export default function RunAllFloatingPanel() {
   if (!jobs || jobs.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex w-[360px] max-w-[90vw] flex-col gap-2">
+    <div className="fixed right-4 bottom-4 z-50 flex w-[360px] max-w-[90vw] flex-col gap-2">
       {jobs.slice(0, 5).map((job) => {
         const done = Number(job.done || 0)
         const skipped = Number(job.skipped || 0)
         const failed = Number(job.failed || 0)
         const total = Number(job.total || 0)
         const processed = done + skipped + failed
-        const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
+        const pct =
+          total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
         const st = String(job.status || '').toLowerCase()
         const isFinished = st === 'finished'
         const isFailed = st === 'failed'
@@ -230,8 +233,12 @@ export default function RunAllFloatingPanel() {
                 </div>
                 <div className="mt-0.5 text-xs text-gray-600">
                   {dict?.screening?.runAllAI || 'Run all AI'} · {stepLabel}
-                  {st === 'paused' ? ` · ${dict?.screening?.paused || 'Paused'}` : ''}
-                  {st === 'finished' ? ` · ${dict?.common?.done || 'Done'}` : ''}
+                  {st === 'paused'
+                    ? ` · ${dict?.screening?.paused || 'Paused'}`
+                    : ''}
+                  {st === 'finished'
+                    ? ` · ${dict?.common?.done || 'Done'}`
+                    : ''}
                   {st === 'failed' ? ' · Failed' : ''}
                 </div>
               </div>
@@ -249,7 +256,11 @@ export default function RunAllFloatingPanel() {
                     }
                     title={dict?.common?.close || 'Close'}
                   >
-                    {isFinished ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+                    {isFinished ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <X className="h-4 w-4" />
+                    )}
                   </button>
                 ) : (
                   <>

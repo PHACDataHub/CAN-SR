@@ -9,6 +9,7 @@ This module centralizes common SR + screening checks used across multiple router
 
 Routers should call load_sr_and_check(...) to avoid duplicating this logic.
 """
+
 from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, status
 from fastapi.concurrency import run_in_threadpool
@@ -65,34 +66,53 @@ async def load_sr_and_check(
 
     # fetch SR
     try:
-        sr = await run_in_threadpool(srdb_service.get_systematic_review, sr_id, not require_visible)
+        sr = await run_in_threadpool(
+            srdb_service.get_systematic_review, sr_id, not require_visible
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch systematic review: {e}",
+        )
 
     if not sr:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found"
+        )
 
     if require_visible and not sr.get("visible", True):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found"
+        )
 
     # permission check (user must be member or owner)
     user_id = current_user.get("email")
     try:
-        has_perm = await run_in_threadpool(srdb_service.user_has_sr_permission, sr_id, user_id)
+        has_perm = await run_in_threadpool(
+            srdb_service.user_has_sr_permission, sr_id, user_id
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to check permissions: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check permissions: {e}",
+        )
 
     if not has_perm:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view/modify this systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view/modify this systematic review",
+        )
 
     screening = sr.get("screening_db") if isinstance(sr, dict) else None
     if require_screening:
         if not screening:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
-
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No screening database configured for this systematic review",
+            )
 
     return sr, screening

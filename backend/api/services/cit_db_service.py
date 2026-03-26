@@ -12,6 +12,7 @@ All blocking DB operations are synchronous and intended to be run with
 Methods raise RuntimeError when psycopg2 is not available so callers
 can surface a 503 with an actionable message.
 """
+
 from typing import Any, Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
@@ -132,6 +133,7 @@ def _construct_db_dsn_from_admin(admin_dsn: str, db_name: str) -> str:
         else:
             return f"{admin_dsn} dbname={db_name}"
 
+
 # -----------------------
 # Citations Postgres DB service
 # -----------------------
@@ -149,11 +151,12 @@ class CitsDPService:
     # Low level connection helpers
     # -----------------------
 
-
     # -----------------------
     # Generic column ops
     # -----------------------
-    def create_column(self, col: str, col_type: str, table_name: str = "citations") -> None:
+    def create_column(
+        self, col: str, col_type: str, table_name: str = "citations"
+    ) -> None:
         """
         Create column on citations table if it doesn't already exist.
         col should be the exact column name to use (caller may pass snake_case(col)).
@@ -165,11 +168,15 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor()
             try:
-                cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" {col_type}')
+                cur.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" {col_type}'
+                )
             except Exception:
                 # fallback for PG versions without IF NOT EXISTS
                 try:
-                    cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" {col_type}')
+                    cur.execute(
+                        f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" {col_type}'
+                    )
                 except Exception:
                     pass
             conn.commit()
@@ -198,16 +205,21 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor()
             try:
-                cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" JSONB')
+                cur.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" JSONB'
+                )
             except Exception:
                 try:
                     cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" JSONB')
                 except Exception:
                     pass
-            cur.execute(f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s', (json.dumps(data), int(citation_id)))
+            cur.execute(
+                f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s',
+                (json.dumps(data), int(citation_id)),
+            )
             rows = cur.rowcount
             conn.commit()
-           
+
             return rows or 0
         except Exception:
             _safe_rollback(conn)
@@ -232,13 +244,18 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor()
             try:
-                cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" TEXT')
+                cur.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" TEXT'
+                )
             except Exception:
                 try:
                     cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" TEXT')
                 except Exception:
                     pass
-            cur.execute(f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s', (text_value, int(citation_id)))
+            cur.execute(
+                f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s',
+                (text_value, int(citation_id)),
+            )
             rows = cur.rowcount
             conn.commit()
 
@@ -264,13 +281,20 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor()
             try:
-                cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" BOOLEAN')
+                cur.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col}" BOOLEAN'
+                )
             except Exception:
                 try:
-                    cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" BOOLEAN')
+                    cur.execute(
+                        f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" BOOLEAN'
+                    )
                 except Exception:
                     pass
-            cur.execute(f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s', (bool(bool_value), int(citation_id)))
+            cur.execute(
+                f'UPDATE "{table_name}" SET "{col}" = %s WHERE id = %s',
+                (bool(bool_value), int(citation_id)),
+            )
             rows = cur.rowcount
             conn.commit()
             return rows or 0
@@ -311,7 +335,9 @@ class CitsDPService:
             if conn:
                 pass
 
-    def clear_columns(self, citation_id: int, columns: List[str], table_name: str = "citations") -> int:
+    def clear_columns(
+        self, citation_id: int, columns: List[str], table_name: str = "citations"
+    ) -> int:
         """Set provided columns to NULL for a citation. Ignores unknown columns."""
         table_name = _validate_ident(table_name, kind="table_name")
         if not columns:
@@ -327,7 +353,10 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor()
             set_sql = ", ".join([f'"{c}" = NULL' for c in cols])
-            cur.execute(f'UPDATE "{table_name}" SET {set_sql} WHERE id = %s', (int(citation_id),))
+            cur.execute(
+                f'UPDATE "{table_name}" SET {set_sql} WHERE id = %s',
+                (int(citation_id),),
+            )
             rows = cur.rowcount
             conn.commit()
             return rows or 0
@@ -338,7 +367,9 @@ class CitsDPService:
             if conn:
                 pass
 
-    def clear_columns_by_prefix(self, citation_id: int, prefixes: List[str], table_name: str = "citations") -> int:
+    def clear_columns_by_prefix(
+        self, citation_id: int, prefixes: List[str], table_name: str = "citations"
+    ) -> int:
         """Set all columns matching any prefix to NULL for a citation."""
         prefixes = [p for p in (prefixes or []) if isinstance(p, str) and p]
         if not prefixes:
@@ -374,10 +405,14 @@ class CitsDPService:
             cur = conn.cursor()
             # Ensure destination column exists as JSONB
             try:
-                cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{dst_col}" JSONB')
+                cur.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{dst_col}" JSONB'
+                )
             except Exception:
                 try:
-                    cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{dst_col}" JSONB')
+                    cur.execute(
+                        f'ALTER TABLE "{table_name}" ADD COLUMN "{dst_col}" JSONB'
+                    )
                 except Exception:
                     pass
 
@@ -419,8 +454,6 @@ class CitsDPService:
                 buf,
             )
             csv_text = buf.getvalue()
-
-
 
             return csv_text.encode("utf-8")
         except Exception:
@@ -473,7 +506,9 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             select_cols = base_cols + jsonb_cols
-            select_sql = ", ".join([f'"{c}"' for c in select_cols]) if select_cols else "*"
+            select_sql = (
+                ", ".join([f'"{c}"' for c in select_cols]) if select_cols else "*"
+            )
             cur.execute(f'SELECT {select_sql} FROM "{table_name}" ORDER BY id')
             rows = cur.fetchall() or []
 
@@ -514,7 +549,9 @@ class CitsDPService:
                 # Fallback
                 return [f"{col}__json"]
 
-            json_flat_cols: Dict[str, List[str]] = {c: _flatten_keys_for(c) for c in jsonb_cols}
+            json_flat_cols: Dict[str, List[str]] = {
+                c: _flatten_keys_for(c) for c in jsonb_cols
+            }
             for c in jsonb_cols:
                 out_cols.extend(json_flat_cols[c])
 
@@ -573,9 +610,15 @@ class CitsDPService:
                         out[f"{c}__confidence"] = _as_str(parsed.get("confidence"))
 
                     out[f"{c}__explanation"] = _as_str(parsed.get("explanation"))
-                    out[f"{c}__evidence_sentences"] = _as_str(parsed.get("evidence_sentences"))
-                    out[f"{c}__evidence_tables"] = _as_str(parsed.get("evidence_tables"))
-                    out[f"{c}__evidence_figures"] = _as_str(parsed.get("evidence_figures"))
+                    out[f"{c}__evidence_sentences"] = _as_str(
+                        parsed.get("evidence_sentences")
+                    )
+                    out[f"{c}__evidence_tables"] = _as_str(
+                        parsed.get("evidence_tables")
+                    )
+                    out[f"{c}__evidence_figures"] = _as_str(
+                        parsed.get("evidence_figures")
+                    )
                     out[f"{c}__autofilled"] = _as_str(parsed.get("autofilled"))
                     out[f"{c}__source"] = _as_str(parsed.get("source"))
                     out[f"{c}__timestamp"] = _as_str(parsed.get("timestamp"))
@@ -591,7 +634,9 @@ class CitsDPService:
             if conn:
                 pass
 
-    def get_citation_by_id(self, citation_id: int, table_name: str = "citations") -> Optional[Dict[str, Any]]:
+    def get_citation_by_id(
+        self, citation_id: int, table_name: str = "citations"
+    ) -> Optional[Dict[str, Any]]:
         """
         Return a dict mapping column -> value for the citation row, or None.
         """
@@ -655,10 +700,14 @@ class CitsDPService:
             select_sql = "*"
             if fields:
                 try:
-                    existing_cols = {c.get("column_name") for c in self.get_table_columns(table_name)}
+                    existing_cols = {
+                        c.get("column_name") for c in self.get_table_columns(table_name)
+                    }
                 except Exception:
                     existing_cols = set()
-                safe_fields = [f for f in fields if isinstance(f, str) and f in existing_cols]
+                safe_fields = [
+                    f for f in fields if isinstance(f, str) and f in existing_cols
+                ]
                 if safe_fields:
                     select_sql = ", ".join([f'"{c}"' for c in safe_fields])
 
@@ -679,7 +728,9 @@ class CitsDPService:
             if conn:
                 pass
 
-    def backfill_human_decisions(self, criteria_parsed: Dict[str, Any], table_name: str = "citations") -> int:
+    def backfill_human_decisions(
+        self, criteria_parsed: Dict[str, Any], table_name: str = "citations"
+    ) -> int:
         """Recompute and persist human_l1_decision / human_l2_decision for all rows.
 
         This is used to ensure decision columns are never stale when the UI fetches
@@ -693,8 +744,16 @@ class CitsDPService:
         table_name = _validate_ident(table_name, kind="table_name")
 
         cp = criteria_parsed or {}
-        l1_qs = (cp.get("l1") or {}).get("questions") if isinstance(cp.get("l1"), dict) else None
-        l2_qs = (cp.get("l2") or {}).get("questions") if isinstance(cp.get("l2"), dict) else None
+        l1_qs = (
+            (cp.get("l1") or {}).get("questions")
+            if isinstance(cp.get("l1"), dict)
+            else None
+        )
+        l2_qs = (
+            (cp.get("l2") or {}).get("questions")
+            if isinstance(cp.get("l2"), dict)
+            else None
+        )
         l1_qs = l1_qs if isinstance(l1_qs, list) else []
         l2_qs = l2_qs if isinstance(l2_qs, list) else []
 
@@ -728,7 +787,9 @@ class CitsDPService:
         # If we try to SELECT a non-existent human_* column, the query fails and the
         # caller silently skips the backfill, leaving stale decision columns.
         try:
-            existing_cols = {c.get("column_name") for c in self.get_table_columns(table_name)}
+            existing_cols = {
+                c.get("column_name") for c in self.get_table_columns(table_name)
+            }
         except Exception:
             existing_cols = set()
 
@@ -773,7 +834,9 @@ class CitsDPService:
                     hobj = _parse_jsonb(hval)
                     selected = hobj.get("selected")
                     # Treat empty/whitespace as unanswered (UI shows "-- select --")
-                    if selected is None or (isinstance(selected, str) and selected.strip() == ""):
+                    if selected is None or (
+                        isinstance(selected, str) and selected.strip() == ""
+                    ):
                         return "undecided"
                     if "exclude" in str(selected).lower():
                         return "exclude"
@@ -810,7 +873,9 @@ class CitsDPService:
             if conn:
                 pass
 
-    def list_citation_ids(self, filter_step=None, table_name: str = "citations") -> List[int]:
+    def list_citation_ids(
+        self, filter_step=None, table_name: str = "citations"
+    ) -> List[int]:
         """
         Return list of integer primary keys (id) from citations table ordered by id.
         """
@@ -829,7 +894,9 @@ class CitsDPService:
                     # Validation rule (B1/B2): Full-text list is driven by the human L1 decision.
                     # Do NOT use l1_screen/l2_screen booleans.
                     try:
-                        cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "human_l1_decision" TEXT')
+                        cur.execute(
+                            f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "human_l1_decision" TEXT'
+                        )
                     except Exception:
                         pass
                     cur.execute(
@@ -838,7 +905,9 @@ class CitsDPService:
                 elif step == "l2":
                     # Validation rule (B1/B2): Extract list is driven by the human L2 decision.
                     try:
-                        cur.execute(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "human_l2_decision" TEXT')
+                        cur.execute(
+                            f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "human_l2_decision" TEXT'
+                        )
                     except Exception:
                         pass
                     cur.execute(
@@ -866,7 +935,9 @@ class CitsDPService:
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            cur.execute(f'SELECT fulltext_url FROM "{table_name}" WHERE fulltext_url IS NOT NULL')
+            cur.execute(
+                f'SELECT fulltext_url FROM "{table_name}" WHERE fulltext_url IS NOT NULL'
+            )
             rows = cur.fetchall()
 
             return [r[0] for r in rows if r and r[0]]
@@ -924,7 +995,9 @@ class CitsDPService:
     # -----------------------
     # Column get/set helpers
     # -----------------------
-    def get_column_value(self, citation_id: int, column: str, table_name: str = "citations") -> Any:
+    def get_column_value(
+        self, citation_id: int, column: str, table_name: str = "citations"
+    ) -> Any:
         """
         Return the value stored in `column` for the citation row (or None).
         """
@@ -936,7 +1009,9 @@ class CitsDPService:
                 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             except Exception:
                 cur = conn.cursor()
-            cur.execute(f'SELECT "{column}" FROM "{table_name}" WHERE id = %s', (citation_id,))
+            cur.execute(
+                f'SELECT "{column}" FROM "{table_name}" WHERE id = %s', (citation_id,)
+            )
             row = cur.fetchone()
             if not row:
                 return None
@@ -954,13 +1029,20 @@ class CitsDPService:
             if conn:
                 pass
 
-    def set_column_value(self, citation_id: int, column: str, value: Any, table_name: str = "citations") -> int:
+    def set_column_value(
+        self, citation_id: int, column: str, value: Any, table_name: str = "citations"
+    ) -> int:
         """
         Generic setter for a citation row column. Will create a TEXT column if it doesn't exist.
         """
         # For simplicity, create a TEXT column. Callers that need JSONB should use update_jsonb_column.
         self.create_column(column, "TEXT", table_name=table_name)
-        return self.update_text_column(citation_id, column, value if value is not None else None, table_name=table_name)
+        return self.update_text_column(
+            citation_id,
+            column,
+            value if value is not None else None,
+            table_name=table_name,
+        )
 
     # -----------------------
     # Per-upload table lifecycle helpers
@@ -1019,7 +1101,12 @@ class CitsDPService:
             inserted = 0
             if rows:
                 safe_cols = [snake_case(c) for c in columns]
-                insert_cols = [f'"{c}"' for c in safe_cols] + ['"cit_id"', '"fulltext_url"', '"fulltext"', '"fulltext_md5"']
+                insert_cols = [f'"{c}"' for c in safe_cols] + [
+                    '"cit_id"',
+                    '"fulltext_url"',
+                    '"fulltext"',
+                    '"fulltext_md5"',
+                ]
                 placeholders = ", ".join(["%s"] * len(insert_cols))
                 insert_sql = f'INSERT INTO "{table_name}" ({", ".join(insert_cols)}) VALUES ({placeholders})'
 
@@ -1034,11 +1121,26 @@ class CitsDPService:
 
                 values = []
                 for r in filtered_rows:
-                    row_vals = [r.get(orig_col) if r.get(orig_col) is not None else None for orig_col in columns]
-                    row_vals.append(r.get("cit_id") if r.get("cit_id") is not None else None)
-                    row_vals.append(r.get("fulltext_url") if r.get("fulltext_url") is not None else None)
-                    row_vals.append(r.get("fulltext") if r.get("fulltext") is not None else None)
-                    row_vals.append(r.get("fulltext_md5") if r.get("fulltext_md5") is not None else None)
+                    row_vals = [
+                        r.get(orig_col) if r.get(orig_col) is not None else None
+                        for orig_col in columns
+                    ]
+                    row_vals.append(
+                        r.get("cit_id") if r.get("cit_id") is not None else None
+                    )
+                    row_vals.append(
+                        r.get("fulltext_url")
+                        if r.get("fulltext_url") is not None
+                        else None
+                    )
+                    row_vals.append(
+                        r.get("fulltext") if r.get("fulltext") is not None else None
+                    )
+                    row_vals.append(
+                        r.get("fulltext_md5")
+                        if r.get("fulltext_md5") is not None
+                        else None
+                    )
                     values.append(tuple(row_vals))
 
                 if values:
@@ -1058,7 +1160,9 @@ class CitsDPService:
     # NOTE: legacy per-database helpers (drop_database, create_db_and_table_sync) were
     # intentionally removed in favor of per-upload tables in a shared database.
 
-    def load_include_columns_from_criteria(self, sr_doc: Optional[Dict[str, Any]] = None) -> List[str]:
+    def load_include_columns_from_criteria(
+        self, sr_doc: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
         """
         Load the 'include' list for L1 screening.
         Mirrors logic previously embedded in the citations router but kept here
@@ -1080,7 +1184,13 @@ class CitsDPService:
             pass
 
         # 2) fallback to project file
-        cfg_path = os.path.join(os.path.dirname(__file__), "..", "sr_setup", "configs", "criteria_config_measles_updated.yaml")
+        cfg_path = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "sr_setup",
+            "configs",
+            "criteria_config_measles_updated.yaml",
+        )
         cfg_path = os.path.normpath(cfg_path)
         try:
             import yaml
@@ -1096,7 +1206,9 @@ class CitsDPService:
         except Exception:
             return []
 
-    def build_combined_citation_from_row(self, row: Dict[str, Any], include_columns: List[str]) -> str:
+    def build_combined_citation_from_row(
+        self, row: Dict[str, Any], include_columns: List[str]
+    ) -> str:
         parts: List[str] = []
         if not row:
             return ""

@@ -101,11 +101,9 @@ class AzureOpenAIClient:
         self._official_clients: Dict[Tuple[str, str, str], AzureOpenAI] = {}
         self._official_async_clients: Dict[Tuple[str, str, str], Any] = {}
 
-
     # ---------------------------------------------------------------------
     # Configuration
     # ---------------------------------------------------------------------
-
 
     @staticmethod
     def _resolve_auth_type() -> str:
@@ -145,11 +143,15 @@ class AzureOpenAIClient:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
-                logger.warning("Invalid models.yaml format (expected mapping): %s", type(data))
+                logger.warning(
+                    "Invalid models.yaml format (expected mapping): %s", type(data)
+                )
                 return {}
             return data
         except Exception as e:
-            logger.exception("Failed to load Azure OpenAI model catalog from %s: %s", path, e)
+            logger.exception(
+                "Failed to load Azure OpenAI model catalog from %s: %s", path, e
+            )
             return {}
 
     def _load_model_configs(self) -> Dict[str, Dict[str, str]]:
@@ -244,7 +246,9 @@ class AzureOpenAIClient:
         endpoint = config.get("endpoint")
         api_version = config.get("api_version")
         if not endpoint or not api_version:
-            raise ValueError(f"Azure OpenAI endpoint/api_version not configured for model {model}")
+            raise ValueError(
+                f"Azure OpenAI endpoint/api_version not configured for model {model}"
+            )
 
         cache_key = (endpoint, api_version, self._auth_type)
         if cache_key not in self._official_clients:
@@ -255,12 +259,16 @@ class AzureOpenAIClient:
 
             if self._auth_type == "entra":
                 if not self._token_provider:
-                    raise ValueError(self._config_error or "Azure AD token provider not configured")
+                    raise ValueError(
+                        self._config_error or "Azure AD token provider not configured"
+                    )
                 azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
             else:
                 # key auth
                 if not self._api_key:
-                    raise ValueError("AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY")
+                    raise ValueError(
+                        "AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY"
+                    )
                 azure_openai_kwargs["api_key"] = self._api_key
 
             self._official_clients[cache_key] = AzureOpenAI(**azure_openai_kwargs)
@@ -284,7 +292,9 @@ class AzureOpenAIClient:
         endpoint = config.get("endpoint")
         api_version = config.get("api_version")
         if not endpoint or not api_version:
-            raise ValueError(f"Azure OpenAI endpoint/api_version not configured for model {model}")
+            raise ValueError(
+                f"Azure OpenAI endpoint/api_version not configured for model {model}"
+            )
 
         cache_key = (endpoint, api_version, self._auth_type)
         if cache_key not in self._official_async_clients:
@@ -295,11 +305,15 @@ class AzureOpenAIClient:
 
             if self._auth_type == "entra":
                 if not self._token_provider:
-                    raise ValueError(self._config_error or "Azure AD token provider not configured")
+                    raise ValueError(
+                        self._config_error or "Azure AD token provider not configured"
+                    )
                 azure_openai_kwargs["azure_ad_token_provider"] = self._token_provider
             else:
                 if not self._api_key:
-                    raise ValueError("AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY")
+                    raise ValueError(
+                        "AZURE_OPENAI_MODE=key requires AZURE_OPENAI_API_KEY"
+                    )
                 azure_openai_kwargs["api_key"] = self._api_key
 
             self._official_async_clients[cache_key] = AsyncAzureOpenAI(**azure_openai_kwargs)  # type: ignore
@@ -358,7 +372,7 @@ class AzureOpenAIClient:
                 "presence_penalty": presence_penalty,
                 "stream": stream,
             }
-            
+
             # gpt-5 deployments may reject temperature/max_tokens in some previews.
             # We gate this by the *deployment* name because the UI key can differ.
             if deployment != "gpt-5-mini":
@@ -533,7 +547,9 @@ class AzureOpenAIClient:
                                 continue
                             content = update.choices[0].delta.content or ""
                             if content:
-                                asyncio.run_coroutine_threadsafe(q.put(content), loop).result()
+                                asyncio.run_coroutine_threadsafe(
+                                    q.put(content), loop
+                                ).result()
                     except Exception as e:
                         asyncio.run_coroutine_threadsafe(q.put(e), loop).result()
                     finally:
@@ -649,7 +665,11 @@ Guidelines:
         """Get list of available models that are properly configured"""
         out: List[str] = []
         for model, config in self.model_configs.items():
-            if not config.get("endpoint") or not config.get("deployment") or not config.get("api_version"):
+            if (
+                not config.get("endpoint")
+                or not config.get("deployment")
+                or not config.get("api_version")
+            ):
                 continue
             out.append(model)
         return out
@@ -663,7 +683,11 @@ Guidelines:
         out: List[str] = []
         seen: set[str] = set()
         for _model, config in self.model_configs.items():
-            if not config.get("endpoint") or not config.get("deployment") or not config.get("api_version"):
+            if (
+                not config.get("endpoint")
+                or not config.get("deployment")
+                or not config.get("api_version")
+            ):
                 continue
             dep = str(config.get("deployment") or "").strip()
             if not dep:
@@ -695,6 +719,7 @@ try:
     azure_openai_client = AzureOpenAIClient()
 except Exception as e:  # pragma: no cover
     logger.exception("Failed to initialize AzureOpenAIClient: %s", e)
+
     # Provide a stub that reports not-configured.
     class _DisabledAzureOpenAIClient:  # type: ignore
         def is_configured(self) -> bool:

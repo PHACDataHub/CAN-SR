@@ -64,6 +64,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(json, { status: res.status })
   } catch (err: any) {
     console.error('Citations get proxy GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }

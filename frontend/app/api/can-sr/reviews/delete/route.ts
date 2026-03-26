@@ -21,7 +21,10 @@ export async function DELETE(request: NextRequest) {
     const hard = params.get('hard')
 
     if (!srId) {
-      return NextResponse.json({ error: 'sr_id query parameter is required' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'sr_id query parameter is required' },
+        { status: 400 },
+      )
     }
 
     if (hard) {
@@ -61,7 +64,10 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json(data, { status: res.status })
   } catch (error) {
     console.error('SR delete API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }
 
@@ -72,7 +78,10 @@ export async function POST(request: NextRequest) {
     const undelete = params.get('undelete')
 
     if (!srId) {
-      return NextResponse.json({ error: 'sr_id query parameter is required' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'sr_id query parameter is required' },
+        { status: 400 },
+      )
     }
 
     if (!undelete) {
@@ -101,6 +110,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data, { status: res.status })
   } catch (error) {
     console.error('SR undelete API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }
