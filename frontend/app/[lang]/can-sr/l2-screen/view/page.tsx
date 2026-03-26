@@ -4,7 +4,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
-import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
+import PDFBoundingBoxViewer, {
+  PDFBoundingBoxViewerHandle,
+} from '@/components/can-sr/PDFBoundingBoxViewer'
 import { Wand2 } from 'lucide-react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
@@ -85,7 +87,9 @@ export default function CanSrL2ScreenViewPage() {
   const [citationIdList, setCitationIdList] = useState<number[]>([])
 
   // Autosave indicator per question
-  const [saveStatus, setSaveStatus] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [saveStatus, setSaveStatus] = useState<
+    Record<number, 'idle' | 'saving' | 'saved' | 'error'>
+  >({})
 
   // UI state: human selections keyed by question index
   const [selections, setSelections] = useState<Record<number, string>>({})
@@ -100,7 +104,9 @@ export default function CanSrL2ScreenViewPage() {
 
   // Fulltext PDF viewer linkage
   const [fulltextCoords, setFulltextCoords] = useState<any[] | null>(null)
-  const [fulltextPages, setFulltextPages] = useState<{ width: number; height: number }[] | null>(null)
+  const [fulltextPages, setFulltextPages] = useState<
+    { width: number; height: number }[] | null
+  >(null)
   const [fulltextStr, setFulltextStr] = useState<string | null>(null)
   const viewerRef = useRef<PDFBoundingBoxViewerHandle | null>(null)
 
@@ -147,7 +153,9 @@ export default function CanSrL2ScreenViewPage() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         setError(
-          data?.error || data?.detail || `Failed to load citation (${res.status})`,
+          data?.error ||
+            data?.detail ||
+            `Failed to load citation (${res.status})`,
         )
         setCitation(null)
       } else {
@@ -163,16 +171,26 @@ export default function CanSrL2ScreenViewPage() {
           }
         }
 
-        const ft = typeof (data as any).fulltext === 'string' ? (data as any).fulltext : null
+        const ft =
+          typeof (data as any).fulltext === 'string'
+            ? (data as any).fulltext
+            : null
         if (ft) setFulltextStr(ft)
-        const coordsAny = parseJson((data as any).fulltext_coords) ?? (data as any).fulltext_coords
+        const coordsAny =
+          parseJson((data as any).fulltext_coords) ??
+          (data as any).fulltext_coords
         if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
-        const pagesAny = parseJson((data as any).fulltext_pages) ?? (data as any).fulltext_pages
+        const pagesAny =
+          parseJson((data as any).fulltext_pages) ??
+          (data as any).fulltext_pages
         if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
 
         // If coords/pages missing, trigger backend extraction then refetch row
         const needExtract =
-          !Array.isArray(coordsAny) || coordsAny.length === 0 || !Array.isArray(pagesAny) || pagesAny.length === 0
+          !Array.isArray(coordsAny) ||
+          coordsAny.length === 0 ||
+          !Array.isArray(pagesAny) ||
+          pagesAny.length === 0
         if (needExtract) {
           try {
             const res2 = await fetch(
@@ -190,14 +208,23 @@ export default function CanSrL2ScreenViewPage() {
               )
               const row2 = await res3.json().catch(() => ({}))
 
-              const ft2 = typeof (row2 as any).fulltext === 'string' ? (row2 as any).fulltext : null
+              const ft2 =
+                typeof (row2 as any).fulltext === 'string'
+                  ? (row2 as any).fulltext
+                  : null
               if (ft2) setFulltextStr(ft2)
 
-              const coordsAny2 = parseJson((row2 as any).fulltext_coords) ?? (row2 as any).fulltext_coords
-              if (coordsAny2 && Array.isArray(coordsAny2)) setFulltextCoords(coordsAny2)
+              const coordsAny2 =
+                parseJson((row2 as any).fulltext_coords) ??
+                (row2 as any).fulltext_coords
+              if (coordsAny2 && Array.isArray(coordsAny2))
+                setFulltextCoords(coordsAny2)
 
-              const pagesAny2 = parseJson((row2 as any).fulltext_pages) ?? (row2 as any).fulltext_pages
-              if (pagesAny2 && Array.isArray(pagesAny2)) setFulltextPages(pagesAny2)
+              const pagesAny2 =
+                parseJson((row2 as any).fulltext_pages) ??
+                (row2 as any).fulltext_pages
+              if (pagesAny2 && Array.isArray(pagesAny2))
+                setFulltextPages(pagesAny2)
             }
           } catch (err) {
             console.warn('Failed to extract fulltext for overlay', err)
@@ -239,7 +266,11 @@ export default function CanSrL2ScreenViewPage() {
 
           const parseBlock = (block: any) => {
             if (!block) {
-              return { questions: [], possible_answers: [], additional_infos: [] as (string | null)[] }
+              return {
+                questions: [],
+                possible_answers: [],
+                additional_infos: [] as (string | null)[],
+              }
             }
             if (!Array.isArray(block?.questions)) {
               // mapping form: { question: { option: description } }
@@ -267,17 +298,27 @@ export default function CanSrL2ScreenViewPage() {
                     const clean = String(d).replace(/\s+/g, ' ').trim()
                     return `- ${opt}: ${clean}`
                   })
-                  addInfos.push(guidanceParts.length ? guidanceParts.join('\n') : null)
+                  addInfos.push(
+                    guidanceParts.length ? guidanceParts.join('\n') : null,
+                  )
                 })
-                return { questions: qArr, possible_answers: ansArr, additional_infos: addInfos }
+                return {
+                  questions: qArr,
+                  possible_answers: ansArr,
+                  additional_infos: addInfos,
+                }
               } catch {
                 const questions = block?.questions || []
                 const possible_answers = block?.possible_answers || []
                 const additional_infos = block?.additional_infos || []
                 return {
                   questions: Array.isArray(questions) ? questions : [],
-                  possible_answers: Array.isArray(possible_answers) ? possible_answers : [],
-                  additional_infos: Array.isArray(additional_infos) ? additional_infos : [],
+                  possible_answers: Array.isArray(possible_answers)
+                    ? possible_answers
+                    : [],
+                  additional_infos: Array.isArray(additional_infos)
+                    ? additional_infos
+                    : [],
                 }
               }
             } else {
@@ -286,8 +327,12 @@ export default function CanSrL2ScreenViewPage() {
               const additional_infos = block?.additional_infos || []
               return {
                 questions: Array.isArray(questions) ? questions : [],
-                possible_answers: Array.isArray(possible_answers) ? possible_answers : [],
-                additional_infos: Array.isArray(additional_infos) ? additional_infos : [],
+                possible_answers: Array.isArray(possible_answers)
+                  ? possible_answers
+                  : [],
+                additional_infos: Array.isArray(additional_infos)
+                  ? additional_infos
+                  : [],
               }
             }
           }
@@ -299,8 +344,14 @@ export default function CanSrL2ScreenViewPage() {
           const l2Parsed = parseBlock(l2Block)
 
           const mergedQuestions = [...l1Parsed.questions, ...l2Parsed.questions]
-          const mergedAnswers = [...l1Parsed.possible_answers, ...l2Parsed.possible_answers]
-          const mergedInfos = [...l1Parsed.additional_infos, ...l2Parsed.additional_infos]
+          const mergedAnswers = [
+            ...l1Parsed.possible_answers,
+            ...l2Parsed.possible_answers,
+          ]
+          const mergedInfos = [
+            ...l1Parsed.additional_infos,
+            ...l2Parsed.additional_infos,
+          ]
 
           setCriteriaData({
             questions: mergedQuestions,
@@ -358,7 +409,11 @@ export default function CanSrL2ScreenViewPage() {
       }
 
       // 1) Prefill from human_* (answers saved during L2 screening), for both L1 and L2 questions
-      if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
+      if (
+        humanParsed &&
+        typeof humanParsed === 'object' &&
+        (humanParsed as any).selected !== undefined
+      ) {
         newSelections[idx] = (humanParsed as any).selected
       } else if (typeof humanParsed === 'string' && humanParsed) {
         newSelections[idx] = humanParsed
@@ -366,7 +421,11 @@ export default function CanSrL2ScreenViewPage() {
 
       // 2) For L1 questions: show hint from prior L1 screening (llm_*), but do not prefill from it
       if (sourceFlags[idx] === 'l1') {
-        if (llmParsed && typeof llmParsed === 'object' && (llmParsed as any).selected !== undefined) {
+        if (
+          llmParsed &&
+          typeof llmParsed === 'object' &&
+          (llmParsed as any).selected !== undefined
+        ) {
           newHints[idx] = String((llmParsed as any).selected ?? '')
         } else if (typeof llmParsed === 'string') {
           newHints[idx] = llmParsed
@@ -384,9 +443,13 @@ export default function CanSrL2ScreenViewPage() {
       }
 
       // For L2 questions: if no human selection present, allow llm_* to prefill the dropdown
-      const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
+      const hasSelection =
+        newSelections[idx] !== undefined && newSelections[idx] !== ''
       if (sourceFlags[idx] === 'l2' && !hasSelection) {
-        const aiSelected = (newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string') ? newAiPanels[idx].selected : null
+        const aiSelected =
+          newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string'
+            ? newAiPanels[idx].selected
+            : null
         if (aiSelected) {
           newSelections[idx] = aiSelected
         } else if (typeof llmParsed === 'string' && llmParsed) {
@@ -449,7 +512,10 @@ export default function CanSrL2ScreenViewPage() {
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
     const ok = await postHumanClassifyPayload(question, value)
-    setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
+    setSaveStatus((prev) => ({
+      ...prev,
+      [questionIndex]: ok ? 'saved' : 'error',
+    }))
   }
 
   // Call backend classify for a single question using fulltext template (screening_step='l2')
@@ -501,8 +567,12 @@ export default function CanSrL2ScreenViewPage() {
         if ((classification as any).selected !== undefined) {
           setSelections((prev) => {
             const already = prev?.[questionIndex]
-            if (already !== undefined && String(already).trim() !== '') return prev
-            return { ...prev, [questionIndex]: (classification as any).selected }
+            if (already !== undefined && String(already).trim() !== '')
+              return prev
+            return {
+              ...prev,
+              [questionIndex]: (classification as any).selected,
+            }
           })
         }
         setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
@@ -561,7 +631,12 @@ export default function CanSrL2ScreenViewPage() {
   const scrollToArtifact = (kind: 'table' | 'figure', idx: number) => {
     const list = kind === 'table' ? parsedTables : parsedFigures
     const item = list.find((x: any) => Number(x?.index) === Number(idx))
-    console.log('[artifact-click]', { kind, idx, hasViewer: !!viewerRef.current, item })
+    console.log('[artifact-click]', {
+      kind,
+      idx,
+      hasViewer: !!viewerRef.current,
+      item,
+    })
     if (!item || !viewerRef.current) return
     const bbox = item?.bounding_box
     // We store normalized boxes as an array of {page,x,y,width,height}
@@ -572,19 +647,26 @@ export default function CanSrL2ScreenViewPage() {
   }
 
   const workspace = useMemo(() => {
-    if (error)
-      return <div className="text-sm text-red-600">{error}</div>
+    if (error) return <div className="text-sm text-red-600">{error}</div>
     if (loadingCitation)
-      return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.loadingCitation}
+        </div>
+      )
     if (!citation)
-      return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.citationNotFound}
+        </div>
+      )
 
     return (
       <PDFBoundingBoxViewer
         srId={srId || ''}
         citationId={citationId ?? ''}
         conversionId={null}
-        fileName={"Fulltext"}
+        fileName={'Fulltext'}
         coords={fulltextCoords || []}
         pages={fulltextPages || []}
         aiPanels={panelsKeyed.panels}
@@ -594,7 +676,18 @@ export default function CanSrL2ScreenViewPage() {
         ref={viewerRef}
       />
     )
-  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, dict, error])
+  }, [
+    citation,
+    loadingCitation,
+    srId,
+    citationId,
+    fulltextCoords,
+    fulltextPages,
+    fulltextStr,
+    panelsKeyed,
+    dict,
+    error,
+  ])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
@@ -615,70 +708,73 @@ export default function CanSrL2ScreenViewPage() {
         }
       />
 
-      <main className="mx-auto max-w-8xl px-3 py-3">
+      <main className="max-w-8xl mx-auto px-3 py-3">
         <div className="grid grid-cols-12 gap-3">
           {/* Workspace (left) */}
-          <div className="col-span-9">
-              {workspace}
-          </div>
+          <div className="col-span-9">{workspace}</div>
 
           {/* Selection sidebar (right) */}
           <aside className="col-span-3">
-            <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
+            <div className="flex h-full flex-col space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900 text-center">{dict.screening.screeningQuestions}</h4>
+                <h4 className="text-center text-xl font-semibold text-gray-900">
+                  {dict.screening.screeningQuestions}
+                </h4>
               </div>
 
               {loadingCriteria ? (
-                <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
+                <div className="text-sm text-gray-600">
+                  {dict.screening.loadingCriteria}
+                </div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
                 <div className="text-sm text-gray-600">
                   {dict.screening.noL2Criteria}
                 </div>
               ) : (
-                <div className="rounded-md border border-gray-100 p-3 h-[680px] overflow-y-auto">
+                <div className="h-[680px] overflow-y-auto rounded-md border border-gray-100 p-3">
                   <div className="space-y-4">
-                  {criteriaData.questions.map((q, idx) => {
-                    const options = criteriaData.possible_answers[idx] || []
-                    const current = selections[idx] ?? ''
-                    const aiData = aiPanels[idx]
-                    const aiSelected =
-                      aiData && aiData.selected ? aiData.selected : undefined
+                    {criteriaData.questions.map((q, idx) => {
+                      const options = criteriaData.possible_answers[idx] || []
+                      const current = selections[idx] ?? ''
+                      const aiData = aiPanels[idx]
+                      const aiSelected =
+                        aiData && aiData.selected ? aiData.selected : undefined
 
-                    return (
-                      <div
-                        key={idx}
-                        className="rounded-md border border-gray-100 p-3"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-800">
-                              {q}
-                            </p>
-
-                            {sourceFlags[idx] === 'l1' ? (
-                              <p className="mt-1 text-xs text-gray-500">
-                                {dict.screening.titleAbstractAnswer} {hintByIndex[idx] ?? dict.screening.none}
+                      return (
+                        <div
+                          key={idx}
+                          className="rounded-md border border-gray-100 p-3"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-800">
+                                {q}
                               </p>
-                            ) : null}
 
-                            <select
-                              value={current || (aiSelected ?? '')}
-                              onChange={(e) =>
-                                onSelectOption(idx, e.target.value)
-                              }
-                              className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
-                            >
-                              <option value="">-- select --</option>
-                              {options.map((opt: string) => (
-                                <option key={opt} value={opt}>
-                                  {opt}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                              {sourceFlags[idx] === 'l1' ? (
+                                <p className="mt-1 text-xs text-gray-500">
+                                  {dict.screening.titleAbstractAnswer}{' '}
+                                  {hintByIndex[idx] ?? dict.screening.none}
+                                </p>
+                              ) : null}
 
-                          <div className="ml-3 flex flex-col items-end space-y-2">
+                              <select
+                                value={current || (aiSelected ?? '')}
+                                onChange={(e) =>
+                                  onSelectOption(idx, e.target.value)
+                                }
+                                className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                              >
+                                <option value="">-- select --</option>
+                                {options.map((opt: string) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="ml-3 flex flex-col items-end space-y-2">
                               <button
                                 onClick={() => classifyQuestion(idx)}
                                 className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
@@ -689,152 +785,187 @@ export default function CanSrL2ScreenViewPage() {
                               </button>
 
                               {saveStatus[idx] === 'saving' ? (
-                                <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
-                              ) : saveStatus[idx] === 'saved' ? (
-                                <span className="text-[10px] text-emerald-600">{dict.common.done}</span>
-                              ) : saveStatus[idx] === 'error' ? (
-                                <span className="text-[10px] text-red-600">{dict.common.error}</span>
-                              ) : null}
-                          </div>
-                        </div>
-
-                        {/* AI panel: collapsible with evidence chips */}
-                        {aiData ? (
-                          <div className="mt-3">
-                            <div
-                              onClick={() =>
-                                setPanelOpen((prev) => ({
-                                  ...prev,
-                                  [idx]: !Boolean(prev[idx]),
-                                }))
-                              }
-                              style={{ cursor: 'pointer' }}
-                              className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
-                            >
-                              <div className="text-sm">
-                                {dict.screening.aiSuggests}{' '}
-                                <span
-                                  className={
-                                    'ml-1 text-sm font-medium ' +
-                                    (String(aiData.selected ?? '')
-                                      .toLowerCase()
-                                      .includes('(exclude)')
-                                      ? 'text-red-600'
-                                      : 'text-emerald-600')
-                                  }
-                                >
-                                  {aiData.selected ?? dict.screening.noSelection}
+                                <span className="text-[10px] text-gray-500">
+                                  {dict.common.save}...
                                 </span>
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                {panelOpen[idx] ? dict.screening.minimize : dict.screening.maximize}
-                              </div>
+                              ) : saveStatus[idx] === 'saved' ? (
+                                <span className="text-[10px] text-emerald-600">
+                                  {dict.common.done}
+                                </span>
+                              ) : saveStatus[idx] === 'error' ? (
+                                <span className="text-[10px] text-red-600">
+                                  {dict.common.error}
+                                </span>
+                              ) : null}
                             </div>
-
-                            {panelOpen[idx] ? (
-                              <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
-                                <div className="mt-2">
-                                  <strong>{dict.screening.confidence}</strong>{' '}
-                                  {String(aiData.confidence ?? '')}
-                                </div>
-                                <div className="mt-2">
-                                  <strong>{dict.screening.explanation}</strong>
-                                  <div className="mt-1 text-sm text-gray-700">
-                                    {aiData.explanation ??
-                                      aiData.llm_raw ??
-                                      dict.screening.noExplanation}
-                                  </div>
-                                </div>
-                                {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>{dict.screening.evidence}</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_sentences.map((item: any, k: number) => {
-                                        const isCoord = item && typeof item === 'object'
-                                        const label = isCoord
-                                          ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
-                                          : `${dict.screening.sentence} ${String(item)}`
-                                        const onClick = () => {
-                                          if (!viewerRef.current) return
-                                          if (isCoord) {
-                                            viewerRef.current.scrollToCoord(item)
-                                          } else {
-                                            const idxNum = Number(item)
-                                            if (!Number.isNaN(idxNum)) {
-                                              viewerRef.current.scrollToSentenceIndex(idxNum)
-                                            }
-                                          }
-                                        }
-                                        return (
-                                          <button
-                                            key={k}
-                                            onClick={onClick}
-                                            className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
-                                            title={label}
-                                            type="button"
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-
-                                {Array.isArray(aiData?.evidence_tables) && aiData.evidence_tables.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>Evidence tables:</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_tables.map((t: any, k: number) => {
-                                        const label = `Table T${String(t)}`
-                                        return (
-                                          <button
-                                            key={k}
-                                            type="button"
-                                            onClick={() => scrollToArtifact('table', Number(t))}
-                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-                                            title={label}
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-
-                                {Array.isArray(aiData?.evidence_figures) && aiData.evidence_figures.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>Evidence figures:</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_figures.map((f: any, k: number) => {
-                                        const label = `Figure F${String(f)}`
-                                        return (
-                                          <button
-                                            key={k}
-                                            type="button"
-                                            onClick={() => scrollToArtifact('figure', Number(f))}
-                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-                                            title={label}
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    )
-                  })}
+
+                          {/* AI panel: collapsible with evidence chips */}
+                          {aiData ? (
+                            <div className="mt-3">
+                              <div
+                                onClick={() =>
+                                  setPanelOpen((prev) => ({
+                                    ...prev,
+                                    [idx]: !Boolean(prev[idx]),
+                                  }))
+                                }
+                                style={{ cursor: 'pointer' }}
+                                className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
+                              >
+                                <div className="text-sm">
+                                  {dict.screening.aiSuggests}{' '}
+                                  <span
+                                    className={
+                                      'ml-1 text-sm font-medium ' +
+                                      (String(aiData.selected ?? '')
+                                        .toLowerCase()
+                                        .includes('(exclude)')
+                                        ? 'text-red-600'
+                                        : 'text-emerald-600')
+                                    }
+                                  >
+                                    {aiData.selected ??
+                                      dict.screening.noSelection}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {panelOpen[idx]
+                                    ? dict.screening.minimize
+                                    : dict.screening.maximize}
+                                </div>
+                              </div>
+
+                              {panelOpen[idx] ? (
+                                <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
+                                  <div className="mt-2">
+                                    <strong>{dict.screening.confidence}</strong>{' '}
+                                    {String(aiData.confidence ?? '')}
+                                  </div>
+                                  <div className="mt-2">
+                                    <strong>
+                                      {dict.screening.explanation}
+                                    </strong>
+                                    <div className="mt-1 text-sm text-gray-700">
+                                      {aiData.explanation ??
+                                        aiData.llm_raw ??
+                                        dict.screening.noExplanation}
+                                    </div>
+                                  </div>
+                                  {Array.isArray(aiData?.evidence_sentences) &&
+                                  aiData.evidence_sentences.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>{dict.screening.evidence}</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_sentences.map(
+                                          (item: any, k: number) => {
+                                            const isCoord =
+                                              item && typeof item === 'object'
+                                            const label = isCoord
+                                              ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
+                                              : `${dict.screening.sentence} ${String(item)}`
+                                            const onClick = () => {
+                                              if (!viewerRef.current) return
+                                              if (isCoord) {
+                                                viewerRef.current.scrollToCoord(
+                                                  item,
+                                                )
+                                              } else {
+                                                const idxNum = Number(item)
+                                                if (!Number.isNaN(idxNum)) {
+                                                  viewerRef.current.scrollToSentenceIndex(
+                                                    idxNum,
+                                                  )
+                                                }
+                                              }
+                                            }
+                                            return (
+                                              <button
+                                                key={k}
+                                                onClick={onClick}
+                                                className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
+                                                title={label}
+                                                type="button"
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+
+                                  {Array.isArray(aiData?.evidence_tables) &&
+                                  aiData.evidence_tables.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>Evidence tables:</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_tables.map(
+                                          (t: any, k: number) => {
+                                            const label = `Table T${String(t)}`
+                                            return (
+                                              <button
+                                                key={k}
+                                                type="button"
+                                                onClick={() =>
+                                                  scrollToArtifact(
+                                                    'table',
+                                                    Number(t),
+                                                  )
+                                                }
+                                                className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                title={label}
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+
+                                  {Array.isArray(aiData?.evidence_figures) &&
+                                  aiData.evidence_figures.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>Evidence figures:</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_figures.map(
+                                          (f: any, k: number) => {
+                                            const label = `Figure F${String(f)}`
+                                            return (
+                                              <button
+                                                key={k}
+                                                type="button"
+                                                onClick={() =>
+                                                  scrollToArtifact(
+                                                    'figure',
+                                                    Number(f),
+                                                  )
+                                                }
+                                                className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                title={label}
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
               )}
-              <div className="flex items-center justify-between mt-4">
+              <div className="mt-4 flex items-center justify-between">
                 <button
                   onClick={async () => {
                     if (!citationId || !srId) return

@@ -95,9 +95,16 @@ export async function GET(request: NextRequest) {
       const citation = await citationRes.json().catch(() => ({}))
       // Try common fields: document_id, documentId, storage_path, fulltext_url
       const documentId =
-        citation?.document_id || citation?.documentId || citation?.document || null
+        citation?.document_id ||
+        citation?.documentId ||
+        citation?.document ||
+        null
       const storagePath =
-        citation?.storage_path || citation?.storagePath || citation?.fulltext_url || citation?.fulltext || null
+        citation?.storage_path ||
+        citation?.storagePath ||
+        citation?.fulltext_url ||
+        citation?.fulltext ||
+        null
 
       if (documentId) {
         fileFetchUrl = `${BACKEND_URL}/api/files/documents/${encodeURIComponent(
@@ -163,7 +170,10 @@ export async function GET(request: NextRequest) {
     })
   } catch (err: any) {
     console.error('Fulltext proxy GET error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }
 

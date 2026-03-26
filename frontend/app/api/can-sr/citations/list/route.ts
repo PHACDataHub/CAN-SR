@@ -42,7 +42,8 @@ export async function GET(request: NextRequest) {
       })
 
       // Pass through the CSV body as a stream. We intentionally do NOT parse JSON.
-      const contentType = res.headers.get('content-type') || 'text/csv; charset=utf-8'
+      const contentType =
+        res.headers.get('content-type') || 'text/csv; charset=utf-8'
       const disposition = res.headers.get('content-disposition')
       return new NextResponse(res.body, {
         status: res.status,

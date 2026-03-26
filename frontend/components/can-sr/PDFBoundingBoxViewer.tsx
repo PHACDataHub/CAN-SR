@@ -1,4 +1,10 @@
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import {
+  useState,
+  useEffect,
+  useRef,
+  forwardRef,
+  useImperativeHandle,
+} from 'react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
@@ -48,21 +54,24 @@ function hashCode(str: string): number {
 
 function colorForParam(param: string, alpha = 0.35): string {
   const h = hashCode(param) % 360
-  const s = 50 + hashCode(param) % 50
-  const l = 40 + hashCode(param) % 20
+  const s = 50 + (hashCode(param) % 50)
+  const l = 40 + (hashCode(param) % 20)
   return `hsla(${h}, ${s}%, ${l}%, ${alpha})`
 }
 
 function solidForParam(param: string): string {
   const h = hashCode(param) % 360
-  const s = 50 + hashCode(param) % 50
-  const l = 40 + hashCode(param) % 20
+  const s = 50 + (hashCode(param) % 50)
+  const l = 40 + (hashCode(param) % 20)
   return `hsl(${h}, ${s}%, ${l}%)`
 }
 
 function extractSentenceArray(fulltext?: string): string[] {
   if (!fulltext || typeof fulltext !== 'string') return []
-  const lines = fulltext.split(/\n+/).map((s) => s.trim()).filter(Boolean)
+  const lines = fulltext
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
   const out: string[] = []
   for (const line of lines) {
     const m = line.match(/^\[(\d+)\]\s*(.*)$/)
@@ -81,7 +90,10 @@ export type PDFBoundingBoxViewerHandle = {
   scrollToSentenceIndex: (idx: number) => void
 }
 
-const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingBoxViewerProps>(function PDFBoundingBoxViewer(
+const PDFBoundingBoxViewer = forwardRef<
+  PDFBoundingBoxViewerHandle,
+  PDFBoundingBoxViewerProps
+>(function PDFBoundingBoxViewer(
   {
     srId,
     citationId,
@@ -93,7 +105,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
     fulltext,
     defaultFitToWidth = true,
   }: PDFBoundingBoxViewerProps,
-  ref
+  ref,
 ) {
   const dict = useDictionary()
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
@@ -108,73 +120,102 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   const wrapperRefs = useRef<Record<number, HTMLDivElement | null>>({})
   const [pdfDocument, setPdfDocument] = useState<any | null>(null)
   const [showBoundingBoxes, setShowBoundingBoxes] = useState(true)
-  const [pageViewports, setPageViewports] = useState<Record<number, { width: number; height: number }>>({})
+  const [pageViewports, setPageViewports] = useState<
+    Record<number, { width: number; height: number }>
+  >({})
   const renderTasksRef = useRef<Record<number, any>>({})
   const renderTokenRef = useRef(0)
-  const [hoverInfo, setHoverInfo] = useState<{ page: number; left: number; top: number; content: string } | null>(null)
+  const [hoverInfo, setHoverInfo] = useState<{
+    page: number
+    left: number
+    top: number
+    content: string
+  } | null>(null)
   // Explicitly selected box (e.g., when user clicks an evidence chip). This is drawn
   // regardless of whether the LLM evidence panels contain that coordinate.
   const [selectedCoord, setSelectedCoord] = useState<any | null>(null)
 
   const sentenceTexts = extractSentenceArray(fulltext)
 
-  useImperativeHandle(ref, () => ({
-  scrollToPage: (pageNum: number) => {
-    const container = containerRef.current
-    const wrapper = wrapperRefs.current[pageNum]
-    if (container && wrapper) {
-      const top = wrapper.offsetTop - 12
-      container.scrollTo({ top, behavior: 'smooth' })
-      setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
-    }
-  },
-  scrollToCoord: (coord: any) => {
-    try {
-      setSelectedCoord(coord)
-      const pageNum = Number(coord?.page ?? coord?.page_number ?? coord?.pageNum ?? 1)
-      const vp = pageViewports[pageNum]
-      const dims = pages?.[pageNum - 1]
-      const container = containerRef.current
-      const wrapper = wrapperRefs.current[pageNum]
-      if (!vp || !dims || !container || !wrapper) return
-      const pageHeight = Number(dims.height || 1)
-      const uly = parseFloat(coord?.uly ?? coord?.y ?? 0)
-      const lry = coord?.lry != null ? parseFloat(coord.lry) : (coord?.height != null ? uly + parseFloat(coord.height) : uly)
-      const topY = Math.min(uly, lry)
-      const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
-      setShowBoundingBoxes(true)
-      const top = wrapper.offsetTop + topLocal - 24
-      container.scrollTo({ top, behavior: 'smooth' })
-      setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
-    } catch {}
-  },
-  scrollToSentenceIndex: (idx: number) => {
-    try {
-      const t = sentenceTexts && sentenceTexts[idx]
-      if (!t) return
-      const trimmed = String(t).trim()
-      const firstCoord =
-        Array.isArray(coords) ? coords.find((c: any) => String(c?.text || '').trim() === trimmed) : null
-      if (!firstCoord) return
-      setSelectedCoord(firstCoord)
-      const pageNum = Number(firstCoord?.page ?? firstCoord?.page_number ?? firstCoord?.pageNum ?? 1)
-      const vp = pageViewports[pageNum]
-      const dims = pages?.[pageNum - 1]
-      const container = containerRef.current
-      const wrapper = wrapperRefs.current[pageNum]
-      if (!vp || !dims || !container || !wrapper) return
-      const pageHeight = Number(dims.height || 1)
-      const uly = parseFloat(firstCoord?.uly ?? firstCoord?.y ?? 0)
-      const lry = firstCoord?.lry != null ? parseFloat(firstCoord.lry) : (firstCoord?.height != null ? uly + parseFloat(firstCoord.height) : uly)
-      const topY = Math.min(uly, lry)
-      const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
-      setShowBoundingBoxes(true)
-      const top = wrapper.offsetTop + topLocal - 24
-      container.scrollTo({ top, behavior: 'smooth' })
-      setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
-    } catch {}
-  }
-  }), [pageViewports, pages, totalPages, sentenceTexts, coords])
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToPage: (pageNum: number) => {
+        const container = containerRef.current
+        const wrapper = wrapperRefs.current[pageNum]
+        if (container && wrapper) {
+          const top = wrapper.offsetTop - 12
+          container.scrollTo({ top, behavior: 'smooth' })
+          setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
+        }
+      },
+      scrollToCoord: (coord: any) => {
+        try {
+          setSelectedCoord(coord)
+          const pageNum = Number(
+            coord?.page ?? coord?.page_number ?? coord?.pageNum ?? 1,
+          )
+          const vp = pageViewports[pageNum]
+          const dims = pages?.[pageNum - 1]
+          const container = containerRef.current
+          const wrapper = wrapperRefs.current[pageNum]
+          if (!vp || !dims || !container || !wrapper) return
+          const pageHeight = Number(dims.height || 1)
+          const uly = parseFloat(coord?.uly ?? coord?.y ?? 0)
+          const lry =
+            coord?.lry != null
+              ? parseFloat(coord.lry)
+              : coord?.height != null
+                ? uly + parseFloat(coord.height)
+                : uly
+          const topY = Math.min(uly, lry)
+          const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
+          setShowBoundingBoxes(true)
+          const top = wrapper.offsetTop + topLocal - 24
+          container.scrollTo({ top, behavior: 'smooth' })
+          setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
+        } catch {}
+      },
+      scrollToSentenceIndex: (idx: number) => {
+        try {
+          const t = sentenceTexts && sentenceTexts[idx]
+          if (!t) return
+          const trimmed = String(t).trim()
+          const firstCoord = Array.isArray(coords)
+            ? coords.find((c: any) => String(c?.text || '').trim() === trimmed)
+            : null
+          if (!firstCoord) return
+          setSelectedCoord(firstCoord)
+          const pageNum = Number(
+            firstCoord?.page ??
+              firstCoord?.page_number ??
+              firstCoord?.pageNum ??
+              1,
+          )
+          const vp = pageViewports[pageNum]
+          const dims = pages?.[pageNum - 1]
+          const container = containerRef.current
+          const wrapper = wrapperRefs.current[pageNum]
+          if (!vp || !dims || !container || !wrapper) return
+          const pageHeight = Number(dims.height || 1)
+          const uly = parseFloat(firstCoord?.uly ?? firstCoord?.y ?? 0)
+          const lry =
+            firstCoord?.lry != null
+              ? parseFloat(firstCoord.lry)
+              : firstCoord?.height != null
+                ? uly + parseFloat(firstCoord.height)
+                : uly
+          const topY = Math.min(uly, lry)
+          const topLocal = Math.max((topY / pageHeight) * vp.height, 0)
+          setShowBoundingBoxes(true)
+          const top = wrapper.offsetTop + topLocal - 24
+          container.scrollTo({ top, behavior: 'smooth' })
+          setCurrentPage(Math.min(Math.max(1, pageNum), totalPages || pageNum))
+        } catch {}
+      },
+    }),
+    [pageViewports, pages, totalPages, sentenceTexts, coords],
+  )
 
   // Load PDF.js dynamically (CDN)
   useEffect(() => {
@@ -182,7 +223,8 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       try {
         if (!window.pdfjsLib) {
           const script = document.createElement('script')
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+          script.src =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
           script.async = true
           document.body.appendChild(script)
 
@@ -314,8 +356,16 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           // track viewport sizes for overlay
           setPageViewports((prev) => {
             const cur = prev[pageNum]
-            if (cur && cur.width === viewport.width && cur.height === viewport.height) return prev
-            return { ...prev, [pageNum]: { width: viewport.width, height: viewport.height } }
+            if (
+              cur &&
+              cur.width === viewport.width &&
+              cur.height === viewport.height
+            )
+              return prev
+            return {
+              ...prev,
+              [pageNum]: { width: viewport.width, height: viewport.height },
+            }
           })
 
           const task = page.render({ canvasContext: context, viewport })
@@ -327,7 +377,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           renderTasksRef.current[pageNum] = null
 
           if (cancelled || token !== renderTokenRef.current) break
-
         } catch (err: any) {
           if (err?.name !== 'RenderingCancelledException') {
             console.error(`Error rendering page ${pageNum}:`, err)
@@ -355,7 +404,11 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   // keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      )
+        return
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         e.preventDefault()
         setCurrentPage((prev) => Math.max(1, prev - 1))
@@ -409,9 +462,11 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
     const pageWidth = Number(dims.width || 1)
     const pageHeight = Number(dims.height || 1)
 
-
     return (
-      <div className="absolute top-0 left-0" style={{ width: vp.width, height: vp.height, zIndex: 10 }}>
+      <div
+        className="absolute top-0 left-0"
+        style={{ width: vp.width, height: vp.height, zIndex: 10 }}
+      >
         {(() => {
           const pageCoords = Array.isArray(coords)
             ? coords.filter((c: any) => {
@@ -421,13 +476,25 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
             : []
 
           const allParams = Object.keys(aiPanels || {})
-          const activeParams: string[] = Object.keys(panelOpen || {}).filter((k) => !!panelOpen?.[k])
+          const activeParams: string[] = Object.keys(panelOpen || {}).filter(
+            (k) => !!panelOpen?.[k],
+          )
           const buildCoordKey = (c: any) => {
             const p = Number(c?.page ?? c?.page_number ?? c?.pageNum ?? 0)
             const ulx = Number.parseFloat(c?.ulx ?? c?.x ?? '0')
             const uly = Number.parseFloat(c?.uly ?? c?.y ?? '0')
-            const lrx = c?.lrx != null ? Number.parseFloat(c?.lrx) : (c?.width != null ? ulx + Number.parseFloat(c?.width) : ulx)
-            const lry = c?.lry != null ? Number.parseFloat(c?.lry) : (c?.height != null ? uly + Number.parseFloat(c?.height) : uly)
+            const lrx =
+              c?.lrx != null
+                ? Number.parseFloat(c?.lrx)
+                : c?.width != null
+                  ? ulx + Number.parseFloat(c?.width)
+                  : ulx
+            const lry =
+              c?.lry != null
+                ? Number.parseFloat(c?.lry)
+                : c?.height != null
+                  ? uly + Number.parseFloat(c?.height)
+                  : uly
             const r = (v: number) => Math.round(v * 100) / 100
             return `p${p}|${r(ulx)}-${r(uly)}-${r(lrx)}-${r(lry)}`
           }
@@ -440,7 +507,8 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
                 for (const item of ev) {
                   if (item && typeof item === 'object') {
                     const key = buildCoordKey(item)
-                    if (activeParams.includes(pname)) openEvidenceCoordKeys.add(key)
+                    if (activeParams.includes(pname))
+                      openEvidenceCoordKeys.add(key)
                     else closedEvidenceCoordKeys.add(key)
                   }
                 }
@@ -448,12 +516,18 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
             }
           }
           // Union of open and closed for filtering (style handled per state)
-          const evidenceCoordKeys = new Set<string>([...openEvidenceCoordKeys, ...closedEvidenceCoordKeys])
+          const evidenceCoordKeys = new Set<string>([
+            ...openEvidenceCoordKeys,
+            ...closedEvidenceCoordKeys,
+          ])
 
           const filtered = showBoundingBoxes
             ? pageCoords.filter((c: any) => {
                 const t = String(c?.text || '').trim()
-                const textMatch = !!t && Array.isArray(textToParams[t]) && textToParams[t].length > 0
+                const textMatch =
+                  !!t &&
+                  Array.isArray(textToParams[t]) &&
+                  textToParams[t].length > 0
                 const coordMatch = evidenceCoordKeys.has(buildCoordKey(c))
                 return textMatch || coordMatch
               })
@@ -462,7 +536,12 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           // Add an explicitly selected coordinate (e.g., table/figure chip click)
           if (selectedCoord) {
             try {
-              const p = Number(selectedCoord?.page ?? selectedCoord?.page_number ?? selectedCoord?.pageNum ?? 0)
+              const p = Number(
+                selectedCoord?.page ??
+                  selectedCoord?.page_number ??
+                  selectedCoord?.pageNum ??
+                  0,
+              )
               if (p === pageNum) {
                 filtered.unshift({ ...selectedCoord, __selected: true })
               }
@@ -470,7 +549,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
               // ignore
             }
           }
-
 
           const elements = filtered.map((c: any, idx: number) => {
             const x = parseFloat(c?.x ?? '0')
@@ -505,7 +583,11 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
                 const ev = aiPanels?.[pname]?.evidence_sentences
                 if (Array.isArray(ev)) {
                   for (const item of ev) {
-                    if (item && typeof item === 'object' && buildCoordKey(item) === key) {
+                    if (
+                      item &&
+                      typeof item === 'object' &&
+                      buildCoordKey(item) === key
+                    ) {
                       out.push(pname)
                       break
                     }
@@ -514,37 +596,65 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
               }
               return out
             })()
-            const coordsParamsOpen = coordsParams.filter((p) => !!panelOpen?.[p])
-            const coordsParamsClosed = coordsParams.filter((p) => !panelOpen?.[p])
+            const coordsParamsOpen = coordsParams.filter(
+              (p) => !!panelOpen?.[p],
+            )
+            const coordsParamsClosed = coordsParams.filter(
+              (p) => !panelOpen?.[p],
+            )
 
-            const isOpen = paramsOpenHere.length > 0 || openEvidenceCoordKeys.has(key) || coordsParamsOpen.length > 0
-            const isClosed = !isOpen && (paramsClosedHere.length > 0 || closedEvidenceCoordKeys.has(key) || coordsParamsClosed.length > 0)
+            const isOpen =
+              paramsOpenHere.length > 0 ||
+              openEvidenceCoordKeys.has(key) ||
+              coordsParamsOpen.length > 0
+            const isClosed =
+              !isOpen &&
+              (paramsClosedHere.length > 0 ||
+                closedEvidenceCoordKeys.has(key) ||
+                coordsParamsClosed.length > 0)
 
             const chosenParam =
-              (isOpen ? (paramsOpenHere[0] || coordsParamsOpen[0]) : undefined) ??
-              (isClosed ? (paramsClosedHere[0] || coordsParamsClosed[0]) : undefined)
+              (isOpen ? paramsOpenHere[0] || coordsParamsOpen[0] : undefined) ??
+              (isClosed
+                ? paramsClosedHere[0] || coordsParamsClosed[0]
+                : undefined)
 
             const isSelected = !!c?.__selected
             const isArtifact = c?.type === 'table' || c?.type === 'figure'
             // Keep tables/figures highlights more transparent so users can still read/see
             // the underlying content.
             const alpha = isArtifact
-              ? (isSelected ? 0.5 : (isOpen ? 0.5 : 0.5))
-              : (isSelected ? 0.0 : (isOpen ? 0.0 : 0.0))
-            const border_alpha = isArtifact
-              ? 0.95
-              : 0.0
+              ? isSelected
+                ? 0.5
+                : isOpen
+                  ? 0.5
+                  : 0.5
+              : isSelected
+                ? 0.0
+                : isOpen
+                  ? 0.0
+                  : 0.0
+            const border_alpha = isArtifact ? 0.95 : 0.0
             const fill = isSelected
               ? `rgba(59, 130, 246, ${alpha})`
-              : (chosenParam ? colorForParam(chosenParam, alpha) : `rgba(255, 229, 100, ${alpha})`)
+              : chosenParam
+                ? colorForParam(chosenParam, alpha)
+                : `rgba(255, 229, 100, ${alpha})`
             const borderColor = isSelected
               ? `rgba(37, 99, 235, ${border_alpha})`
-              : (chosenParam ? solidForParam(chosenParam) : `rgba(255, 196, 0, ${border_alpha})`)
+              : chosenParam
+                ? solidForParam(chosenParam)
+                : `rgba(255, 196, 0, ${border_alpha})`
             const border = isSelected
               ? `3px solid ${borderColor}`
-              : (isOpen ? `2px solid ${borderColor}` : `1px dashed ${borderColor}`)
-            const title = chosenParam ? `${chosenParam}${t ? `: ${t.slice(0, 160)}` : ''}` : t ? t.slice(0, 160) : 'Sentence'
-
+              : isOpen
+                ? `2px solid ${borderColor}`
+                : `1px dashed ${borderColor}`
+            const title = chosenParam
+              ? `${chosenParam}${t ? `: ${t.slice(0, 160)}` : ''}`
+              : t
+                ? t.slice(0, 160)
+                : 'Sentence'
 
             return (
               <div
@@ -559,16 +669,24 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
                   })
                 }
                 onMouseMove={(e) => {
-                  const parent = e.currentTarget.parentElement as HTMLDivElement | null
+                  const parent = e.currentTarget
+                    .parentElement as HTMLDivElement | null
                   if (parent) {
                     const rect = parent.getBoundingClientRect()
                     const x = e.clientX - rect.left + 12
                     const y = e.clientY - rect.top + 12
-                    setHoverInfo({ page: pageNum, left: x, top: y, content: title })
+                    setHoverInfo({
+                      page: pageNum,
+                      left: x,
+                      top: y,
+                      content: title,
+                    })
                   }
                 }}
                 onMouseLeave={() => {
-                  setHoverInfo((info) => (info && info.page === pageNum ? null : info))
+                  setHoverInfo((info) =>
+                    info && info.page === pageNum ? null : info,
+                  )
                 }}
                 style={{
                   left,
@@ -594,7 +712,11 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
               {hoverInfo && hoverInfo.page === pageNum && (
                 <div
                   className="absolute z-20 max-w-[260px] rounded bg-black/75 px-2 py-1 text-xs text-white shadow-lg"
-                  style={{ left: hoverInfo.left, top: hoverInfo.top, pointerEvents: 'none' }}
+                  style={{
+                    left: hoverInfo.left,
+                    top: hoverInfo.top,
+                    pointerEvents: 'none',
+                  }}
                 >
                   {hoverInfo.content}
                 </div>
@@ -611,7 +733,9 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       <div className="mb-3 flex items-center justify-between">
         <div>
           <div className="text-xs text-gray-600">Citation #{citationId}</div>
-          <div className="text-lg font-semibold text-gray-900">{fileName || dict.pdf.fullText}</div>
+          <div className="text-lg font-semibold text-gray-900">
+            {fileName || dict.pdf.fullText}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center text-sm">
@@ -623,7 +747,9 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
             />
             {dict.pdf.showEvidenceHighlights}
           </label>
-          <div className="ml-3 text-xs text-gray-500">{Math.round(scale * 100)}%</div>
+          <div className="ml-3 text-xs text-gray-500">
+            {Math.round(scale * 100)}%
+          </div>
         </div>
       </div>
 
@@ -657,7 +783,10 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
             >
               100%
             </button>
-            <button onClick={() => setFitToWidth((v) => !v)} className="rounded-md border px-2 py-1 text-sm">
+            <button
+              onClick={() => setFitToWidth((v) => !v)}
+              className="rounded-md border px-2 py-1 text-sm"
+            >
               {dict.pdf.fit}
             </button>
           </div>
@@ -666,48 +795,55 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
         <div className="relative">
           <div
             ref={containerRef}
-            className="h-[680px] overflow-auto border rounded p-4 bg-gray-50 flex justify-center items-start"
+            className="flex h-[680px] items-start justify-center overflow-auto rounded border bg-gray-50 p-4"
           >
             {loading ? (
               <div className="text-sm text-gray-600">{dict.pdf.loadingPDF}</div>
             ) : error ? (
               <div className="text-sm text-red-600">{error}</div>
             ) : (
-              <div className="w-full flex flex-col items-center gap-6">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
-                  const vp = pageViewports[pageNum]
-                  return (
-                    <div key={pageNum} className="w-full flex flex-col items-center">
-                      <div className="mb-2 text-sm text-gray-700 font-medium">{dict.screening.page} {pageNum}</div>
+              <div className="flex w-full flex-col items-center gap-6">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+                  (pageNum) => {
+                    const vp = pageViewports[pageNum]
+                    return (
                       <div
-                        ref={(el) => {
-                          wrapperRefs.current[pageNum] = el
-                        }}
-                        className="relative"
-                        style={
-                          vp
-                            ? { width: vp.width, height: vp.height }
-                            : { width: 'auto', height: 'auto' }
-                        }
+                        key={pageNum}
+                        className="flex w-full flex-col items-center"
                       >
-                        <canvas
+                        <div className="mb-2 text-sm font-medium text-gray-700">
+                          {dict.screening.page} {pageNum}
+                        </div>
+                        <div
                           ref={(el) => {
-                            pageRefs.current[pageNum] = el
+                            wrapperRefs.current[pageNum] = el
                           }}
-                          style={{
-                            maxWidth: '100%',
-                            height: 'auto',
-                            background: 'white',
-                            border: '1px solid #e5e7eb',
-                            position: 'relative',
-                            zIndex: 1,
-                          }}
-                        />
-                        {renderOverlayForPage(pageNum)}
+                          className="relative"
+                          style={
+                            vp
+                              ? { width: vp.width, height: vp.height }
+                              : { width: 'auto', height: 'auto' }
+                          }
+                        >
+                          <canvas
+                            ref={(el) => {
+                              pageRefs.current[pageNum] = el
+                            }}
+                            style={{
+                              maxWidth: '100%',
+                              height: 'auto',
+                              background: 'white',
+                              border: '1px solid #e5e7eb',
+                              position: 'relative',
+                              zIndex: 1,
+                            }}
+                          />
+                          {renderOverlayForPage(pageNum)}
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  },
+                )}
               </div>
             )}
           </div>
@@ -720,6 +856,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       </div>
     </div>
   )
-});
+})
 
 export default PDFBoundingBoxViewer

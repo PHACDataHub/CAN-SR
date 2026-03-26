@@ -82,7 +82,9 @@ export default function CanSrL1ScreenPage() {
   const [citationIdList, setCitationIdList] = useState<number[]>([])
 
   // Autosave indicator per question
-  const [saveStatus, setSaveStatus] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [saveStatus, setSaveStatus] = useState<
+    Record<number, 'idle' | 'saving' | 'saved' | 'error'>
+  >({})
 
   // UI state: human selections keyed by question index
   const [selections, setSelections] = useState<Record<number, string>>({})
@@ -245,7 +247,11 @@ export default function CanSrL1ScreenPage() {
       const llmParsed = parseMaybeJson(llmRaw)
 
       // 1) Prefer human_* for dropdown
-      if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
+      if (
+        humanParsed &&
+        typeof humanParsed === 'object' &&
+        (humanParsed as any).selected !== undefined
+      ) {
         newSelections[idx] = (humanParsed as any).selected
       } else if (typeof humanParsed === 'string' && humanParsed) {
         newSelections[idx] = humanParsed
@@ -261,10 +267,12 @@ export default function CanSrL1ScreenPage() {
       }
 
       // 3) If no human selection exists, allow llm_* to prefill the dropdown (UI-only).
-      const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
+      const hasSelection =
+        newSelections[idx] !== undefined && newSelections[idx] !== ''
       if (!hasSelection) {
         const aiSelected =
-          newAiPanels[idx] && typeof (newAiPanels[idx] as any).selected === 'string'
+          newAiPanels[idx] &&
+          typeof (newAiPanels[idx] as any).selected === 'string'
             ? (newAiPanels[idx] as any).selected
             : null
         if (aiSelected) newSelections[idx] = aiSelected
@@ -326,7 +334,10 @@ export default function CanSrL1ScreenPage() {
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
     const ok = await postHumanClassifyPayload(question, value)
-    setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
+    setSaveStatus((prev) => ({
+      ...prev,
+      [questionIndex]: ok ? 'saved' : 'error',
+    }))
   }
 
   // Handler: call backend classify endpoint for a single question
@@ -370,8 +381,12 @@ export default function CanSrL1ScreenPage() {
         if ((classification as any).selected !== undefined) {
           setSelections((prev) => {
             const already = prev?.[questionIndex]
-            if (already !== undefined && String(already).trim() !== '') return prev
-            return { ...prev, [questionIndex]: (classification as any).selected }
+            if (already !== undefined && String(already).trim() !== '')
+              return prev
+            return {
+              ...prev,
+              [questionIndex]: (classification as any).selected,
+            }
           })
         }
         setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
@@ -391,12 +406,19 @@ export default function CanSrL1ScreenPage() {
 
   // Render helpers
   const workspace = useMemo(() => {
-    if (error)
-      return <div className="text-sm text-red-600">{error}</div>
+    if (error) return <div className="text-sm text-red-600">{error}</div>
     if (loadingCitation)
-      return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.loadingCitation}
+        </div>
+      )
     if (!citation)
-      return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.citationNotFound}
+        </div>
+      )
 
     return (
       <div className="space-y-3">
@@ -408,7 +430,9 @@ export default function CanSrL1ScreenPage() {
         </div>
 
         <div className="rounded-md border border-gray-200 bg-white p-4">
-          <h3 className="text-sm font-medium text-gray-800">{dict.screening.abstract}</h3>
+          <h3 className="text-sm font-medium text-gray-800">
+            {dict.screening.abstract}
+          </h3>
           <p className="mt-2 text-sm whitespace-pre-wrap text-gray-800">
             {citation.abstract || dict.screening.noAbstract}
           </p>
@@ -449,13 +473,17 @@ export default function CanSrL1ScreenPage() {
           {/* Selection sidebar (right) */}
           <aside className="col-span-5">
             <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h4 className="text-md font-semibold text-gray-900">{dict.screening.selection}</h4>
+              <h4 className="text-md font-semibold text-gray-900">
+                {dict.screening.selection}
+              </h4>
               <p className="text-sm text-gray-600">
                 {dict.screening.selectionDesc}
               </p>
 
               {loadingCriteria ? (
-                <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
+                <div className="text-sm text-gray-600">
+                  {dict.screening.loadingCriteria}
+                </div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
                 <div className="text-sm text-gray-600">
                   {dict.screening.noCriteria}
@@ -507,11 +535,17 @@ export default function CanSrL1ScreenPage() {
                             </button>
 
                             {saveStatus[idx] === 'saving' ? (
-                              <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
+                              <span className="text-[10px] text-gray-500">
+                                {dict.common.save}...
+                              </span>
                             ) : saveStatus[idx] === 'saved' ? (
-                              <span className="text-[10px] text-emerald-600">{dict.common.done}</span>
+                              <span className="text-[10px] text-emerald-600">
+                                {dict.common.done}
+                              </span>
                             ) : saveStatus[idx] === 'error' ? (
-                              <span className="text-[10px] text-red-600">{dict.common.error}</span>
+                              <span className="text-[10px] text-red-600">
+                                {dict.common.error}
+                              </span>
                             ) : null}
                           </div>
                         </div>
@@ -541,11 +575,14 @@ export default function CanSrL1ScreenPage() {
                                       : 'text-emerald-600')
                                   }
                                 >
-                                  {aiData.selected ?? dict.screening.noSelection}
+                                  {aiData.selected ??
+                                    dict.screening.noSelection}
                                 </span>
                               </div>
                               <div className="text-xs text-gray-500">
-                                {panelOpen[idx] ? dict.screening.minimize : dict.screening.maximize}
+                                {panelOpen[idx]
+                                  ? dict.screening.minimize
+                                  : dict.screening.maximize}
                               </div>
                             </div>
 

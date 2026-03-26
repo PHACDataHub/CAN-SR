@@ -16,7 +16,13 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
 }
 
-export default function ManageUsersPopup({ open, onClose, srId, initialEmails = [], authHeaders }: Props) {
+export default function ManageUsersPopup({
+  open,
+  onClose,
+  srId,
+  initialEmails = [],
+  authHeaders,
+}: Props) {
   const [emails, setEmails] = useState<string[]>([])
   const [input, setInput] = useState('')
   const [loadingEmail, setLoadingEmail] = useState<string | null>(null)
@@ -65,14 +71,23 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
     }
     setLoadingEmail(email)
     try {
-      const res = await fetch(`/api/can-sr/reviews/users?action=add&sr_id=${encodeURIComponent(srId)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
-        body: JSON.stringify({ user_email: email }),
-      })
+      const res = await fetch(
+        `/api/can-sr/reviews/users?action=add&sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authHeaders || {}),
+          },
+          body: JSON.stringify({ user_email: email }),
+        },
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setError((data && (data.error || data.detail)) || `Failed to add user (${res.status})`)
+        setError(
+          (data && (data.error || data.detail)) ||
+            `Failed to add user (${res.status})`,
+        )
         // revert local add if server failed
         setEmails((prev) => prev.filter((e) => e !== email))
       } else {
@@ -94,14 +109,23 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
     }
     setLoadingEmail(email)
     try {
-      const res = await fetch(`/api/can-sr/reviews/users?action=remove&sr_id=${encodeURIComponent(srId)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
-        body: JSON.stringify({ user_email: email }),
-      })
+      const res = await fetch(
+        `/api/can-sr/reviews/users?action=remove&sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authHeaders || {}),
+          },
+          body: JSON.stringify({ user_email: email }),
+        },
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setError((data && (data.error || data.detail)) || `Failed to remove user (${res.status})`)
+        setError(
+          (data && (data.error || data.detail)) ||
+            `Failed to remove user (${res.status})`,
+        )
         // revert local remove if server failed
         setEmails((prev) => (prev.includes(email) ? prev : [...prev, email]))
       } else {
@@ -128,7 +152,10 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const pasted = e.clipboardData.getData('text') || ''
-    const parts = pasted.split(/[\s,;]+/).map((p) => p.trim()).filter(Boolean)
+    const parts = pasted
+      .split(/[\s,;]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
     if (parts.length > 1) {
       e.preventDefault()
       parts.forEach((p) => addEmailLocal(p))
@@ -142,13 +169,19 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
       <div className="relative z-10 w-full max-w-2xl rounded-lg bg-white p-6 shadow-lg">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">{dict.users.manageTitle}</h3>
-            <p className="mt-1 text-sm text-gray-600">{dict.users.manageDesc}</p>
+            <h3 className="text-lg font-semibold text-gray-900">
+              {dict.users.manageTitle}
+            </h3>
+            <p className="mt-1 text-sm text-gray-600">
+              {dict.users.manageDesc}
+            </p>
           </div>
         </div>
 
         <div className="mt-4">
-          <label className="mb-2 block text-sm font-medium text-gray-700">{dict.users.usersLabel}</label>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+            {dict.users.usersLabel}
+          </label>
 
           <div className="flex flex-wrap gap-2">
             {emails.map((e) => (
@@ -162,7 +195,11 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
                   className="rounded-full p-1 hover:bg-gray-200"
                   aria-label={`Remove ${e}`}
                 >
-                  <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                  <svg
+                    className="h-3 w-3"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
                     <path
                       fillRule="evenodd"
                       d="M6.28 5.22a.75.75 0 011.06 0L10 7.88l2.66-2.66a.75.75 0 111.06 1.06L11.06 8.94l2.66 2.66a.75.75 0 11-1.06 1.06L10 10l-2.66 2.66a.75.75 0 11-1.06-1.06L8.94 8.94 6.28 6.28a.75.75 0 010-1.06z"
@@ -194,8 +231,14 @@ export default function ManageUsersPopup({ open, onClose, srId, initialEmails = 
             </button>
           </div>
 
-          {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-          {loadingEmail ? <div className="mt-2 text-sm text-gray-600">{dict.users.processing} {loadingEmail}...</div> : null}
+          {error ? (
+            <div className="mt-2 text-sm text-red-600">{error}</div>
+          ) : null}
+          {loadingEmail ? (
+            <div className="mt-2 text-sm text-gray-600">
+              {dict.users.processing} {loadingEmail}...
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-6 flex justify-end">

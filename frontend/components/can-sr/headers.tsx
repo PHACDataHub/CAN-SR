@@ -1,7 +1,12 @@
 'use client'
 
 import Image from 'next/image'
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from 'next/navigation'
 import BackButton from '@/components/ui/backbutton'
 import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-button'
 import { Settings, Download } from 'lucide-react'
@@ -15,7 +20,7 @@ export function GCHeader() {
   const dict = useDictionary()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   // For language swaps
   const currentPathname = usePathname()
@@ -24,7 +29,7 @@ export function GCHeader() {
   const currentSearchParams = useSearchParams()
 
   return (
-    <header className="relative z-20 w-full py-4 bg-white shadow-sm">
+    <header className="relative z-20 w-full bg-white py-4 shadow-sm">
       <div className="mx-auto max-w-7xl px-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
@@ -36,11 +41,14 @@ export function GCHeader() {
               className="rounded-sm object-cover shadow-sm"
             />
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">{dict.common.governmentOfCanada}</h1>
-              <p className="text-sm font-medium text-gray-600">{dict.common.aiAssistantPortal}</p>
+              <h1 className="text-xl font-semibold text-gray-900">
+                {dict.common.governmentOfCanada}
+              </h1>
+              <p className="text-sm font-medium text-gray-600">
+                {dict.common.aiAssistantPortal}
+              </p>
             </div>
           </div>
-
 
           <div className="space-x-5">
             <InteractiveHoverButton
@@ -54,13 +62,13 @@ export function GCHeader() {
             >
               {dict.common.signOut}
             </InteractiveHoverButton>
-            
+
             <Link
               href={{
                 pathname: nextLangPath,
-                query: Object.fromEntries(currentSearchParams.entries())
+                query: Object.fromEntries(currentSearchParams.entries()),
               }}
-              className="text-blue-600 transition-colors hover:text-blue-800 text-right text-base underline"
+              className="text-right text-base text-blue-600 underline transition-colors hover:text-blue-800"
             >
               {dict.common.languageSwitch}
             </Link>
@@ -145,7 +153,7 @@ export function SRHeader({
   }
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   return (
     <header className="relative border-b border-gray-200 bg-white shadow-sm">
@@ -159,14 +167,16 @@ export function SRHeader({
               className="flex items-center space-x-3"
             >
               <BackButton />
-              <span className="text-sm font-medium text-gray-900">{resolvedBackLabel}</span>
+              <span className="text-sm font-medium text-gray-900">
+                {resolvedBackLabel}
+              </span>
             </div>
           ) : (
             <div />
           )}
 
           {/* Center: title */}
-          <div className="absolute inset-x-0 flex justify-center pointer-events-none">
+          <div className="pointer-events-none absolute inset-x-0 flex justify-center">
             <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           </div>
 

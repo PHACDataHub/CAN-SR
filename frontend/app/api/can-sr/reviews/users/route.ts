@@ -46,12 +46,18 @@ export async function POST(request: NextRequest) {
     const action = (params.get('action') || '').toLowerCase()
 
     if (!srId) {
-      return NextResponse.json({ error: 'sr_id query parameter is required' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'sr_id query parameter is required' },
+        { status: 400 },
+      )
     }
 
     if (!action || (action !== 'add' && action !== 'remove')) {
       return NextResponse.json(
-        { error: "query parameter 'action' is required and must be either 'add' or 'remove'" },
+        {
+          error:
+            "query parameter 'action' is required and must be either 'add' or 'remove'",
+        },
         { status: 400 },
       )
     }
@@ -65,6 +71,9 @@ export async function POST(request: NextRequest) {
     return await forwardJson(url, request)
   } catch (error) {
     console.error('SR users POST API error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
   }
 }

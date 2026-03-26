@@ -50,7 +50,8 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
     )
     const data = await res.json().catch(() => ({}))
     const parsed = data?.criteria_parsed || data?.criteria || {}
-    const paramsInfo: ParametersParsed | null = (parsed?.parameters as any) || null
+    const paramsInfo: ParametersParsed | null =
+      (parsed?.parameters as any) || null
 
     if (paramsInfo?.categories && paramsInfo?.possible_parameters) {
       const out: Array<{ name: string; description: string }> = []
@@ -68,7 +69,10 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
             typeof descs?.[j] === 'string' ? (descs[j] as string) : ''
           const cleanDesc = rawDesc.replace(/<\/?desc>/g, '')
           if (rawName && rawName.trim()) {
-            out.push({ name: rawName.trim(), description: cleanDesc || rawName })
+            out.push({
+              name: rawName.trim(),
+              description: cleanDesc || rawName,
+            })
           }
         })
       })

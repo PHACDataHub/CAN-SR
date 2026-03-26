@@ -210,7 +210,7 @@ export default function PagedList({
             <div className="flex flex-col space-y-2 pr-4">
               <p className="text-xs text-gray-600">Citation #{data.id}</p>
               <p className="text-semibold text">{data.title}</p>
-              <p className="line-clamp-5 overflow-hidden text-ellipsis text-sm text-gray-800">
+              <p className="line-clamp-5 overflow-hidden text-sm text-ellipsis text-gray-800">
                 {dict.common.abstract}: {data.abstract}
               </p>
             </div>
@@ -331,7 +331,9 @@ export default function PagedList({
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-700">{dict.common.jumpToPage}</label>
+          <label className="text-sm text-gray-700">
+            {dict.common.jumpToPage}
+          </label>
           <input
             value={jumpPageInput}
             onChange={(e) => setJumpPageInput(e.target.value)}

@@ -192,7 +192,9 @@ export default function CitationsListPage({
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `Status failed (${res.status})`)
+        throw new Error(
+          data?.detail || data?.error || `Status failed (${res.status})`,
+        )
       }
       return data
     }
@@ -221,7 +223,6 @@ export default function CitationsListPage({
       window.clearInterval(interval)
     }
   }, [runAllJobId, runAllStorageKey, clearRunAll])
-  
 
   const hasActiveRunAll = useMemo(() => {
     const st = String(runAllJob?.status || '').toLowerCase()
@@ -237,9 +238,13 @@ export default function CitationsListPage({
     setRunAllStarting(true)
     setError(null)
     try {
-      const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
+      const headers = {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      }
       const sendExplicitIds = screeningStep === 'l1'
-      const res = await fetch(`/api/can-sr/jobs/run-all/start?sr_id=${encodeURIComponent(srId)}`,
+      const res = await fetch(
+        `/api/can-sr/jobs/run-all/start?sr_id=${encodeURIComponent(srId)}`,
         {
           method: 'POST',
           headers,
@@ -251,13 +256,15 @@ export default function CitationsListPage({
             // For l1 we explicitly send the filtered list IDs (entire list, not just page).
             // For l2/extract we let the backend compute eligible IDs so it can enforce
             // the PDF/fulltext requirement.
-            citation_ids: sendExplicitIds ? (citationIds || []) : undefined,
+            citation_ids: sendExplicitIds ? citationIds || [] : undefined,
           }),
         },
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `Start failed (${res.status})`)
+        throw new Error(
+          data?.detail || data?.error || `Start failed (${res.status})`,
+        )
       }
 
       // Notify floating panel to refresh once (it stops polling when empty/paused).
@@ -273,9 +280,13 @@ export default function CitationsListPage({
       // If server says a job already exists, attach UI to that job and warn.
       const alreadyRunning = Boolean(data?.already_running || data?.existing)
       if (alreadyRunning) {
-        toast.error(dict?.screening?.onlyOneJobAtATime || 'Only one job can be running at a time', {
-          duration: 5000,
-        })
+        toast.error(
+          dict?.screening?.onlyOneJobAtATime ||
+            'Only one job can be running at a time',
+          {
+            duration: 5000,
+          },
+        )
       }
 
       setRunAllJobId(jid)
@@ -319,15 +330,23 @@ export default function CitationsListPage({
         title={displayMap[screeningStep]}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={
-          <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
+          <ModelSelector
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+          />
         }
       />
 
       <main className="mx-auto max-w-4xl px-6 py-10">
-        <Dialog open={runAllModalOpen} onOpenChange={() => setRunAllModalOpen(false)}>
+        <Dialog
+          open={runAllModalOpen}
+          onOpenChange={() => setRunAllModalOpen(false)}
+        >
           <DialogContent className="sm:max-w-[560px]">
             <DialogHeader>
-              <DialogTitle>{dict?.screening?.runAllAI || 'Run all AI'}</DialogTitle>
+              <DialogTitle>
+                {dict?.screening?.runAllAI || 'Run all AI'}
+              </DialogTitle>
               <DialogDescription>
                 {screeningStep === 'l1'
                   ? dict?.screening?.runAllL1Desc ||
@@ -351,10 +370,18 @@ export default function CitationsListPage({
             </label>
 
             <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => setRunAllModalOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => setRunAllModalOpen(false)}
+              >
                 {dict?.common?.close || 'Close'}
               </Button>
-              <Button onClick={startRunAll} disabled={!canRunAllServerSide || runAllStarting || hasActiveRunAll}>
+              <Button
+                onClick={startRunAll}
+                disabled={
+                  !canRunAllServerSide || runAllStarting || hasActiveRunAll
+                }
+              >
                 {runAllStarting
                   ? dict?.screening?.starting || 'Starting…'
                   : dict?.screening?.startRunAll || 'Start'}

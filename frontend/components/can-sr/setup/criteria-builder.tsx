@@ -180,8 +180,7 @@ const TEMPLATE_CONFIGS: Record<TemplateKey, CriteriaConfigUI> = {
     parameters: [
       {
         id: makeId(),
-        question:
-          'What epidemiological parameters are reported in this study?',
+        question: 'What epidemiological parameters are reported in this study?',
         answers: [
           {
             id: makeId(),
@@ -303,7 +302,10 @@ const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   vaccine_safety: 'Vaccine safety review',
 }
 
-export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps) {
+export function CriteriaBuilder({
+  yamlText,
+  onYamlChange,
+}: CriteriaBuilderProps) {
   const [template, setTemplate] = useState<TemplateKey>('blank')
   const [config, setConfig] = useState<CriteriaConfigUI>(() =>
     parseYamlToUi(yamlText),
@@ -513,7 +515,7 @@ export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps
               onChange={(e) =>
                 handleTemplateChange(e.target.value as TemplateKey)
               }
-              className="w-full rounded-md border border-emerald-300 bg-white px-2 py-1.5 text-sm text-emerald-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="w-full rounded-md border border-emerald-300 bg-white px-2 py-1.5 text-sm text-emerald-900 shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
             >
               {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (
                 <option key={key} value={key}>
@@ -568,7 +570,7 @@ export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps
             value={includeInput}
             onChange={(e) => setIncludeInput(e.target.value)}
             placeholder="e.g., Title"
-            className="flex-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="flex-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
           />
           <button
             type="button"
@@ -593,9 +595,7 @@ export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps
         onUpdateAnswer={(qid, aid, field, value) =>
           updateAnswer('criteria', qid, aid, field, value)
         }
-        onRemoveAnswer={(qid, aid) =>
-          removeAnswer('criteria', qid, aid)
-        }
+        onRemoveAnswer={(qid, aid) => removeAnswer('criteria', qid, aid)}
       />
 
       <SectionEditor
@@ -610,9 +610,7 @@ export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps
         onUpdateAnswer={(qid, aid, field, value) =>
           updateAnswer('l2Criteria', qid, aid, field, value)
         }
-        onRemoveAnswer={(qid, aid) =>
-          removeAnswer('l2Criteria', qid, aid)
-        }
+        onRemoveAnswer={(qid, aid) => removeAnswer('l2Criteria', qid, aid)}
       />
 
       <SectionEditor
@@ -627,9 +625,7 @@ export function CriteriaBuilder({ yamlText, onYamlChange }: CriteriaBuilderProps
         onUpdateAnswer={(qid, aid, field, value) =>
           updateAnswer('parameters', qid, aid, field, value)
         }
-        onRemoveAnswer={(qid, aid) =>
-          removeAnswer('parameters', qid, aid)
-        }
+        onRemoveAnswer={(qid, aid) => removeAnswer('parameters', qid, aid)}
       />
 
       <p className="text-xs text-gray-500">
@@ -705,11 +701,9 @@ function SectionEditor({
                 <input
                   type="text"
                   value={group.question}
-                  onChange={(e) =>
-                    onUpdateQuestion(group.id, e.target.value)
-                  }
+                  onChange={(e) => onUpdateQuestion(group.id, e.target.value)}
                   placeholder="e.g., Is this article primary research?"
-                  className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
               <button
@@ -747,7 +741,7 @@ function SectionEditor({
                           )
                         }
                         placeholder='e.g., "Yes - primary research"'
-                        className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                       />
                     </div>
                     <button
@@ -773,7 +767,7 @@ function SectionEditor({
                         )
                       }
                       rows={3}
-                      className="mt-1 w-full resize-y rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      className="mt-1 w-full resize-y rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                       placeholder="Provide guidance on when the reviewer should pick this answer."
                     />
                   </div>
@@ -793,4 +787,3 @@ function SectionEditor({
     </section>
   )
 }
-
