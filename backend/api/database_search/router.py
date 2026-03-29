@@ -7,6 +7,7 @@ from ..core.config import settings
 from ..services.citation_search.pubmed_citation_collection import PubMedCitationCollector
 from ..services.citation_search.europePMC_citation_collection import EuropePMCCitationCollector
 from ..services.citation_search.scopus_citation_collection import ScopusDataProcessor
+from ..services.citation_search.citation_search_helper import * 
 
 import logging
 import os
@@ -18,28 +19,7 @@ from azure.storage.blob import BlobServiceClient
 
 import datetime
 
-def azure_client(container_name: str):
-    connection_string = settings.AZURE_STORAGE_CONNECTION_STRING
-    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-    blob_client = blob_service_client.get_container_client(container_name)
-    return blob_client
-     
 
-def read_blob_to_df(blob_name: str, container_name: str) -> pd.DataFrame:
-    """Read a blob (Parquet or CSV) into a pandas DataFrame."""
-    blob_client = azure_client(container_name).get_blob_client(blob_name)
-    downloaded_blob = blob_client.download_blob().content_as_text()
-    blob_df = pd.read_csv(StringIO(downloaded_blob), sep=",")
-    return blob_df
-
-
-def write_df_to_blob(df: pd.DataFrame, blob_name: str, container_name: str):
-    """Write a pandas DataFrame to blob as Parquet."""
-    buffer = BytesIO()
-    df.to_csv(buffer, index=False, encoding='utf-8')
-    buffer.seek(0)
-    blob_client = azure_client(container_name).get_blob_client(blob_name)
-    blob_client.upload_blob(buffer, overwrite=True)
 
 router = APIRouter()
 
@@ -135,4 +115,23 @@ async def database_search(
     write_df_to_blob(new_all_citations, f"{database}-all-citations.csv", f"citation-data/bronze-data/{database}")
     write_df_to_blob(new_citations, blob_name, "citation-deduplicate/to-process")
 
+    combined_df = load_all_database_searches()
+    combined_df = normalize_ids(combined_df)
+    write_df_to_blob( combined_df, f"silver-citation-data.csv", "citation-data/silver-data")
+
     return {"message": f"{database} collection completed", "new_citations_count": len(new_citations)}
+
+@router.get("/{sr_id}/combine")
+async def combine_sources(sr_id: str):
+    combined_df = load_all_database_searches()
+
+    if combined_df.empty:
+        return {"message": "No data found, perform search first"}
+
+    combined_df = normalize_ids(combined_df)
+    write_df_to_blob( combined_df, f"silver-citation-data.csv", "citation-data/silver-data")
+
+    return {
+        "total citations": len(combined_df)
+    }
+    
