@@ -14,6 +14,7 @@ from api.router import api_router
 from api.core.config import settings
 from api.services.sr_db_service import srdb_service
 from api.services.user_db import user_db_service
+from api.services.cit_db_service import cits_dp_service
 
 
 app = FastAPI(
@@ -44,6 +45,15 @@ async def startup_event():
         print("✓ Systematic review table initialized", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
+
+    # Agentic screening schema bootstrap (no migrations; runtime schema evolution)
+    try:
+        print("🤖 Ensuring agentic screening tables...", flush=True)
+        await run_in_threadpool(cits_dp_service.ensure_agentic_screening_schema)
+        print("✓ Agentic screening tables initialized", flush=True)
+    except Exception as e:
+        # Do not fail startup; allow deployments without Postgres / in degraded mode.
+        print(f"⚠️ Failed to ensure agentic screening tables: {e}", flush=True)
 
     # Procrastinate schema + run-all job tables
     try:

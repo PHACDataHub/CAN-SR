@@ -60,6 +60,16 @@ type CriteriaData = {
   possible_answers: string[][]
 }
 
+type LatestAgentRun = {
+  citation_id: number
+  criterion_key: string
+  stage: 'screening' | 'critical' | string
+  answer?: string | null
+  confidence?: number | null
+  rationale?: string | null
+  created_at?: string
+}
+
 /* Main page component */
 export default function CanSrL1ScreenPage() {
   const router = useRouter()
@@ -90,6 +100,12 @@ export default function CanSrL1ScreenPage() {
   const [aiPanels, setAiPanels] = useState<Record<number, any>>({})
   // Collapsible open state for LLM panels
   const [panelOpen, setPanelOpen] = useState<Record<number, boolean>>({})
+
+  // Agentic runs (screening_agent_runs) for this citation
+  const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
+  const [loadingRuns, setLoadingRuns] = useState(false)
+
+  const [validating, setValidating] = useState(false)
 
   useEffect(() => {
     if (!srId || !citationId) {
@@ -158,6 +174,49 @@ export default function CanSrL1ScreenPage() {
     // fetch for current citation on mount / when params change
     fetchCitationById(citationId)
   }, [srId, citationId])
+
+  // Load latest agent runs for this citation (screening + critical per criterion)
+  useEffect(() => {
+    if (!srId || !citationId) return
+    const loadRuns = async () => {
+      setLoadingRuns(true)
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
+            srId,
+          )}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(
+            String(citationId),
+          )}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(data?.runs)) {
+          setAgentRuns(data.runs as LatestAgentRun[])
+        } else {
+          setAgentRuns([])
+        }
+      } catch {
+        setAgentRuns([])
+      } finally {
+        setLoadingRuns(false)
+      }
+    }
+    loadRuns()
+  }, [srId, citationId])
+
+  const runsByCriterion = useMemo(() => {
+    const by: Record<string, { screening?: LatestAgentRun; critical?: LatestAgentRun }> = {}
+    for (const r of agentRuns) {
+      const key = String((r as any)?.criterion_key || '')
+      if (!key) continue
+      if (!by[key]) by[key] = {}
+      const stage = String((r as any)?.stage || '')
+      if (stage === 'screening') by[key].screening = r
+      if (stage === 'critical') by[key].critical = r
+    }
+    return by
+  }, [agentRuns])
 
   // Load parsed criteria (L1)
   useEffect(() => {
@@ -438,6 +497,107 @@ export default function CanSrL1ScreenPage() {
       />
 
       <main className="mx-auto max-w-6xl px-6 py-8">
+        {/* Agentic summary + Validate */}
+        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Agentic results</h3>
+              <p className="text-xs text-gray-600">
+                Latest <code>screening</code> + <code>critical</code> runs per criterion.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  if (!srId || !citationId) return
+                  setValidating(true)
+                  try {
+                    const headers = {
+                      'Content-Type': 'application/json',
+                      ...getAuthHeaders(),
+                    }
+                    await fetch('/api/can-sr/screen/validate', {
+                      method: 'POST',
+                      headers,
+                      body: JSON.stringify({
+                        sr_id: srId,
+                        citation_id: Number(citationId),
+                        step: 'l1',
+                      }),
+                    })
+                    // Refresh citation so validated fields appear
+                    await fetchCitationById(String(citationId))
+                  } finally {
+                    setValidating(false)
+                  }
+                }}
+                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                disabled={validating}
+                type="button"
+              >
+                {validating ? 'Validating…' : 'Validate (L1)'}
+              </button>
+
+              {citation?.l1_validated_by ? (
+                <span className="text-xs text-emerald-700">
+                  Validated by {String(citation.l1_validated_by)}
+                </span>
+              ) : (
+                <span className="text-xs text-gray-600">Not validated</span>
+              )}
+            </div>
+          </div>
+
+          {loadingRuns ? (
+            <div className="mt-3 text-sm text-gray-600">Loading agent runs…</div>
+          ) : criteriaData?.questions?.length ? (
+            <div className="mt-3 space-y-2">
+              {criteriaData.questions.map((q, idx) => {
+                const criterionKey = q
+                  ? q
+                      .trim()
+                      .toLowerCase()
+                      .replace(/[^\w]+/g, '_')
+                      .replace(/_+/g, '_')
+                      .replace(/^_+|_+$/g, '')
+                      .slice(0, 56)
+                  : ''
+
+                const r = runsByCriterion[criterionKey] || {}
+                const scr = r.screening
+                const crit = r.critical
+
+                const critDisagrees =
+                  crit && String((crit as any)?.answer || '').trim() !== '' &&
+                  String((crit as any)?.answer || '').trim() !== 'None of the above'
+
+                return (
+                  <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-3">
+                    <div className="text-sm font-medium text-gray-800">{q}</div>
+                    <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-gray-700">
+                      <div className="rounded-md border border-gray-100 bg-white p-2">
+                        <div className="font-semibold">Screening</div>
+                        <div>Answer: {String((scr as any)?.answer ?? '—')}</div>
+                        <div>Confidence: {String((scr as any)?.confidence ?? '—')}</div>
+                      </div>
+                      <div className={"rounded-md border border-gray-100 bg-white p-2 " + (critDisagrees ? 'border-amber-300 bg-amber-50' : '')}>
+                        <div className="font-semibold">Critical</div>
+                        <div>Answer: {String((crit as any)?.answer ?? '—')}</div>
+                        <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                        {critDisagrees ? (
+                          <div className="mt-1 font-medium text-amber-700">Disagrees</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-gray-600">No criteria loaded yet.</div>
+          )}
+        </div>
+
         <div className="grid grid-cols-12 gap-6">
           {/* Workspace (left) */}
           <div className="col-span-7">

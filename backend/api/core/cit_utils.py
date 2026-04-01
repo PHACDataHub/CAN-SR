@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
 from .config import settings
+from ..services.cit_db_service import cits_dp_service
 
 
 def _is_postgres_configured() -> bool:
@@ -93,6 +94,16 @@ async def load_sr_and_check(
     if require_screening:
         if not screening:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
+
+        # Best-effort runtime schema evolution for agentic screening.
+        # CAN-SR uses per-upload screening tables, so we may need to add the
+        # validation columns to the specific table referenced by the SR.
+        try:
+            table_name = (screening or {}).get("table_name") or "citations"
+            await run_in_threadpool(cits_dp_service.ensure_step_validation_columns, table_name)
+        except Exception:
+            # Don't block requests if the DB isn't ready/configured.
+            pass
 
 
     return sr, screening
