@@ -46,6 +46,15 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
 
+    # Agentic screening schema bootstrap (no migrations; runtime schema evolution)
+    try:
+        print("🤖 Ensuring agentic screening tables...", flush=True)
+        await run_in_threadpool(cits_dp_service.ensure_agentic_screening_schema)
+        print("✓ Agentic screening tables initialized", flush=True)
+    except Exception as e:
+        # Do not fail startup; allow deployments without Postgres / in degraded mode.
+        print(f"⚠️ Failed to ensure agentic screening tables: {e}", flush=True)
+
     if user_db_service:
         await user_db_service.ensure_table_exists()
         print("✓ Users table initialized", flush=True)

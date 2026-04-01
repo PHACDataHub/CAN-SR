@@ -287,12 +287,6 @@ export default function CanSrL2ScreenViewPage() {
     fetchCitationById(citationId)
   }, [srId, citationId])
 
-  // Load latest agent runs for this citation (screening + critical per criterion)
-  useEffect(() => {
-    if (!srId || !citationId) return
-    loadRuns()
-  }, [srId, citationId])
-
   // Re-usable loader so we can refresh after triggering an agentic run.
   async function loadRuns() {
     if (!srId || !citationId) return
@@ -319,6 +313,13 @@ export default function CanSrL2ScreenViewPage() {
       setLoadingRuns(false)
     }
   }
+
+  // Load latest agent runs for this citation (screening + critical per criterion)
+  useEffect(() => {
+    if (!srId || !citationId) return
+    void loadRuns()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srId, citationId])
 
   const runsByCriterion = useMemo(() => {
     const by: Record<string, { screening?: LatestAgentRun; critical?: LatestAgentRun }> = {}
