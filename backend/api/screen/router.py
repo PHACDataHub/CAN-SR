@@ -19,11 +19,26 @@ from ..core.cit_utils import load_sr_and_check
 
 # Import consolidated Postgres helpers if available (optional)
 from ..services.cit_db_service import cits_dp_service, snake_case_column, snake_case
-from .prompts import PROMPT_JSON_TEMPLATE, PROMPT_JSON_TEMPLATE_FULLTEXT
+from .prompts import (
+    PROMPT_JSON_TEMPLATE,
+    PROMPT_JSON_TEMPLATE_FULLTEXT,
+    PROMPT_XML_TEMPLATE_TA,
+    PROMPT_XML_TEMPLATE_TA_CRITICAL,
+    PROMPT_XML_TEMPLATE_FULLTEXT,
+    PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL,
+)
+from .agentic_utils import build_critical_options, parse_agent_xml, resolve_option
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class AgentRunsQueryResponse(BaseModel):
+    sr_id: str
+    pipeline: str
+    citation_ids: List[int]
+    runs: List[Dict[str, Any]]
 
 
 def _normalize_int_list(v: Any) -> List[int]:
@@ -85,6 +100,31 @@ class HumanClassifyRequest(BaseModel):
     explanation: Optional[str] = Field("", description="Optional free-text explanation from the human reviewer")
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional confidence (0.0 - 1.0)")
     reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
+
+
+class TitleAbstractRunRequest(BaseModel):
+    sr_id: str = Field(..., description="Systematic review id")
+    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
+    model: Optional[str] = Field(None, description="Model key/deployment to use")
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(1200, ge=64, le=4000)
+    prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
+
+
+class ValidateStepRequest(BaseModel):
+    sr_id: str = Field(..., description="Systematic review id")
+    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
+    step: str = Field("l1", description="Validation step: l1|l2|parameters")
+
+
+class FulltextRunRequest(BaseModel):
+    sr_id: str = Field(..., description="Systematic review id")
+    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
+    model: Optional[str] = Field(None, description="Model key/deployment to use")
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(2000, ge=64, le=4000)
+    prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
+
     
 # _update_sync moved to backend.api.core.postgres.update_jsonb_column
 # Use run_in_threadpool(update_jsonb_column, ...) where needed.
@@ -396,6 +436,630 @@ async def human_classify_citation(
     await update_inclusion_decision(sr, citation_id, payload.screening_step, "human")
 
     return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+
+
+@router.post("/title-abstract/run")
+async def run_title_abstract_agentic(
+    payload: TitleAbstractRunRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Run orchestrated Title/Abstract screening + critical for one citation.
+
+    Implements Phase 1 MVP endpoint from planning/agentic_implementation_plan.
+    """
+
+    sr_id = str(payload.sr_id)
+    citation_id = int(payload.citation_id)
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Ensure LLM client is available
+    if not azure_openai_client.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure OpenAI client is not configured on the server",
+        )
+
+    # Load citation row
+    try:
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+
+    # Build combined citation text (use SR include columns or fallback to title+abstract)
+    include_cols = []
+    try:
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or []
+    except Exception:
+        include_cols = []
+    if not include_cols:
+        include_cols = ["title", "abstract"]
+
+    citation_text = citations_router._build_combined_citation_from_row(row, include_cols)
+
+    # Load L1 criteria
+    cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
+    l1 = cp.get("l1") if isinstance(cp, dict) else None
+    questions = (l1 or {}).get("questions") if isinstance(l1, dict) else []
+    possible = (l1 or {}).get("possible_answers") if isinstance(l1, dict) else []
+    addinfos = (l1 or {}).get("additional_infos") if isinstance(l1, dict) else []
+    questions = questions if isinstance(questions, list) else []
+    possible = possible if isinstance(possible, list) else []
+    addinfos = addinfos if isinstance(addinfos, list) else []
+
+    if not questions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SR has no L1 criteria questions configured")
+
+    async def _call_llm(prompt: str) -> Tuple[str, Dict[str, Any], int]:
+        """Return (content, usage, latency_ms)."""
+        import time
+
+        t0 = time.time()
+        messages = [{"role": "user", "content": prompt}]
+        resp = await azure_openai_client.chat_completion(
+            messages=messages,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+            stream=False,
+        )
+        latency_ms = int((time.time() - t0) * 1000)
+        content = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        usage = resp.get("usage") or {}
+        return str(content), dict(usage), latency_ms
+
+    results: List[Dict[str, Any]] = []
+    user_email = str(current_user.get("email") or current_user.get("id") or "")
+
+    for i, q in enumerate(questions):
+        if not isinstance(q, str) or not q.strip():
+            continue
+
+        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        opts = [str(o) for o in opts if o is not None and str(o).strip()]
+        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+
+        if not opts:
+            # still return shape to UI
+            results.append(
+                {
+                    "question": q,
+                    "criterion_key": snake_case(q, max_len=56),
+                    "error": "No options configured",
+                }
+            )
+            continue
+
+        options_listed = "\n".join(opts)
+        criterion_key = snake_case(q, max_len=56)
+
+        # 1) screening
+        screening_prompt = PROMPT_XML_TEMPLATE_TA.format(
+            question=q,
+            cit=citation_text,
+            options=options_listed,
+            xtra=xtra or "",
+        )
+        screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
+        screening_parsed = parse_agent_xml(screening_raw)
+        screening_answer = resolve_option(screening_parsed.answer, opts)
+
+        try:
+            screening_run_id = await run_in_threadpool(
+                cits_dp_service.insert_screening_agent_run,
+                {
+                    "sr_id": sr_id,
+                    "table_name": table_name,
+                    "citation_id": citation_id,
+                    "pipeline": "title_abstract",
+                    "criterion_key": criterion_key,
+                    "stage": "screening",
+                    "answer": screening_answer,
+                    "confidence": screening_parsed.confidence,
+                    "rationale": screening_parsed.rationale,
+                    "raw_response": screening_raw,
+                    "model": payload.model,
+                    "prompt_version": payload.prompt_version,
+                    "temperature": payload.temperature,
+                    "latency_ms": screening_latency,
+                    "input_tokens": screening_usage.get("prompt_tokens"),
+                    "output_tokens": screening_usage.get("completion_tokens"),
+                },
+            )
+        except RuntimeError as rexc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist screening run: {e}")
+
+        # 2) critical
+        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
+        critical_listed = "\n".join(critical_opts)
+        critical_prompt = PROMPT_XML_TEMPLATE_TA_CRITICAL.format(
+            question=q,
+            cit=citation_text,
+            screening_answer=screening_answer,
+            options=critical_listed,
+            xtra=xtra or "",
+        )
+        critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
+        critical_parsed = parse_agent_xml(critical_raw)
+        critical_answer = resolve_option(critical_parsed.answer, critical_opts)
+
+        disagrees = str(critical_answer).strip() != "None of the above"
+
+        try:
+            critical_run_id = await run_in_threadpool(
+                cits_dp_service.insert_screening_agent_run,
+                {
+                    "sr_id": sr_id,
+                    "table_name": table_name,
+                    "citation_id": citation_id,
+                    "pipeline": "title_abstract",
+                    "criterion_key": criterion_key,
+                    "stage": "critical",
+                    "answer": critical_answer,
+                    "confidence": critical_parsed.confidence,
+                    "rationale": critical_parsed.rationale,
+                    "raw_response": critical_raw,
+                    "model": payload.model,
+                    "prompt_version": payload.prompt_version,
+                    "temperature": payload.temperature,
+                    "latency_ms": critical_latency,
+                    "input_tokens": critical_usage.get("prompt_tokens"),
+                    "output_tokens": critical_usage.get("completion_tokens"),
+                },
+            )
+        except RuntimeError as rexc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
+
+        results.append(
+            {
+                "question": q,
+                "criterion_key": criterion_key,
+                "screening": {
+                    "run_id": screening_run_id,
+                    "answer": screening_answer,
+                    "confidence": screening_parsed.confidence,
+                    "rationale": screening_parsed.rationale,
+                    "parse_ok": screening_parsed.parse_ok,
+                },
+                "critical": {
+                    "run_id": critical_run_id,
+                    "answer": critical_answer,
+                    "confidence": critical_parsed.confidence,
+                    "rationale": critical_parsed.rationale,
+                    "parse_ok": critical_parsed.parse_ok,
+                    "disagrees": disagrees,
+                },
+            }
+        )
+
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "pipeline": "title_abstract",
+        "criteria": results,
+    }
+
+
+@router.post("/validate")
+async def validate_screening_step(
+    payload: ValidateStepRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Mark a citation as validated for a given step.
+
+    Phase 1 MVP uses step=l1 (Title/Abstract). This endpoint is written to be
+    forward-compatible with l2/parameters.
+    """
+
+    sr_id = str(payload.sr_id)
+    citation_id = int(payload.citation_id)
+    step = (payload.step or "l1").lower().strip()
+
+    if step not in {"l1", "l2", "parameters"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be one of: l1, l2, parameters")
+
+    try:
+        _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    validated_by_col = f"{step}_validated_by"
+    validated_at_col = f"{step}_validated_at"
+    validated_by = str(current_user.get("email") or current_user.get("id") or "")
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    try:
+        # Ensure columns exist (best-effort; no-migrations philosophy)
+        await run_in_threadpool(cits_dp_service.create_column, validated_by_col, "TEXT", table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validated_at_col, "TIMESTAMPTZ", table_name)
+
+        u1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_by_col, validated_by, table_name)
+        u2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_at_col, now_iso, table_name)
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update validation fields: {e}")
+
+    if not (u1 and u2):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "step": step,
+        "validated_by": validated_by,
+        "validated_at": now_iso,
+    }
+
+
+@router.post("/fulltext/run")
+async def run_fulltext_agentic(
+    payload: FulltextRunRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Run orchestrated Fulltext screening + critical for one citation (L2)."""
+
+    sr_id = str(payload.sr_id)
+    citation_id = int(payload.citation_id)
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    if not azure_openai_client.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure OpenAI client is not configured on the server",
+        )
+
+    # Load citation row
+    try:
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+
+    # Ensure fulltext exists (CAN-SR source of truth: extracted DI/Grobid artifacts)
+    if not row.get("fulltext"):
+        # We don't have a direct SR id in the extract endpoint signature; it expects sr_id.
+        # We'll try best-effort to trigger extraction if fulltext_url exists.
+        try:
+            from ..extract.router import extract_fulltext_from_storage
+
+            await extract_fulltext_from_storage(sr_id, citation_id, current_user=current_user)  # type: ignore
+        except Exception:
+            pass
+
+        row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+
+    include_cols = []
+    try:
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or []
+    except Exception:
+        include_cols = []
+    if not include_cols:
+        include_cols = ["title", "abstract"]
+
+    citation_text = citations_router._build_combined_citation_from_row(row or {}, include_cols)
+    fulltext = (row or {}).get("fulltext") or citation_text
+
+    # Tables/Figures context from row
+    tables_md_lines: List[str] = []
+    figures_lines: List[str] = []
+    images: List[Tuple[bytes, str]] = []
+
+    ft_tables = (row or {}).get("fulltext_tables")
+    if isinstance(ft_tables, str):
+        try:
+            ft_tables = json.loads(ft_tables)
+        except Exception:
+            ft_tables = None
+    if isinstance(ft_tables, list):
+        for item in ft_tables:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            blob_addr = item.get("blob_address")
+            caption = item.get("caption")
+            if not idx or not blob_addr:
+                continue
+            try:
+                md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
+                md_txt = md_bytes.decode("utf-8", errors="replace")
+                header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
+                tables_md_lines.extend([header, md_txt, ""])
+            except Exception:
+                continue
+
+    ft_figs = (row or {}).get("fulltext_figures")
+    if isinstance(ft_figs, str):
+        try:
+            ft_figs = json.loads(ft_figs)
+        except Exception:
+            ft_figs = None
+    if isinstance(ft_figs, list):
+        for item in ft_figs:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            blob_addr = item.get("blob_address")
+            caption = item.get("caption")
+            if not idx or not blob_addr:
+                continue
+            figures_lines.append(f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})")
+            try:
+                img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
+                if img_bytes:
+                    images.append((img_bytes, "image/png"))
+            except Exception:
+                continue
+
+    # Load L2 criteria
+    cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
+    l2 = cp.get("l2") if isinstance(cp, dict) else None
+    questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
+    possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
+    addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
+    questions = questions if isinstance(questions, list) else []
+    possible = possible if isinstance(possible, list) else []
+    addinfos = addinfos if isinstance(addinfos, list) else []
+
+    if not questions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SR has no L2 criteria questions configured")
+
+    async def _call_llm(prompt: str) -> Tuple[str, Dict[str, Any], int]:
+        import time
+
+        t0 = time.time()
+        # Use multimodal API when we have figure images
+        if images:
+            content = await azure_openai_client.multimodal_chat(
+                user_text=prompt,
+                images=images,
+                system_prompt=None,
+                model=payload.model,
+                max_tokens=payload.max_tokens,
+                temperature=payload.temperature,
+            )
+            latency_ms = int((time.time() - t0) * 1000)
+            # multimodal_chat does not expose usage
+            return str(content), {}, latency_ms
+
+        messages = [{"role": "user", "content": prompt}]
+        resp = await azure_openai_client.chat_completion(
+            messages=messages,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+            stream=False,
+        )
+        latency_ms = int((time.time() - t0) * 1000)
+        content = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        usage = resp.get("usage") or {}
+        return str(content), dict(usage), latency_ms
+
+    results: List[Dict[str, Any]] = []
+
+    for i, q in enumerate(questions):
+        if not isinstance(q, str) or not q.strip():
+            continue
+
+        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        opts = [str(o) for o in opts if o is not None and str(o).strip()]
+        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+
+        if not opts:
+            results.append({"question": q, "criterion_key": snake_case(q, max_len=56), "error": "No options configured"})
+            continue
+
+        criterion_key = snake_case(q, max_len=56)
+        options_listed = "\n".join(opts)
+
+        # 1) screening
+        screening_prompt = PROMPT_XML_TEMPLATE_FULLTEXT.format(
+            question=q,
+            options=options_listed,
+            xtra=xtra or "",
+            fulltext=fulltext,
+            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
+            figures="\n".join(figures_lines) if figures_lines else "(none)",
+        )
+        screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
+        screening_parsed = parse_agent_xml(screening_raw)
+        screening_answer = resolve_option(screening_parsed.answer, opts)
+
+        try:
+            screening_run_id = await run_in_threadpool(
+                cits_dp_service.insert_screening_agent_run,
+                {
+                    "sr_id": sr_id,
+                    "table_name": table_name,
+                    "citation_id": citation_id,
+                    "pipeline": "fulltext",
+                    "criterion_key": criterion_key,
+                    "stage": "screening",
+                    "answer": screening_answer,
+                    "confidence": screening_parsed.confidence,
+                    "rationale": screening_parsed.rationale,
+                    "raw_response": screening_raw,
+                    "model": payload.model,
+                    "prompt_version": payload.prompt_version,
+                    "temperature": payload.temperature,
+                    "latency_ms": screening_latency,
+                    "input_tokens": screening_usage.get("prompt_tokens"),
+                    "output_tokens": screening_usage.get("completion_tokens"),
+                },
+            )
+        except RuntimeError as rexc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist screening run: {e}")
+
+        # 2) critical
+        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
+        critical_listed = "\n".join(critical_opts)
+        critical_prompt = PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL.format(
+            question=q,
+            screening_answer=screening_answer,
+            options=critical_listed,
+            xtra=xtra or "",
+            fulltext=fulltext,
+            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
+            figures="\n".join(figures_lines) if figures_lines else "(none)",
+        )
+        critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
+        critical_parsed = parse_agent_xml(critical_raw)
+        critical_answer = resolve_option(critical_parsed.answer, critical_opts)
+        disagrees = str(critical_answer).strip() != "None of the above"
+
+        try:
+            critical_run_id = await run_in_threadpool(
+                cits_dp_service.insert_screening_agent_run,
+                {
+                    "sr_id": sr_id,
+                    "table_name": table_name,
+                    "citation_id": citation_id,
+                    "pipeline": "fulltext",
+                    "criterion_key": criterion_key,
+                    "stage": "critical",
+                    "answer": critical_answer,
+                    "confidence": critical_parsed.confidence,
+                    "rationale": critical_parsed.rationale,
+                    "raw_response": critical_raw,
+                    "model": payload.model,
+                    "prompt_version": payload.prompt_version,
+                    "temperature": payload.temperature,
+                    "latency_ms": critical_latency,
+                    "input_tokens": critical_usage.get("prompt_tokens"),
+                    "output_tokens": critical_usage.get("completion_tokens"),
+                },
+            )
+        except RuntimeError as rexc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
+
+        results.append(
+            {
+                "question": q,
+                "criterion_key": criterion_key,
+                "screening": {
+                    "run_id": screening_run_id,
+                    "answer": screening_answer,
+                    "confidence": screening_parsed.confidence,
+                    "rationale": screening_parsed.rationale,
+                    "parse_ok": screening_parsed.parse_ok,
+                },
+                "critical": {
+                    "run_id": critical_run_id,
+                    "answer": critical_answer,
+                    "confidence": critical_parsed.confidence,
+                    "rationale": critical_parsed.rationale,
+                    "parse_ok": critical_parsed.parse_ok,
+                    "disagrees": disagrees,
+                },
+            }
+        )
+
+    return {
+        "status": "success",
+        "sr_id": sr_id,
+        "citation_id": citation_id,
+        "pipeline": "fulltext",
+        "criteria": results,
+    }
+
+
+@router.get("/agent-runs/latest", response_model=AgentRunsQueryResponse)
+async def get_latest_agent_runs(
+    sr_id: str,
+    pipeline: str,
+    citation_ids: str,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Fetch latest screening_agent_runs for a set of citations.
+
+    Query params:
+      - sr_id: SR id
+      - pipeline: title_abstract | fulltext
+      - citation_ids: comma-separated citation ids
+    """
+
+    pipeline_norm = (pipeline or "").strip().lower()
+    if pipeline_norm in {"ta", "titleabstract", "title-abstract"}:
+        pipeline_norm = "title_abstract"
+    if pipeline_norm not in {"title_abstract", "fulltext"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pipeline must be 'title_abstract' or 'fulltext'")
+
+    raw_ids = [p.strip() for p in (citation_ids or "").split(",") if p.strip()]
+    if not raw_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="citation_ids is required")
+    parsed_ids: List[int] = []
+    for p in raw_ids:
+        try:
+            parsed_ids.append(int(p))
+        except Exception:
+            continue
+    if not parsed_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="citation_ids must be a comma-separated list of integers")
+
+    try:
+        _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    try:
+        rows = await run_in_threadpool(
+            cits_dp_service.list_latest_agent_runs,
+            sr_id=sr_id,
+            table_name=table_name,
+            citation_ids=parsed_ids,
+            pipeline=pipeline_norm,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening_agent_runs: {e}")
+
+    return AgentRunsQueryResponse(sr_id=sr_id, pipeline=pipeline_norm, citation_ids=parsed_ids, runs=rows)
 
 async def update_inclusion_decision(
     sr: Dict[str, Any],

@@ -14,6 +14,15 @@ type CitationInfo = {
   pageview: string
 }
 
+type LatestAgentRun = {
+  citation_id: number
+  criterion_key: string
+  stage: 'screening' | 'critical' | string
+  answer?: string | null
+  confidence?: number | null
+  created_at?: string
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
   const tokenType = getTokenType()
@@ -53,13 +62,19 @@ export default function PagedList({
   )
   const [showClassify, setShowClassify] = useState<Record<number, boolean>>({})
 
+  // TA list controls
+  const [threshold, setThreshold] = useState<number>(0.9)
+  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
+
+  const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
+
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   // --- paging ---
   useEffect(() => {
     const lp = Math.max(1, Math.ceil((citationIds?.length || 0) / pageSize))
     setLastpage(lp)
-    setpage((prev) => Math.min(Math.max(1, prev), lp))
+    setpage((prev: number) => Math.min(Math.max(1, prev), lp))
   }, [citationIds, pageSize])
 
   useEffect(() => {
@@ -112,12 +127,102 @@ export default function PagedList({
         if (row?.fulltext_url) nextShow[id] = true
       }
 
-      setLlmClassified((prev) => ({ ...prev, ...nextLlm }))
-      setHumanVerified((prev) => ({ ...prev, ...nextHuman }))
-      setShowClassify((prev) => ({ ...prev, ...nextShow }))
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, ...nextLlm }))
+      setHumanVerified((prev: Record<number, boolean>) => ({ ...prev, ...nextHuman }))
+      setShowClassify((prev: Record<number, boolean>) => ({ ...prev, ...nextShow }))
+
+      // Fetch latest agent runs for this page (L1=title_abstract, L2=fulltext)
+      try {
+        const shouldFetchRuns = (screeningStep === 'l1' || screeningStep === 'l2') && pageIds.length
+        if (shouldFetchRuns) {
+          const pipeline = screeningStep === 'l2' ? 'fulltext' : 'title_abstract'
+          const r2 = await fetch(
+            `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=${encodeURIComponent(
+              pipeline,
+            )}&citation_ids=${encodeURIComponent(pageIds.join(','))}`,
+            { method: 'GET', headers },
+          )
+          const j2 = await r2.json().catch(() => ({}))
+          if (r2.ok && Array.isArray(j2?.runs)) {
+            const grouped: Record<number, LatestAgentRun[]> = {}
+            for (const run of j2.runs as LatestAgentRun[]) {
+              const cid = Number((run as any)?.citation_id)
+              if (!Number.isFinite(cid)) continue
+              if (!grouped[cid]) grouped[cid] = []
+              grouped[cid].push(run)
+            }
+            setLatestRunsByCitation((prev: Record<number, LatestAgentRun[]>) => ({ ...prev, ...grouped }))
+          }
+        }
+      } catch (e) {
+        // best-effort
+      }
     }
     fetchCitations()
-  }, [citationIds, page, pageSize, questions, srId])
+  }, [citationIds, page, pageSize, questions, srId, screeningStep])
+
+  // Reset cached runs when switching steps (avoid mixing l1/l2 pipeline results)
+  useEffect(() => {
+    setLatestRunsByCitation({})
+  }, [screeningStep])
+
+  const isValidatedForStep = (row: any): boolean => {
+    if (!row) return false
+    if (screeningStep === 'l1') return Boolean(row?.l1_validated_by)
+    if (screeningStep === 'l2') return Boolean(row?.l2_validated_by)
+    if (screeningStep === 'extract') return Boolean(row?.parameters_validated_by)
+    return false
+  }
+
+  const computeNeedsValidation = (citationId: number, row: any): boolean => {
+    // If validated, it no longer “needs validation”
+    if (isValidatedForStep(row)) return false
+
+    const runs = latestRunsByCitation[citationId] || []
+    if (!runs.length) {
+      // No agent runs yet => should be in "unvalidated" but not necessarily "needs"
+      // We'll treat missing runs as "needs" so it's easy to find.
+      return true
+    }
+
+    // Group by criterion_key
+    const byKey: Record<string, LatestAgentRun[]> = {}
+    for (const r of runs) {
+      const key = String((r as any)?.criterion_key || '')
+      if (!key) continue
+      if (!byKey[key]) byKey[key] = []
+      byKey[key].push(r)
+    }
+
+    // Needs validation if ANY criterion is low confidence OR critical disagrees
+    for (const key of Object.keys(byKey)) {
+      const items = byKey[key]
+      const screening = items.find((x) => String((x as any)?.stage) === 'screening')
+      const critical = items.find((x) => String((x as any)?.stage) === 'critical')
+
+      const conf = Number((screening as any)?.confidence)
+      if (Number.isFinite(conf) && conf < threshold) return true
+
+      const criticalAns = String((critical as any)?.answer || '')
+      // In our critical prompt contract, agreement is "None of the above".
+      if (critical && criticalAns.trim() !== '' && criticalAns.trim() !== 'None of the above') return true
+    }
+
+    return false
+  }
+
+  const filteredCitationData = citationData.filter((row: any) => {
+    const id = Number(row?.id)
+    if (!Number.isFinite(id)) return false
+    const validated = isValidatedForStep(row)
+    const needs = computeNeedsValidation(id, row)
+    const unvalidated = !validated
+    if (filterMode === 'all') return true
+    if (filterMode === 'validated') return validated
+    if (filterMode === 'unvalidated') return unvalidated
+    if (filterMode === 'needs') return needs
+    return true
+  })
 
   // NOTE: Previously we fetched each citation via /citations/get.
   // This is now replaced by a single /citations/batch call per page.
@@ -156,7 +261,7 @@ export default function PagedList({
         { method: 'POST', headers, body: JSON.stringify(bodyPayload) },
       )
     }
-    setLlmClassified((prev) => ({ ...prev, [id]: true }))
+    setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
   }
 
   const onChooseFile = (id: number) => {
@@ -196,16 +301,56 @@ export default function PagedList({
       { method: 'POST', headers, body: fd as any },
     )
 
-    setShowClassify((prev) => ({ ...prev, [id]: true }))
+    setShowClassify((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
   }
 
   return (
     <div className="flex flex-col items-center space-y-4">
+      {screeningStep === 'l1' || screeningStep === 'l2' ? (
+        <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Threshold</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={threshold}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                const v = Number(e.target.value)
+                if (!Number.isFinite(v)) return
+                setThreshold(Math.max(0, Math.min(1, v)))
+              }}
+              className="w-24 rounded-md border border-gray-200 px-2 py-1 text-sm"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Filter</label>
+            <select
+              value={filterMode}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilterMode(e.target.value as any)}
+              className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+            >
+              <option value="needs">Needs validation</option>
+              <option value="unvalidated">Unvalidated</option>
+              <option value="validated">Validated</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+        </div>
+      ) : null}
+
       <ul className="w-full space-y-2">
-        {citationData.map((data) => (
+        {filteredCitationData.map((data: any) => (
           <li
             key={data.id}
-            className="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-4 py-2"
+            className={
+              'flex items-center justify-between rounded-md border px-4 py-2 ' +
+              ((screeningStep === 'l1' || screeningStep === 'l2') && computeNeedsValidation(Number(data.id), data)
+                ? 'border-amber-300 bg-amber-50'
+                : 'border-gray-200 bg-gray-50')
+            }
           >
             <div className="flex flex-col space-y-2 pr-4">
               <p className="text-xs text-gray-600">Citation #{data.id}</p>
@@ -334,7 +479,7 @@ export default function PagedList({
           <label className="text-sm text-gray-700">{dict.common.jumpToPage}</label>
           <input
             value={jumpPageInput}
-            onChange={(e) => setJumpPageInput(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJumpPageInput(e.target.value)}
             className="w-20 rounded-md border border-gray-200 px-2 py-1 text-sm"
             placeholder={String(page)}
             inputMode="numeric"
