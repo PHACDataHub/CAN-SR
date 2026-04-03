@@ -10,6 +10,10 @@ from .config import settings
 from ..services.user_db import user_db_service
 from ..models.auth import UserRead, UserCreate, UserUpdate
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -112,7 +116,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
-        print(payload)
+        # Avoid printing JWT payloads to stdout (log noise + sensitive data).
+        # If needed for debugging, enable debug logs for this module.
+        logger.debug("Decoded JWT payload")
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception

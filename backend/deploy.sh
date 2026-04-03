@@ -19,6 +19,7 @@ UPDATE_DEPS=false
 RESET_DB=false
 DROP_ALL=false
 DEV=false
+CLEAR_PROCRASTINATE=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -43,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             DEV=true
             shift
             ;;
+        --clear-tasks)
+            CLEAR_PROCRASTINATE=true
+            shift
+            ;;
         -h|--help)
             echo "CAN-SR - Production Deployment"
             echo ""
@@ -54,6 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --reset-db      Reset databases (WARNING: deletes all data)"
             echo "  --drop-all-dbs  Drop ALL DB data on disk (stronger than --reset-db; wipes Postgres volume dir)"
             echo "  --dev           Development mode with hot reload"
+            echo "  --clear-tasks   DEV/OPS: clear pending Procrastinate jobs on API startup"
             echo "  -h, --help      Show this help message"
             echo ""
             echo "Examples:"
@@ -61,6 +67,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --build           # Rebuild and start"
             echo "  $0 --reset-db        # Reset databases and start fresh"
             echo "  $0 --dev             # Development mode"
+            echo "  $0 --clear-tasks  # Clears queued/doing procrastinate_jobs before worker starts"
             exit 0
             ;;
         *)
@@ -70,6 +77,21 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Control Procrastinate behavior.
+# Precedence: CLI flag > exported env var > default false.
+#
+# `--clear-tasks` enables:
+# - PROCRASTINATE_CLEAR_ON_START=true (delete queued/doing procrastinate_jobs on boot)
+# - ENABLE_PROCRASTINATE_WORKER=true (run an embedded worker loop in the API container)
+if [ "$CLEAR_PROCRASTINATE" = true ]; then
+    export PROCRASTINATE_CLEAR_ON_START=true
+else
+    export PROCRASTINATE_CLEAR_ON_START=${PROCRASTINATE_CLEAR_ON_START:-false}
+fi
+
+# Default worker concurrency (only used if worker is enabled)
+export PROCRASTINATE_WORKER_CONCURRENCY=${PROCRASTINATE_WORKER_CONCURRENCY:-1}
 
 echo -e "${BLUE}🏛️  CAN-SR - Systematic Review Platform${NC}"
 echo -e "${BLUE}========================================${NC}"

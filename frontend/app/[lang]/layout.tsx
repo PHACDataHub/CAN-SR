@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import { Toaster } from 'react-hot-toast'
 import { UploadQueueProvider } from '@/components/files/upload-queue-context'
 import { UploadQueueNotification } from '@/components/files/upload-queue-notification'
+import RunAllFloatingPanel from '@/components/can-sr/RunAllFloatingPanel'
 import { DictionaryProvider } from './DictionaryProvider'
 import { getDictionary } from './dictionaries'
 
@@ -21,18 +22,20 @@ export default async function RootLayout({
   params,
 }: Readonly<{
   children: React.ReactNode
-  params: Promise<{ lang: 'en' | 'fr' }>
+  params: Promise<{ lang: string }>
 }>) {
   const { lang } = await params
-  const dictionary = await getDictionary(lang)
+  const safeLang = lang === 'fr' ? 'fr' : 'en'
+  const dictionary = await getDictionary(safeLang)
 
   return (
-    <html lang={lang} className={inter.variable} suppressHydrationWarning>
+    <html lang={safeLang} className={inter.variable} suppressHydrationWarning>
       <body suppressHydrationWarning>
         <DictionaryProvider dictionary={dictionary}>
           <UploadQueueProvider>
             {children}
             <UploadQueueNotification />
+            <RunAllFloatingPanel />
             <Toaster
               position="top-right"
               toastOptions={{
