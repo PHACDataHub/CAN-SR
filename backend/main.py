@@ -45,6 +45,10 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️ Failed to ensure SR table exists: {e}", flush=True)
 
+    if user_db_service:
+        await user_db_service.ensure_table_exists()
+        print("✓ Users table initialized", flush=True)
+
     # Procrastinate schema + run-all job tables
     try:
         from api.jobs.procrastinate_app import (

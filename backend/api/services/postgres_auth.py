@@ -176,6 +176,18 @@ class PostgresServer:
 
         return kwargs
 
+    def build_conninfo(self, *, include_password: bool = True) -> str:
+        """Build a psycopg key=value conninfo string for the current mode.
+
+        Pass include_password=False to omit the password — useful as a pool
+        template where the token is injected per-connection (azure mode).
+        """
+        kw = self._candidate_kwargs(self._mode(), psycopg3=True)
+        kw.pop("connect_timeout", None)
+        if not include_password:
+            kw.pop("password", None)
+        return " ".join(f"{k}={v}" for k, v in kw.items() if v is not None)
+
     def _connect_with_mode(self, mode: str):
         kwargs = self._candidate_kwargs(mode)
         safe_kwargs = {k: ("***" if k == "password" else v) for k, v in kwargs.items()}
