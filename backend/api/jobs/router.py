@@ -11,6 +11,7 @@ from ..core.security import get_current_active_user
 from ..core.cit_utils import load_sr_and_check
 from ..services.sr_db_service import srdb_service
 from ..services.azure_openai_client import azure_openai_client
+from ..services.cit_db_service import cits_dp_service
 
 from .run_all_repo import run_all_repo
 from .procrastinate_app import cancel_enqueued_jobs_for_run_all, jobs_enabled, worker_concurrency
@@ -126,11 +127,33 @@ async def start_run_all(
 
     # Authz: ensure user can access SR
     try:
-        _sr, _screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load SR: {e}")
+
+    # Legacy safety:
+    # If legacy llm_* outputs exist but normalized agent runs are missing, we must
+    # regenerate results to populate screening_agent_runs.
+    # We enforce this by auto-enabling force overwrite.
+    force = bool(payload.force)
+    try:
+        table_name = (screening or {}).get("table_name") or "citations"
+        cp = (sr or {}).get("criteria_parsed") or {}
+        if step in {"l1", "l2"}:
+            legacy_needs = await run_in_threadpool(
+                cits_dp_service.legacy_needs_rerun,
+                sr_id=sr_id,
+                table_name=table_name,
+                criteria_parsed=cp,
+                step=step,
+            )
+            if legacy_needs:
+                force = True
+    except Exception:
+        # best-effort, do not block
+        pass
 
     # Ensure our job tables exist
     await run_in_threadpool(run_all_repo.ensure_tables)
@@ -179,9 +202,10 @@ async def start_run_all(
             created_by=str(current_user.get("id") or ""),
             model=normalized_model,
             meta={
-                "force": bool(payload.force),
+                "force": force,
                 "chunk_size": int(payload.chunk_size),
                 "explicit_ids": bool(sanitized_ids is not None),
+                "legacy_auto_force": (force and (not bool(payload.force))),
             },
             total=len(sanitized_ids) if sanitized_ids is not None else 0,
         )

@@ -60,7 +60,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./volumes/postgres:/var/lib/postgresql
+      # Use a named volume so we can reset with `docker compose down -v`
+      # without filesystem permission issues from bind-mounts.
+      - backend_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d postgres -h localhost"]
       interval: 30s
@@ -71,3 +73,6 @@ services:
 networks:
   default:
     driver: bridge
+
+volumes:
+  backend_pgdata:

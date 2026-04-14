@@ -13,7 +13,9 @@ import ScreeningMetricsPanel, {
   type ScreeningMetricsStats,
   type ScreeningMetricsSummary,
   type ScreeningCriterionMetrics,
+  type CalibrationCriterion,
 } from '@/components/can-sr/ScreeningMetricsPanel'
+import ScreeningMetricsModal from '@/components/can-sr/ScreeningMetricsModal'
 import {
   Dialog,
   DialogContent,
@@ -79,16 +81,40 @@ export default function CitationsListPage({
   const [error, setError] = useState<string | null>(null)
   const [criteriaData, setCriteriaData] = useState<CriteriaData | null>()
 
-  // Phase 1 list control surface is now hosted by the left-side metrics module.
+  // Phase 1 single-threshold is deprecated; kept for backward compatibility.
   const [threshold, setThreshold] = useState<number>(0.9)
-  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
-  const [pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
+  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('needs')
+  // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
+  const [_pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
 
   // Phase 2 metrics (SR-wide)
   const [srMetricsSummary, setSrMetricsSummary] = useState<ScreeningMetricsSummary | undefined>(undefined)
   const [srCriterionMetrics, setSrCriterionMetrics] = useState<ScreeningCriterionMetrics[] | undefined>(undefined)
-  const [srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
+  const [srCalibration, setSrCalibration] = useState<CalibrationCriterion[] | undefined>(undefined)
+  const [_srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
+
+  // Backend warnings (e.g., legacy data needs run-all)
+  const [srWarnings, setSrWarnings] = useState<any[] | null>(null)
+
+  const legacyWarning = useMemo(() => {
+    const ws = Array.isArray(srWarnings) ? srWarnings : []
+    return (
+      ws.find((w) => String(w?.code || '').toUpperCase() === 'LEGACY_DATA_NEEDS_RUN_ALL') ||
+      null
+    )
+  }, [srWarnings])
+
+  // Silence eslint unused warnings for state that is intentionally retained for backwards-compatibility.
+  void _pageStats
+  void _srThresholds
   const [metricsRefreshKey, setMetricsRefreshKey] = useState<number>(0)
+
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState<boolean>(false)
+
+  // Draft editing: user can adjust thresholds locally, then click Save.
+  const [draftThresholds, setDraftThresholds] = useState<Record<string, any> | null>(null)
+  const [thresholdsDirty, setThresholdsDirty] = useState<boolean>(false)
+  const [savingThresholds, setSavingThresholds] = useState<boolean>(false)
 
   // Run-all job tracking (persist across modal close / refresh)
   const [runAllForce, setRunAllForce] = useState<boolean>(false)
@@ -206,6 +232,8 @@ export default function CitationsListPage({
         const tJson = await tRes.json().catch(() => ({}))
         const thresholds = (tRes.ok ? tJson?.screening_thresholds : null) || {}
         setSrThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+        setDraftThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+        setThresholdsDirty(false)
 
         // 2) metrics
         const mRes = await fetch(
@@ -219,14 +247,32 @@ export default function CitationsListPage({
           const stepBlock = mJson?.steps?.[screeningStep]
           setSrMetricsSummary(stepBlock?.summary)
           setSrCriterionMetrics(stepBlock?.criteria)
+          setSrWarnings(Array.isArray(mJson?.warnings) ? mJson.warnings : null)
         } else {
           setSrMetricsSummary(undefined)
           setSrCriterionMetrics(undefined)
+          setSrWarnings(null)
+        }
+
+        // 3) calibration (validated set)
+        const cRes = await fetch(
+          `/api/can-sr/screen/calibration?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}`,
+          { method: 'GET', headers },
+        )
+        const cJson = await cRes.json().catch(() => ({}))
+        if (cRes.ok && Array.isArray(cJson?.criteria)) {
+          setSrCalibration(cJson.criteria as CalibrationCriterion[])
+        } else {
+          setSrCalibration(undefined)
         }
       } catch {
         setSrMetricsSummary(undefined)
         setSrCriterionMetrics(undefined)
+        setSrCalibration(undefined)
         setSrThresholds(null)
+        setSrWarnings(null)
       }
     }
     load()
@@ -236,6 +282,7 @@ export default function CitationsListPage({
     async (nextThresholds: Record<string, any>) => {
       if (!srId) return
       try {
+        setSavingThresholds(true)
         const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
         const res = await fetch(
           `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
@@ -248,11 +295,15 @@ export default function CitationsListPage({
         const j = await res.json().catch(() => ({}))
         if (res.ok) {
           setSrThresholds(j?.screening_thresholds || nextThresholds)
+          setDraftThresholds(j?.screening_thresholds || nextThresholds)
+          setThresholdsDirty(false)
           // Refresh metrics so counts reflect the new thresholds.
           setMetricsRefreshKey((k) => k + 1)
         }
       } catch {
         // ignore
+      } finally {
+        setSavingThresholds(false)
       }
     },
     [srId],
@@ -417,7 +468,32 @@ export default function CitationsListPage({
         Layout: left floating/side metrics module + right list.
         (A true fixed overlay can be added later; this keeps it responsive and simple.)
       */}
-      <main className="mx-auto max-w-6xl px-6 py-10">
+      <main className="mx-auto max-w-7xl px-6 py-10">
+        {legacyWarning ? (
+          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="font-medium">Legacy screening data detected</div>
+            <div className="mt-1 text-amber-800">
+              {String(legacyWarning?.message ||
+                'This SR has legacy llm_* outputs but no agentic runs. Please run Run-all to regenerate results.')}
+            </div>
+            <div className="mt-2 text-[12px] text-amber-800">
+              Tip: when legacy data is detected, Run-all will automatically force overwrite to generate real agent runs.
+            </div>
+          </div>
+        ) : null}
+
+        <ScreeningMetricsModal
+          open={metricsDrawerOpen}
+          onOpenChange={setMetricsDrawerOpen}
+          title={dict?.screening?.metricsTitle || 'Screening metrics'}
+          stepLabel={displayMap[screeningStep]}
+          summary={srMetricsSummary}
+          criterionMetrics={srCriterionMetrics}
+          calibration={srCalibration}
+          srId={srId}
+          step={screeningStep}
+        />
+
         <Dialog open={runAllModalOpen} onOpenChange={() => setRunAllModalOpen(false)}>
           <DialogContent className="sm:max-w-[560px]">
             <DialogHeader>
@@ -457,32 +533,66 @@ export default function CitationsListPage({
           </DialogContent>
         </Dialog>
         <div className="grid grid-cols-12 gap-6">
-          <aside className="col-span-12 md:col-span-4">
+          <aside className="col-span-12 md:col-span-5">
             <div className="sticky top-6">
+              {/* Save controls */}
+              {(screeningStep === 'l1' || screeningStep === 'l2') ? (
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-xs text-gray-600">
+                    {thresholdsDirty ? 'Unsaved threshold changes' : 'Thresholds up to date'}
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={!thresholdsDirty || savingThresholds}
+                    onClick={() => {
+                      const next = draftThresholds && typeof draftThresholds === 'object' ? draftThresholds : {}
+                      void persistThresholds(next)
+                    }}
+                  >
+                    {savingThresholds ? 'Saving…' : 'Save thresholds'}
+                  </Button>
+                </div>
+              ) : null}
+
               <ScreeningMetricsPanel
                 title={dict?.screening?.metricsTitle || 'Screening metrics'}
                 filterMode={filterMode}
                 onFilterModeChange={setFilterMode}
-                stats={pageStats}
+                onOpenDetails={() => setMetricsDrawerOpen(true)}
+                stats={undefined}
                 summary={srMetricsSummary}
                 criterionMetrics={srCriterionMetrics}
+                calibration={srCalibration}
                 onCriterionThresholdChange={(criterionKey, v) => {
-                  // Update SR-scoped per-step thresholds
-                  const base = srThresholds && typeof srThresholds === 'object' ? { ...srThresholds } : {}
+                  // Update draft per-step thresholds
+                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
                   const stepKey = String(screeningStep)
                   const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
                     ? { ...(base as any)[stepKey] }
                     : {}
                   stepMap[criterionKey] = v
                   ;(base as any)[stepKey] = stepMap
-                  setSrThresholds(base)
+                  setDraftThresholds(base)
+                  setThresholdsDirty(true)
+                }}
+                onCriterionThresholdCommit={(criterionKey, v) => {
+                  // Ensure draft is updated and then persist.
+                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
+                  const stepKey = String(screeningStep)
+                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
+                    ? { ...(base as any)[stepKey] }
+                    : {}
+                  stepMap[criterionKey] = v
+                  ;(base as any)[stepKey] = stepMap
+                  setDraftThresholds(base)
+                  setThresholdsDirty(true)
                   void persistThresholds(base)
                 }}
               />
             </div>
           </aside>
 
-          <div className="col-span-12 md:col-span-8">
+          <div className="col-span-12 md:col-span-7">
             <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -592,14 +702,15 @@ export default function CitationsListPage({
                       pageview={pageview}
                       threshold={threshold}
                       thresholdByCriterionKey={
-                        (srThresholds && typeof srThresholds === 'object'
-                          ? (srThresholds as any)[String(screeningStep)]
+                        (draftThresholds && typeof draftThresholds === 'object'
+                          ? (draftThresholds as any)[String(screeningStep)]
                           : null) || undefined
                       }
                       filterMode={filterMode}
                       onThresholdChange={setThreshold}
                       onFilterModeChange={setFilterMode}
-                      onStatsChange={(s) =>
+                      onStatsChange={(s) => {
+                        // keep state for now (used elsewhere), but do not show in metrics panel
                         setPageStats({
                           scopeLabel: 'this page',
                           total: s.total,
@@ -607,7 +718,7 @@ export default function CitationsListPage({
                           validated: s.validated,
                           unvalidated: s.unvalidated,
                         })
-                      }
+                      }}
                     />
                   </div>
                 )}

@@ -19,6 +19,8 @@ class ParsedAgentXML:
     confidence: float
     rationale: str
     parse_ok: bool
+    missing_answer: bool
+    missing_confidence: bool
 
 
 _TAG_RE_CACHE: dict[str, re.Pattern[str]] = {}
@@ -49,8 +51,17 @@ def parse_agent_xml(text: str) -> ParsedAgentXML:
             conf_val = 0.0
     conf_val = max(0.0, min(1.0, conf_val))
 
-    parse_ok = bool(ans_m and conf_m)
-    return ParsedAgentXML(answer=answer, confidence=conf_val, rationale=rationale, parse_ok=parse_ok)
+    missing_answer = not bool(ans_m and answer.strip())
+    missing_confidence = not bool(conf_m)
+    parse_ok = (not missing_answer) and (not missing_confidence)
+    return ParsedAgentXML(
+        answer=answer,
+        confidence=conf_val,
+        rationale=rationale,
+        parse_ok=parse_ok,
+        missing_answer=missing_answer,
+        missing_confidence=missing_confidence,
+    )
 
 
 def resolve_option(raw_answer: str, options: list[str]) -> str:

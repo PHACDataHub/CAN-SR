@@ -51,6 +51,7 @@ class SRDBService:
                     criteria_yaml TEXT,
                     criteria_parsed JSONB,
                     screening_thresholds JSONB,
+                    critical_prompt_additions JSONB,
                     screening_db JSONB,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
@@ -69,6 +70,18 @@ class SRDBService:
                 try:
                     cur.execute(
                         "ALTER TABLE systematic_reviews ADD COLUMN screening_thresholds JSONB"
+                    )
+                except Exception:
+                    pass
+
+            try:
+                cur.execute(
+                    "ALTER TABLE systematic_reviews ADD COLUMN IF NOT EXISTS critical_prompt_additions JSONB"
+                )
+            except Exception:
+                try:
+                    cur.execute(
+                        "ALTER TABLE systematic_reviews ADD COLUMN critical_prompt_additions JSONB"
                     )
                 except Exception:
                     pass
@@ -202,7 +215,7 @@ class SRDBService:
             insert_sql = """
                 INSERT INTO systematic_reviews 
                 (id, name, description, owner_id, owner_email, users, visible, 
-                 criteria, criteria_yaml, criteria_parsed, screening_thresholds, created_at, updated_at)
+                 criteria, criteria_yaml, criteria_parsed, screening_thresholds, critical_prompt_additions, created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
@@ -218,6 +231,7 @@ class SRDBService:
                 criteria_str,
                 json.dumps(criteria_parsed),
                 json.dumps({"l1": {}, "l2": {}, "parameters": {}}),
+                json.dumps({"l1": {}, "l2": {}}),
                 now,
                 now
             ))
@@ -239,6 +253,8 @@ class SRDBService:
                 sr_doc['criteria_parsed'] = json.loads(sr_doc['criteria_parsed'])
             if sr_doc.get('screening_thresholds') and isinstance(sr_doc['screening_thresholds'], str):
                 sr_doc['screening_thresholds'] = json.loads(sr_doc['screening_thresholds'])
+            if sr_doc.get('critical_prompt_additions') and isinstance(sr_doc['critical_prompt_additions'], str):
+                sr_doc['critical_prompt_additions'] = json.loads(sr_doc['critical_prompt_additions'])
             # Convert datetime objects to ISO strings
             from datetime import datetime as dt
             if sr_doc.get('created_at') and isinstance(sr_doc['created_at'], dt):
@@ -522,6 +538,8 @@ class SRDBService:
                     doc['criteria_parsed'] = json.loads(doc['criteria_parsed'])
                 if doc.get('screening_thresholds') and isinstance(doc['screening_thresholds'], str):
                     doc['screening_thresholds'] = json.loads(doc['screening_thresholds'])
+                if doc.get('critical_prompt_additions') and isinstance(doc['critical_prompt_additions'], str):
+                    doc['critical_prompt_additions'] = json.loads(doc['critical_prompt_additions'])
                 # Convert datetime objects to ISO strings
                 from datetime import datetime as dt
                 if doc.get('created_at') and isinstance(doc['created_at'], dt):
@@ -582,6 +600,8 @@ class SRDBService:
                 doc['criteria_parsed'] = json.loads(doc['criteria_parsed'])
             if doc.get('screening_thresholds') and isinstance(doc['screening_thresholds'], str):
                 doc['screening_thresholds'] = json.loads(doc['screening_thresholds'])
+            if doc.get('critical_prompt_additions') and isinstance(doc['critical_prompt_additions'], str):
+                doc['critical_prompt_additions'] = json.loads(doc['critical_prompt_additions'])
             # Convert datetime objects to ISO strings
             from datetime import datetime as dt
             if doc.get('created_at') and isinstance(doc['created_at'], dt):
@@ -761,6 +781,39 @@ class SRDBService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to update screening thresholds: {e}",
+            )
+        finally:
+            if conn:
+                pass
+
+    def update_critical_prompt_additions(self, sr_id: str, critical_prompt_additions: Dict[str, Any]) -> None:
+        """Persist SR-scoped critical prompt additions.
+
+        Shape:
+          {"l1": {"criterion_key": "..."}, "l2": {"criterion_key": "..."}}
+        """
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+
+            updated_at = datetime.utcnow().isoformat()
+            cur.execute(
+                "UPDATE systematic_reviews SET critical_prompt_additions = %s, updated_at = %s WHERE id = %s",
+                (json.dumps(critical_prompt_additions), updated_at, sr_id),
+            )
+            conn.commit()
+        except Exception as e:
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            logger.exception(f"Failed to update critical prompt additions: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to update critical prompt additions: {e}",
             )
         finally:
             if conn:

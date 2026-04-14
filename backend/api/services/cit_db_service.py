@@ -254,10 +254,20 @@ class CitsDPService:
                     input_tokens INT,
                     output_tokens INT,
                     cost_usd DOUBLE PRECISION,
+                    guardrails JSONB,
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
             )
+
+            # Runtime schema evolution for existing deployments
+            try:
+                cur.execute("ALTER TABLE screening_agent_runs ADD COLUMN IF NOT EXISTS guardrails JSONB")
+            except Exception:
+                try:
+                    cur.execute("ALTER TABLE screening_agent_runs ADD COLUMN guardrails JSONB")
+                except Exception:
+                    pass
 
             # A couple of pragmatic indexes for common lookups.
             cur.execute(
@@ -327,12 +337,12 @@ class CitsDPService:
                     id, sr_id, table_name, citation_id, pipeline, criterion_key, stage,
                     answer, confidence, rationale, raw_response,
                     model, prompt_version, temperature, top_p, seed,
-                    latency_ms, input_tokens, output_tokens, cost_usd, created_at
+                    latency_ms, input_tokens, output_tokens, cost_usd, guardrails, created_at
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -356,6 +366,7 @@ class CitsDPService:
                     run.get("input_tokens"),
                     run.get("output_tokens"),
                     run.get("cost_usd"),
+                    json.dumps(run.get("guardrails")) if run.get("guardrails") is not None else None,
                     run.get("created_at") or datetime.utcnow().isoformat() + "Z",
                 ),
             )
@@ -367,6 +378,106 @@ class CitsDPService:
         finally:
             if conn:
                 pass
+
+    def agent_runs_exist(self, *, sr_id: str, table_name: str, pipeline: str) -> bool:
+        """Return True if we have any normalized agent runs for this SR+table+pipeline."""
+
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1
+                FROM screening_agent_runs
+                WHERE sr_id=%s AND table_name=%s AND pipeline=%s
+                LIMIT 1
+                """,
+                (str(sr_id), str(table_name), str(pipeline)),
+            )
+            return cur.fetchone() is not None
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def legacy_llm_outputs_exist_for_step(
+        self,
+        *,
+        table_name: str,
+        criteria_parsed: Dict[str, Any],
+        step: str,
+    ) -> bool:
+        """Return True if any legacy llm_* JSONB columns for this step contain data."""
+
+        table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
+        if not self.table_exists(table_name):
+            return False
+
+        step_norm = str(step or "").lower().strip()
+        if step_norm not in {"l1", "l2"}:
+            return False
+
+        qs = (((criteria_parsed or {}).get(step_norm) or {}).get("questions") or [])
+        if not isinstance(qs, list) or not qs:
+            return False
+
+        # Determine which llm_* columns exist
+        cols_meta = self.get_table_columns(table_name)
+        existing_cols = {c.get("column_name") for c in cols_meta if c and c.get("column_name")}
+        llm_cols = []
+        for q in qs:
+            if not isinstance(q, str) or not q.strip():
+                continue
+            col = snake_case_column(q)
+            if col in existing_cols:
+                llm_cols.append(col)
+        if not llm_cols:
+            return False
+
+        # Any non-null legacy output?
+        or_sql = " OR ".join([f'"{c}" IS NOT NULL' for c in llm_cols])
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(f'SELECT 1 FROM "{table_name}" WHERE {or_sql} LIMIT 1')
+            return cur.fetchone() is not None
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def legacy_needs_rerun(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        criteria_parsed: Dict[str, Any],
+        step: str,
+    ) -> bool:
+        """Return True when legacy llm_* outputs exist but normalized runs do not.
+
+        This is the signal to:
+        - warn the user that they must run run-all
+        - auto-enable force overwrite for run-all
+        """
+
+        step_norm = str(step or "").lower().strip()
+        if step_norm not in {"l1", "l2"}:
+            return False
+        pipeline = "title_abstract" if step_norm == "l1" else "fulltext"
+        legacy = self.legacy_llm_outputs_exist_for_step(table_name=table_name, criteria_parsed=criteria_parsed, step=step_norm)
+        if not legacy:
+            return False
+        return not self.agent_runs_exist(sr_id=sr_id, table_name=table_name, pipeline=pipeline)
 
     def list_latest_agent_runs(
         self,
@@ -416,6 +527,7 @@ class CitsDPService:
                     answer,
                     confidence,
                     rationale,
+                    guardrails,
                     model,
                     prompt_version,
                     temperature,

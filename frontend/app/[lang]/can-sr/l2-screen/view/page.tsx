@@ -290,32 +290,35 @@ export default function CanSrL2ScreenViewPage() {
   // Load latest agent runs for this citation (screening + critical per criterion)
   useEffect(() => {
     if (!srId || !citationId) return
-    const loadRuns = async () => {
-      setLoadingRuns(true)
-      try {
-        const headers = getAuthHeaders()
-        const res = await fetch(
-          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
-            srId,
-          )}&pipeline=${encodeURIComponent('fulltext')}&citation_ids=${encodeURIComponent(
-            String(citationId),
-          )}`,
-          { method: 'GET', headers },
-        )
-        const data = await res.json().catch(() => ({}))
-        if (res.ok && Array.isArray(data?.runs)) {
-          setAgentRuns(data.runs as LatestAgentRun[])
-        } else {
-          setAgentRuns([])
-        }
-      } catch {
-        setAgentRuns([])
-      } finally {
-        setLoadingRuns(false)
-      }
-    }
     loadRuns()
   }, [srId, citationId])
+
+  // Re-usable loader so we can refresh after triggering an agentic run.
+  async function loadRuns() {
+    if (!srId || !citationId) return
+    setLoadingRuns(true)
+    try {
+      const headers = getAuthHeaders()
+      const res = await fetch(
+        `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
+          srId,
+        )}&pipeline=${encodeURIComponent('fulltext')}&citation_ids=${encodeURIComponent(
+          String(citationId),
+        )}`,
+        { method: 'GET', headers },
+      )
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && Array.isArray(data?.runs)) {
+        setAgentRuns(data.runs as LatestAgentRun[])
+      } else {
+        setAgentRuns([])
+      }
+    } catch {
+      setAgentRuns([])
+    } finally {
+      setLoadingRuns(false)
+    }
+  }
 
   const runsByCriterion = useMemo(() => {
     const by: Record<string, { screening?: LatestAgentRun; critical?: LatestAgentRun }> = {}
@@ -567,65 +570,32 @@ export default function CanSrL2ScreenViewPage() {
   // Call backend classify for a single question using fulltext template (screening_step='l2')
   async function classifyQuestion(questionIndex: number) {
     if (!srId || !citationId || !criteriaData) return
-    const question = criteriaData.questions[questionIndex]
-    const options = criteriaData.possible_answers[questionIndex] || []
-    const xtra = criteriaData.additional_infos?.[questionIndex] || ''
     try {
       const headers = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       }
-      const bodyPayload: any = {
-        question,
-        options,
-        screening_step: 'l2',
-        xtra,
-        model: selectedModel,
-        temperature: 0.0,
-        max_tokens: 1200,
-      }
-      // Provide full text directly to backend to prevent include_columns=None error.
-      // If fulltext is not yet available, fall back to title/abstract to avoid backend crash.
 
-      bodyPayload.citation_text = fulltextStr
-      bodyPayload.include_columns = ['title', 'abstract']
+      // Phase 2 wiring: reuse existing per-question “AI” button, but call the
+      // agentic orchestrator endpoint which runs BOTH screening + critical and persists
+      // them to screening_agent_runs.
+      const res = await fetch('/api/can-sr/screen/fulltext/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(citationId),
+          model: selectedModel,
+          temperature: 0.0,
+          max_tokens: 2000,
+          prompt_version: 'v1',
+        }),
+      })
+      await res.json().catch(() => ({}))
 
-      const res = await fetch(
-        `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
-          String(citationId),
-        )}`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(bodyPayload),
-        },
-      )
-      const data = await res.json().catch(() => ({}))
-      const classification =
-        data?.classification_json ||
-        data?.result ||
-        data?.classification ||
-        data?.llm_classification ||
-        data
-      if (classification && typeof classification === 'object') {
-        // Always show AI panel.
-        // IMPORTANT: do NOT overwrite an existing human selection in the UI.
-        if ((classification as any).selected !== undefined) {
-          setSelections((prev) => {
-            const already = prev?.[questionIndex]
-            if (already !== undefined && String(already).trim() !== '') return prev
-            return { ...prev, [questionIndex]: (classification as any).selected }
-          })
-        }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-      } else {
-        if (typeof data === 'string') {
-          setSelections((prev) => ({ ...prev, [questionIndex]: data }))
-        }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: data || null }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-      }
+      // Refresh latest runs + citation row so the UI shows critical results immediately.
+      await fetchCitationById(String(citationId))
+      await loadRuns()
     } catch (err) {
       console.error('Classify API error', err)
     }

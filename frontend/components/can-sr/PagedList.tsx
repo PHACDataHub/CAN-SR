@@ -14,9 +14,9 @@ type CitationInfo = {
   pageview: string
   threshold?: number
   thresholdByCriterionKey?: Record<string, number>
-  filterMode?: 'needs' | 'validated' | 'unvalidated' | 'all'
+  filterMode?: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
   onThresholdChange?: (v: number) => void
-  onFilterModeChange?: (v: 'needs' | 'validated' | 'unvalidated' | 'all') => void
+  onFilterModeChange?: (v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all') => void
   onStatsChange?: (stats: {
     total: number
     needsValidation: number
@@ -32,6 +32,21 @@ type LatestAgentRun = {
   answer?: string | null
   confidence?: number | null
   created_at?: string
+  guardrails?: any
+}
+
+function hasGuardrailIssue(g: any): boolean {
+  if (!g) return false
+  try {
+    const obj = typeof g === 'string' ? JSON.parse(g) : g
+    if (!obj || typeof obj !== 'object') return true
+    if (obj.parse_ok === false) return true
+    if (obj.missing_answer) return true
+    if (obj.missing_confidence) return true
+    return false
+  } catch {
+    return true
+  }
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -46,6 +61,14 @@ function snakeCaseColumn(name: string, llm: boolean) {
   s = s.replace(/[^\w]+/g, '_')
   s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
   return llm ? `llm_${s}`.slice(0, 60) : `human_${s}`.slice(0, 60)
+}
+
+function criterionKeyFromQuestion(question: string) {
+  if (!question) return ''
+  let s = question.trim().toLowerCase()
+  s = s.replace(/[^\w]+/g, '_')
+  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  return s.slice(0, 56)
 }
 
 export default function PagedList({
@@ -81,7 +104,7 @@ export default function PagedList({
 
   // List controls (controlled by parent when provided; otherwise local state)
   const [thresholdLocal, setThresholdLocal] = useState<number>(0.9)
-  const [filterModeLocal, setFilterModeLocal] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
+  const [filterModeLocal, setFilterModeLocal] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('needs')
 
   const threshold = typeof thresholdProp === 'number' ? thresholdProp : thresholdLocal
   const filterMode = filterModeProp || filterModeLocal
@@ -216,9 +239,42 @@ export default function PagedList({
 
     const runs = latestRunsByCitation[citationId] || []
     if (!runs.length) {
-      // No agent runs yet => should be in "unvalidated" but not necessarily "needs"
-      // We'll treat missing runs as "needs" so it's easy to find.
-      return true
+      // Fallback for older flow where we only have llm_* columns (no screening_agent_runs).
+      // If we have any llm result, we can still apply the low-confidence rule.
+      let hasAnyLlm = false
+      let hasLowConfidence = false
+
+      for (const q of questions || []) {
+        if (!q) continue
+        const llmCol = snakeCaseColumn(q, true)
+        const llmVal = row?.[llmCol]
+        if (!llmVal) continue
+        hasAnyLlm = true
+        let conf: number | null = null
+        try {
+          const obj = typeof llmVal === 'string' ? JSON.parse(llmVal) : llmVal
+          conf = Number((obj as any)?.confidence)
+        } catch {
+          conf = null
+        }
+
+        const ck = criterionKeyFromQuestion(q)
+        const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[ck]) : NaN
+        const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : threshold
+
+        if (!Number.isFinite(conf as any)) {
+          // Missing/invalid confidence is treated conservatively.
+          hasLowConfidence = true
+        } else if ((conf as number) < thr) {
+          hasLowConfidence = true
+        }
+      }
+
+      if (!hasAnyLlm) {
+        // Not screened yet => not in the human-review queue.
+        return false
+      }
+      return hasLowConfidence
     }
 
     // Group by criterion_key
@@ -230,18 +286,26 @@ export default function PagedList({
       byKey[key].push(r)
     }
 
-    // Rule:
-    // - If ANY criterion is a confident exclude (screening answer contains "(exclude)" AND conf >= threshold) => no review needed.
-    // - Else needs review if ANY criterion is low confidence OR critical disagrees.
+    // Rule (aligned with backend):
+    // - Auto-excluded iff ANY criterion is confident exclude AND critical agrees.
+    // - Needs human review iff NOT auto-excluded AND (any low confidence OR any critical disagreement).
+    // - PLUS: any parse/guardrail issue should trigger needs review (conservative).
 
     let hasConfidentExclude = false
     let hasLowConfidence = false
     let hasCriticalDisagree = false
+    let hasAnyGuardrailIssue = false
 
     for (const key of Object.keys(byKey)) {
       const items = byKey[key]
       const screening = items.find((x) => String((x as any)?.stage) === 'screening')
       const critical = items.find((x) => String((x as any)?.stage) === 'critical')
+
+      const scrG = (screening as any)?.guardrails
+      const critG = (critical as any)?.guardrails
+      if (hasGuardrailIssue(scrG) || hasGuardrailIssue(critG)) {
+        hasAnyGuardrailIssue = true
+      }
 
       const conf = Number((screening as any)?.confidence)
       const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[key]) : NaN
@@ -250,19 +314,23 @@ export default function PagedList({
       if (Number.isFinite(conf) && conf < thr) hasLowConfidence = true
 
       const ans = String((screening as any)?.answer || '')
-      if (Number.isFinite(conf) && conf >= thr && ans.toLowerCase().includes('(exclude)')) {
+      const critAns = String((critical as any)?.answer || '').trim()
+      // Conservative: missing critical is treated as disagreement (needs review)
+      const critAgrees = !!critical && critAns !== '' && critAns === 'None of the above'
+
+      if (Number.isFinite(conf) && conf >= thr && ans.toLowerCase().includes('(exclude)') && critAgrees) {
         hasConfidentExclude = true
       }
 
       const criticalAns = String((critical as any)?.answer || '')
       // In our critical prompt contract, agreement is "None of the above".
-      if (critical && criticalAns.trim() !== '' && criticalAns.trim() !== 'None of the above') {
+      if (!critical || criticalAns.trim() === '' || criticalAns.trim() !== 'None of the above') {
         hasCriticalDisagree = true
       }
     }
 
     if (hasConfidentExclude) return false
-    return hasLowConfidence || hasCriticalDisagree
+    return hasLowConfidence || hasCriticalDisagree || hasAnyGuardrailIssue
   }
 
   const filteredCitationData = citationData.filter((row: any) => {
@@ -270,10 +338,16 @@ export default function PagedList({
     if (!Number.isFinite(id)) return false
     const validated = isValidatedForStep(row)
     const needs = computeNeedsValidation(id, row)
+    const runs = latestRunsByCitation[id] || []
+    const notScreened = (!runs.length) && !questions.some((q) => {
+      const llmCol = snakeCaseColumn(q, true)
+      return Boolean(row?.[llmCol])
+    })
     const unvalidated = !validated
     if (filterMode === 'all') return true
     if (filterMode === 'validated') return validated
     if (filterMode === 'unvalidated') return unvalidated
+    if (filterMode === 'not_screened') return notScreened
     if (filterMode === 'needs') return needs
     return true
   })
@@ -320,6 +394,41 @@ export default function PagedList({
     }
     if (!srId) return
 
+    // Phase 2 wiring: list-level “Classify/AI” triggers orchestrated agentic run.
+    // (Backend reads SR criteria; no need to fan out per-question calls.)
+    if (screeningStep === 'l1') {
+      await fetch('/api/can-sr/screen/title-abstract/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(id),
+          temperature: 0.0,
+          max_tokens: 1200,
+          prompt_version: 'v1',
+        }),
+      })
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      return
+    }
+
+    if (screeningStep === 'l2') {
+      await fetch('/api/can-sr/screen/fulltext/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(id),
+          temperature: 0.0,
+          max_tokens: 2000,
+          prompt_version: 'v1',
+        }),
+      })
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      return
+    }
+
+    // Other steps keep legacy behavior.
     for (let i = 0; i < questions.length; i++) {
       const bodyPayload = {
         question: questions[i],
@@ -415,6 +524,7 @@ export default function PagedList({
               <option value="needs">Needs human review</option>
               <option value="unvalidated">Unvalidated</option>
               <option value="validated">Validated</option>
+              <option value="not_screened">Not screened yet</option>
               <option value="all">All</option>
             </select>
           </div>

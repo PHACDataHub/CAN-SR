@@ -450,57 +450,47 @@ export default function CanSrL1ScreenPage() {
   // Handler: call backend classify endpoint for a single question
   async function classifyQuestion(questionIndex: number) {
     if (!srId || !citationId || !criteriaData) return
-    const question = criteriaData.questions[questionIndex]
-    const options = criteriaData.possible_answers[questionIndex] || []
     try {
       const headers = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       }
-      const bodyPayload = {
-        question,
-        options,
-        include_columns: ['title', 'abstract'],
-        screening_step: 'l1',
-      }
-      const res = await fetch(
-        `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
-          citationId,
-        )}`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(bodyPayload),
-        },
-      )
-      const data = await res.json().catch(() => ({}))
-      // Expect the backend to return the classification_json or similar structure
-      // Try flexible extraction:
-      const classification =
-        data?.classification_json ||
-        data?.result ||
-        data?.classification ||
-        data?.llm_classification ||
-        data
-      if (classification && typeof classification === 'object') {
-        // Always show AI panel.
-        // IMPORTANT: do NOT overwrite an existing human selection in the UI.
-        if ((classification as any).selected !== undefined) {
-          setSelections((prev) => {
-            const already = prev?.[questionIndex]
-            if (already !== undefined && String(already).trim() !== '') return prev
-            return { ...prev, [questionIndex]: (classification as any).selected }
-          })
+
+      // Phase 1->2 wiring: reuse the existing per-question “AI” button, but call the
+      // agentic orchestrator endpoint which runs BOTH screening + critical and persists
+      // them to screening_agent_runs.
+      const res = await fetch('/api/can-sr/screen/title-abstract/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(citationId),
+          model: selectedModel,
+          temperature: 0.0,
+          max_tokens: 1200,
+          prompt_version: 'v1',
+        }),
+      })
+      await res.json().catch(() => ({}))
+
+      // Refresh latest runs + citation row so the UI shows critical + validations immediately.
+      await fetchCitationById(String(citationId))
+
+      try {
+        const r2 = await fetch(
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
+            srId,
+          )}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(
+            String(citationId),
+          )}`,
+          { method: 'GET', headers: getAuthHeaders() },
+        )
+        const j2 = await r2.json().catch(() => ({}))
+        if (r2.ok && Array.isArray(j2?.runs)) {
+          setAgentRuns(j2.runs as LatestAgentRun[])
         }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-      } else {
-        // If server returned a simple string, set it as selection
-        if (typeof data === 'string') {
-          setSelections((prev) => ({ ...prev, [questionIndex]: data }))
-        }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: data || null }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
+      } catch {
+        // ignore
       }
     } catch (err) {
       console.error('Classify API error', err)

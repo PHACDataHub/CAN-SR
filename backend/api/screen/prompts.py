@@ -134,6 +134,9 @@ Forced alternatives (choose exactly one; exact text):
 Additional guidance:
 {xtra}
 
+CRITICAL PROMPT ADDITIONS (SR-scoped):
+{critical_additions}
+
 Output requirement:
 Return ONLY the following XML tags (no Markdown, no extra prose):
 <answer>...</answer>
@@ -198,6 +201,9 @@ Forced alternatives (choose exactly one; exact text):
 
 Additional guidance:
 {xtra}
+
+CRITICAL PROMPT ADDITIONS (SR-scoped):
+{critical_additions}
 
 Full text (numbered sentences):
 {fulltext}
