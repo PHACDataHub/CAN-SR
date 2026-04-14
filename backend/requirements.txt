@@ -62,5 +62,4 @@ itsdangerous==2.2.0
 biopython==1.86
 clean-text==0.7.1
 azure-functions==1.24.0
-
-pandas
+pandas==2.2.2
