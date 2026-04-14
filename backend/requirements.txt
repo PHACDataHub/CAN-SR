@@ -51,7 +51,7 @@ requests==2.33.0
 
 # Agent framework dependencies
 langchain==1.2.7
-langchain-core==1.2.11
+langchain-core==1.2.28
 langchain-google-genai==4.2.0
 
 # OAuth
@@ -59,7 +59,7 @@ Authlib==1.6.9
 itsdangerous==2.2.0
 
 #Citation search
-biopython==1.86
+biopython==1.87
 clean-text==0.7.1
 azure-functions==1.24.0
 pandas==2.2.2
