@@ -216,7 +216,7 @@ class SRDBService:
                 INSERT INTO systematic_reviews 
                 (id, name, description, owner_id, owner_email, users, visible, 
                  criteria, criteria_yaml, criteria_parsed, screening_thresholds, critical_prompt_additions, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             cur.execute(insert_sql, (
