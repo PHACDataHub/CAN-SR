@@ -54,6 +54,32 @@ function humanScreenColumn(name: string) {
   return base.replace(/^llm_/, 'human_')
 }
 
+type ValidationEntry = { user: string; validated_at: string }
+
+function parseValidations(v: any): ValidationEntry[] {
+  if (!v) return []
+  try {
+    const parsed = typeof v === 'string' ? JSON.parse(v) : v
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x: any) => x && typeof x === 'object')
+      .map((x: any) => ({
+        user: String(x.user ?? x.email ?? x.validated_by ?? ''),
+        validated_at: String(x.validated_at ?? x.timestamp ?? ''),
+      }))
+      .filter((x: any) => x.user)
+  } catch {
+    return []
+  }
+}
+
+function formatValidationDate(v: string): string {
+  if (!v) return ''
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  return d.toLocaleString()
+}
+
 /* Types for local clarity */
 type CriteriaData = {
   questions: string[]
@@ -76,6 +102,11 @@ export default function CanSrL1ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  const thresholdParam = searchParams?.get('threshold')
+  const threshold = useMemo(() => {
+    const v = Number(thresholdParam)
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9
+  }, [thresholdParam])
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
@@ -106,6 +137,17 @@ export default function CanSrL1ScreenPage() {
   const [loadingRuns, setLoadingRuns] = useState(false)
 
   const [validating, setValidating] = useState(false)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+
+  const l1Validations = useMemo(() => parseValidations((citation as any)?.l1_validations), [citation])
+  const l1Checked = useMemo(() => {
+    const me = String(userEmail || '')
+    if (!me) return false
+    return l1Validations.some((v) => v.user === me)
+  }, [l1Validations, userEmail])
+  const l1ValidationsSorted = useMemo(() => {
+    return [...l1Validations].sort((a, b) => String(b.validated_at || '').localeCompare(String(a.validated_at || '')))
+  }, [l1Validations])
 
   useEffect(() => {
     if (!srId || !citationId) {
@@ -136,6 +178,23 @@ export default function CanSrL1ScreenPage() {
     }
     loadIds()
   }, [srId])
+
+  // Fetch current user email for the "Validated by [UserEmail]" checkbox label.
+  useEffect(() => {
+    const loadMe = async () => {
+      try {
+        const headers = { ...getAuthHeaders() }
+        const res = await fetch('/api/auth/me', { method: 'GET', headers })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setUserEmail(String(data?.user?.email || data?.email || ''))
+        }
+      } catch {
+        // ignore
+      }
+    }
+    loadMe()
+  }, [])
 
   // Load citation row
   // Extracted fetch function so we can re-use it when navigating between citations
@@ -486,8 +545,7 @@ export default function CanSrL1ScreenPage() {
       <GCHeader />
       <SRHeader
         title={dict.screening.titleAbstract}
-        backHref={`/can-sr/l1-screen?sr_id=${encodeURIComponent(srId || '')}`}
-        backLabel={dict.cansr.backToCitations}
+        backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId)}`}
         right={
           <ModelSelector
             selectedModel={selectedModel}
@@ -496,130 +554,27 @@ export default function CanSrL1ScreenPage() {
         }
       />
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        {/* Agentic summary + Validate */}
-        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900">Agentic results</h3>
-              <p className="text-xs text-gray-600">
-                Latest <code>screening</code> + <code>critical</code> runs per criterion.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  if (!srId || !citationId) return
-                  setValidating(true)
-                  try {
-                    const headers = {
-                      'Content-Type': 'application/json',
-                      ...getAuthHeaders(),
-                    }
-                    await fetch('/api/can-sr/screen/validate', {
-                      method: 'POST',
-                      headers,
-                      body: JSON.stringify({
-                        sr_id: srId,
-                        citation_id: Number(citationId),
-                        step: 'l1',
-                      }),
-                    })
-                    // Refresh citation so validated fields appear
-                    await fetchCitationById(String(citationId))
-                  } finally {
-                    setValidating(false)
-                  }
-                }}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                disabled={validating}
-                type="button"
-              >
-                {validating ? 'Validating…' : 'Validate (L1)'}
-              </button>
-
-              {citation?.l1_validated_by ? (
-                <span className="text-xs text-emerald-700">
-                  Validated by {String(citation.l1_validated_by)}
-                </span>
-              ) : (
-                <span className="text-xs text-gray-600">Not validated</span>
-              )}
-            </div>
-          </div>
-
-          {loadingRuns ? (
-            <div className="mt-3 text-sm text-gray-600">Loading agent runs…</div>
-          ) : criteriaData?.questions?.length ? (
-            <div className="mt-3 space-y-2">
-              {criteriaData.questions.map((q, idx) => {
-                const criterionKey = q
-                  ? q
-                      .trim()
-                      .toLowerCase()
-                      .replace(/[^\w]+/g, '_')
-                      .replace(/_+/g, '_')
-                      .replace(/^_+|_+$/g, '')
-                      .slice(0, 56)
-                  : ''
-
-                const r = runsByCriterion[criterionKey] || {}
-                const scr = r.screening
-                const crit = r.critical
-
-                const critDisagrees =
-                  crit && String((crit as any)?.answer || '').trim() !== '' &&
-                  String((crit as any)?.answer || '').trim() !== 'None of the above'
-
-                return (
-                  <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-3">
-                    <div className="text-sm font-medium text-gray-800">{q}</div>
-                    <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-gray-700">
-                      <div className="rounded-md border border-gray-100 bg-white p-2">
-                        <div className="font-semibold">Screening</div>
-                        <div>Answer: {String((scr as any)?.answer ?? '—')}</div>
-                        <div>Confidence: {String((scr as any)?.confidence ?? '—')}</div>
-                      </div>
-                      <div className={"rounded-md border border-gray-100 bg-white p-2 " + (critDisagrees ? 'border-amber-300 bg-amber-50' : '')}>
-                        <div className="font-semibold">Critical</div>
-                        <div>Answer: {String((crit as any)?.answer ?? '—')}</div>
-                        <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
-                        {critDisagrees ? (
-                          <div className="mt-1 font-medium text-amber-700">Disagrees</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="mt-3 text-sm text-gray-600">No criteria loaded yet.</div>
-          )}
-        </div>
-
+      <main className="mx-auto max-w-6xl px-6 py-10">
         <div className="grid grid-cols-12 gap-6">
           {/* Workspace (left) */}
-          <div className="col-span-7">
+          <div className="col-span-12 md:col-span-7">
             <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
               {workspace}
             </div>
           </div>
 
           {/* Selection sidebar (right) */}
-          <aside className="col-span-5">
+          <aside className="col-span-12 md:col-span-5">
             <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h4 className="text-md font-semibold text-gray-900">{dict.screening.selection}</h4>
-              <p className="text-sm text-gray-600">
-                {dict.screening.selectionDesc}
-              </p>
+              <h4 className="text-md font-semibold text-gray-900">
+                {dict.screening.selection}
+              </h4>
+              <p className="text-sm text-gray-600">{dict.screening.selectionDesc}</p>
 
               {loadingCriteria ? (
                 <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
-                <div className="text-sm text-gray-600">
-                  {dict.screening.noCriteria}
-                </div>
+                <div className="text-sm text-gray-600">{dict.screening.noCriteria}</div>
               ) : (
                 <div className="space-y-4">
                   {criteriaData.questions.map((q, idx) => {
@@ -629,10 +584,33 @@ export default function CanSrL1ScreenPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
+                    // Per-question highlight when low confidence or agentic disagreement.
+                    const criterionKey = q
+                      ? q
+                          .trim()
+                          .toLowerCase()
+                          .replace(/[^\w]+/g, '_')
+                          .replace(/_+/g, '_')
+                          .replace(/^_+|_+$/g, '')
+                          .slice(0, 56)
+                      : ''
+
+                    const r = runsByCriterion[criterionKey] || {}
+                    const scr = r.screening
+                    const crit = r.critical
+                    const scrConf = Number((scr as any)?.confidence)
+                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < threshold : false
+                    const critAns = String((crit as any)?.answer || '').trim()
+                    const critDisagrees = !!crit && critAns !== '' && critAns !== 'None of the above'
+                    const needsHuman = lowConfidence || critDisagrees
+
                     return (
                       <div
                         key={idx}
-                        className="rounded-md border border-gray-100 p-3"
+                        className={
+                          'rounded-md border p-3 ' +
+                          (needsHuman ? 'border-amber-300 bg-amber-50' : 'border-gray-100')
+                        }
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -732,6 +710,56 @@ export default function CanSrL1ScreenPage() {
                   })}
                 </div>
               )}
+
+              {/* Validation checkbox at the bottom of selection area */}
+              <div className="mt-4 rounded-md border border-gray-100 bg-gray-50 p-3">
+                <label className="flex items-center gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    checked={l1Checked}
+                    disabled={validating}
+                    onChange={async (e) => {
+                      if (!srId || !citationId) return
+                      setValidating(true)
+                      try {
+                        const headers = {
+                          'Content-Type': 'application/json',
+                          ...getAuthHeaders(),
+                        }
+                        await fetch('/api/can-sr/screen/validate', {
+                          method: 'POST',
+                          headers,
+                          body: JSON.stringify({
+                            sr_id: srId,
+                            citation_id: Number(citationId),
+                            step: 'l1',
+                            checked: Boolean(e.target.checked),
+                          }),
+                        })
+                        await fetchCitationById(String(citationId))
+                      } finally {
+                        setValidating(false)
+                      }
+                    }}
+                  />
+                  <span>
+                    Validated by{' '}
+                    <span className="font-medium">
+                      {String(userEmail || '—')}
+                    </span>
+                  </span>
+                </label>
+
+                {l1ValidationsSorted.length ? (
+                  <div className="mt-2 space-y-1">
+                    {l1ValidationsSorted.map((v, idx) => (
+                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
+                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
           </aside>
         </div>
@@ -752,7 +780,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}`,
+                )}&threshold=${encodeURIComponent(String(threshold))}`,
               )
             }}
             className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
@@ -775,7 +803,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}`,
+                )}&threshold=${encodeURIComponent(String(threshold))}`,
               )
             }}
             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"

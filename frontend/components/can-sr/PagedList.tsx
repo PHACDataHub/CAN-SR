@@ -12,6 +12,17 @@ type CitationInfo = {
   include: string[]
   screeningStep: string
   pageview: string
+  threshold?: number
+  thresholdByCriterionKey?: Record<string, number>
+  filterMode?: 'needs' | 'validated' | 'unvalidated' | 'all'
+  onThresholdChange?: (v: number) => void
+  onFilterModeChange?: (v: 'needs' | 'validated' | 'unvalidated' | 'all') => void
+  onStatsChange?: (stats: {
+    total: number
+    needsValidation: number
+    validated: number
+    unvalidated: number
+  }) => void
 }
 
 type LatestAgentRun = {
@@ -44,6 +55,12 @@ export default function PagedList({
   possible_answers,
   screeningStep,
   pageview,
+  threshold: thresholdProp,
+  thresholdByCriterionKey,
+  filterMode: filterModeProp,
+  onThresholdChange,
+  onFilterModeChange,
+  onStatsChange,
 }: CitationInfo) {
   const router = useRouter()
   const { lang } = useParams<{ lang: string }>()
@@ -62,9 +79,12 @@ export default function PagedList({
   )
   const [showClassify, setShowClassify] = useState<Record<number, boolean>>({})
 
-  // TA list controls
-  const [threshold, setThreshold] = useState<number>(0.9)
-  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
+  // List controls (controlled by parent when provided; otherwise local state)
+  const [thresholdLocal, setThresholdLocal] = useState<number>(0.9)
+  const [filterModeLocal, setFilterModeLocal] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
+
+  const threshold = typeof thresholdProp === 'number' ? thresholdProp : thresholdLocal
+  const filterMode = filterModeProp || filterModeLocal
 
   const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
 
@@ -154,7 +174,7 @@ export default function PagedList({
             setLatestRunsByCitation((prev: Record<number, LatestAgentRun[]>) => ({ ...prev, ...grouped }))
           }
         }
-      } catch (e) {
+      } catch {
         // best-effort
       }
     }
@@ -168,9 +188,25 @@ export default function PagedList({
 
   const isValidatedForStep = (row: any): boolean => {
     if (!row) return false
-    if (screeningStep === 'l1') return Boolean(row?.l1_validated_by)
-    if (screeningStep === 'l2') return Boolean(row?.l2_validated_by)
-    if (screeningStep === 'extract') return Boolean(row?.parameters_validated_by)
+    const hasValidationsList = (v: any): boolean => {
+      if (!v) return false
+      if (Array.isArray(v)) return v.length > 0
+      if (typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v)
+          return Array.isArray(parsed) && parsed.length > 0
+        } catch {
+          return false
+        }
+      }
+      return false
+    }
+
+    // Prefer new per-step validations list; fall back to legacy single fields.
+    if (screeningStep === 'l1') return hasValidationsList(row?.l1_validations) || Boolean(row?.l1_validated_by)
+    if (screeningStep === 'l2') return hasValidationsList(row?.l2_validations) || Boolean(row?.l2_validated_by)
+    if (screeningStep === 'extract')
+      return hasValidationsList(row?.parameters_validations) || Boolean(row?.parameters_validated_by)
     return false
   }
 
@@ -194,21 +230,39 @@ export default function PagedList({
       byKey[key].push(r)
     }
 
-    // Needs validation if ANY criterion is low confidence OR critical disagrees
+    // Rule:
+    // - If ANY criterion is a confident exclude (screening answer contains "(exclude)" AND conf >= threshold) => no review needed.
+    // - Else needs review if ANY criterion is low confidence OR critical disagrees.
+
+    let hasConfidentExclude = false
+    let hasLowConfidence = false
+    let hasCriticalDisagree = false
+
     for (const key of Object.keys(byKey)) {
       const items = byKey[key]
       const screening = items.find((x) => String((x as any)?.stage) === 'screening')
       const critical = items.find((x) => String((x as any)?.stage) === 'critical')
 
       const conf = Number((screening as any)?.confidence)
-      if (Number.isFinite(conf) && conf < threshold) return true
+      const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[key]) : NaN
+      const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : threshold
+
+      if (Number.isFinite(conf) && conf < thr) hasLowConfidence = true
+
+      const ans = String((screening as any)?.answer || '')
+      if (Number.isFinite(conf) && conf >= thr && ans.toLowerCase().includes('(exclude)')) {
+        hasConfidentExclude = true
+      }
 
       const criticalAns = String((critical as any)?.answer || '')
       // In our critical prompt contract, agreement is "None of the above".
-      if (critical && criticalAns.trim() !== '' && criticalAns.trim() !== 'None of the above') return true
+      if (critical && criticalAns.trim() !== '' && criticalAns.trim() !== 'None of the above') {
+        hasCriticalDisagree = true
+      }
     }
 
-    return false
+    if (hasConfidentExclude) return false
+    return hasLowConfidence || hasCriticalDisagree
   }
 
   const filteredCitationData = citationData.filter((row: any) => {
@@ -223,6 +277,23 @@ export default function PagedList({
     if (filterMode === 'needs') return needs
     return true
   })
+
+  // Emit list stats upward (so CitationListPage can render a floating metrics module)
+  useEffect(() => {
+    if (!onStatsChange) return
+    const total = citationData.length
+    let validated = 0
+    let needsValidation = 0
+    for (const row of citationData) {
+      const id = Number(row?.id)
+      if (!Number.isFinite(id)) continue
+      if (isValidatedForStep(row)) validated += 1
+      if (computeNeedsValidation(id, row)) needsValidation += 1
+    }
+    const unvalidated = Math.max(0, total - validated)
+    onStatsChange({ total, needsValidation, validated, unvalidated })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [citationData, threshold, screeningStep, latestRunsByCitation, thresholdByCriterionKey])
 
   // NOTE: Previously we fetched each citation via /citations/get.
   // This is now replaced by a single /citations/batch call per page.
@@ -306,7 +377,10 @@ export default function PagedList({
 
   return (
     <div className="flex flex-col items-center space-y-4">
-      {screeningStep === 'l1' || screeningStep === 'l2' ? (
+      {/* Controls moved to CitationListPage floating metrics module when provided.
+          Keep fallback local controls for other callers. */}
+      {((screeningStep === 'l1' || screeningStep === 'l2') &&
+        (typeof thresholdProp !== 'number' || !filterModeProp)) ? (
         <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
           <div className="flex items-center gap-2">
             <label className="text-sm text-gray-700">Threshold</label>
@@ -319,7 +393,9 @@ export default function PagedList({
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                 const v = Number(e.target.value)
                 if (!Number.isFinite(v)) return
-                setThreshold(Math.max(0, Math.min(1, v)))
+                const nv = Math.max(0, Math.min(1, v))
+                setThresholdLocal(nv)
+                onThresholdChange?.(nv)
               }}
               className="w-24 rounded-md border border-gray-200 px-2 py-1 text-sm"
             />
@@ -329,10 +405,14 @@ export default function PagedList({
             <label className="text-sm text-gray-700">Filter</label>
             <select
               value={filterMode}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilterMode(e.target.value as any)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                const v = e.target.value as any
+                setFilterModeLocal(v)
+                onFilterModeChange?.(v)
+              }}
               className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
             >
-              <option value="needs">Needs validation</option>
+              <option value="needs">Needs human review</option>
               <option value="unvalidated">Unvalidated</option>
               <option value="validated">Validated</option>
               <option value="all">All</option>
@@ -364,7 +444,7 @@ export default function PagedList({
               <button
                 onClick={() =>
                   router.push(
-                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}`,
+                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}&threshold=${encodeURIComponent(String(threshold))}`,
                   )
                 }
                 className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"

@@ -9,6 +9,32 @@ import { Wand2 } from 'lucide-react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
+type ValidationEntry = { user: string; validated_at: string }
+
+function parseValidations(v: any): ValidationEntry[] {
+  if (!v) return []
+  try {
+    const parsed = typeof v === 'string' ? JSON.parse(v) : v
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x: any) => x && typeof x === 'object')
+      .map((x: any) => ({
+        user: String(x.user ?? x.email ?? x.validated_by ?? ''),
+        validated_at: String(x.validated_at ?? x.timestamp ?? ''),
+      }))
+      .filter((x: any) => x.user)
+  } catch {
+    return []
+  }
+}
+
+function formatValidationDate(v: string): string {
+  if (!v) return ''
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  return d.toLocaleString()
+}
+
 /*
   Full-text single-citation viewer for L2 screening.
 
@@ -112,6 +138,17 @@ export default function CanSrL2ScreenViewPage() {
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [validating, setValidating] = useState(false)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+
+  const l2Validations = useMemo(() => parseValidations((citation as any)?.l2_validations), [citation])
+  const l2Checked = useMemo(() => {
+    const me = String(userEmail || '')
+    if (!me) return false
+    return l2Validations.some((v) => v.user === me)
+  }, [l2Validations, userEmail])
+  const l2ValidationsSorted = useMemo(() => {
+    return [...l2Validations].sort((a, b) => String(b.validated_at || '').localeCompare(String(a.validated_at || '')))
+  }, [l2Validations])
 
   // Fulltext PDF viewer linkage
   const [fulltextCoords, setFulltextCoords] = useState<any[] | null>(null)
@@ -148,6 +185,23 @@ export default function CanSrL2ScreenViewPage() {
     }
     loadIds()
   }, [srId])
+
+  // Fetch current user email for validation toggling.
+  useEffect(() => {
+    const loadMe = async () => {
+      try {
+        const headers = { ...getAuthHeaders() }
+        const res = await fetch('/api/auth/me', { method: 'GET', headers })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setUserEmail(String(data?.user?.email || data?.email || ''))
+        }
+      } catch {
+        // ignore
+      }
+    }
+    loadMe()
+  }, [])
 
   // Load citation row (and ensure fulltext is extracted if missing)
   async function fetchCitationById(id: string) {
@@ -684,45 +738,53 @@ export default function CanSrL2ScreenViewPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  if (!srId || !citationId) return
-                  setValidating(true)
-                  try {
-                    const headers = {
-                      'Content-Type': 'application/json',
-                      ...getAuthHeaders(),
+              <label className="flex items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="checkbox"
+                  checked={l2Checked}
+                  disabled={validating}
+                  onChange={async (e) => {
+                    if (!srId || !citationId) return
+                    setValidating(true)
+                    try {
+                      const headers = {
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders(),
+                      }
+                      await fetch('/api/can-sr/screen/validate', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({
+                          sr_id: srId,
+                          citation_id: Number(citationId),
+                          step: 'l2',
+                          checked: Boolean(e.target.checked),
+                        }),
+                      })
+                      await fetchCitationById(String(citationId))
+                    } finally {
+                      setValidating(false)
                     }
-                    await fetch('/api/can-sr/screen/validate', {
-                      method: 'POST',
-                      headers,
-                      body: JSON.stringify({
-                        sr_id: srId,
-                        citation_id: Number(citationId),
-                        step: 'l2',
-                      }),
-                    })
-                    await fetchCitationById(String(citationId))
-                  } finally {
-                    setValidating(false)
-                  }
-                }}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                disabled={validating}
-                type="button"
-              >
-                {validating ? 'Validating…' : 'Validate (L2)'}
-              </button>
-
-              {citation?.l2_validated_by ? (
-                <span className="text-xs text-emerald-700">
-                  Validated by {String(citation.l2_validated_by)}
+                  }}
+                />
+                <span>
+                  Validated by <span className="font-medium">{String(userEmail || '—')}</span>
                 </span>
-              ) : (
-                <span className="text-xs text-gray-600">Not validated</span>
-              )}
+              </label>
             </div>
           </div>
+
+          {l2ValidationsSorted.length ? (
+            <div className="mt-2 space-y-1">
+              {l2ValidationsSorted.map((v, idx) => (
+                <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
+                  Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-gray-600">Not validated</div>
+          )}
 
           {loadingRuns ? (
             <div className="mt-2 text-sm text-gray-600">Loading agent runs…</div>

@@ -9,6 +9,11 @@ import { Bot, Check, Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { ModelSelector } from '@/components/chat'
 import { toast } from 'react-hot-toast'
+import ScreeningMetricsPanel, {
+  type ScreeningMetricsStats,
+  type ScreeningMetricsSummary,
+  type ScreeningCriterionMetrics,
+} from '@/components/can-sr/ScreeningMetricsPanel'
 import {
   Dialog,
   DialogContent,
@@ -73,6 +78,17 @@ export default function CitationsListPage({
   const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini')
   const [error, setError] = useState<string | null>(null)
   const [criteriaData, setCriteriaData] = useState<CriteriaData | null>()
+
+  // Phase 1 list control surface is now hosted by the left-side metrics module.
+  const [threshold, setThreshold] = useState<number>(0.9)
+  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'all'>('needs')
+  const [pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
+
+  // Phase 2 metrics (SR-wide)
+  const [srMetricsSummary, setSrMetricsSummary] = useState<ScreeningMetricsSummary | undefined>(undefined)
+  const [srCriterionMetrics, setSrCriterionMetrics] = useState<ScreeningCriterionMetrics[] | undefined>(undefined)
+  const [srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
+  const [metricsRefreshKey, setMetricsRefreshKey] = useState<number>(0)
 
   // Run-all job tracking (persist across modal close / refresh)
   const [runAllForce, setRunAllForce] = useState<boolean>(false)
@@ -167,6 +183,80 @@ export default function CitationsListPage({
     loadCriteria()
     loadCitations()
   }, [srId, router, screeningStep])
+
+  // Load SR thresholds + metrics (L1/L2 only)
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) {
+      setSrMetricsSummary(undefined)
+      setSrCriterionMetrics(undefined)
+      setSrThresholds(null)
+      return
+    }
+
+    const load = async () => {
+      try {
+        const headers = getAuthHeaders()
+
+        // 1) thresholds
+        const tRes = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const tJson = await tRes.json().catch(() => ({}))
+        const thresholds = (tRes.ok ? tJson?.screening_thresholds : null) || {}
+        setSrThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+
+        // 2) metrics
+        const mRes = await fetch(
+          `/api/can-sr/screen/metrics?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}`,
+          { method: 'GET', headers },
+        )
+        const mJson = await mRes.json().catch(() => ({}))
+        if (mRes.ok) {
+          const stepBlock = mJson?.steps?.[screeningStep]
+          setSrMetricsSummary(stepBlock?.summary)
+          setSrCriterionMetrics(stepBlock?.criteria)
+        } else {
+          setSrMetricsSummary(undefined)
+          setSrCriterionMetrics(undefined)
+        }
+      } catch {
+        setSrMetricsSummary(undefined)
+        setSrCriterionMetrics(undefined)
+        setSrThresholds(null)
+      }
+    }
+    load()
+  }, [srId, screeningStep, metricsRefreshKey])
+
+  const persistThresholds = useCallback(
+    async (nextThresholds: Record<string, any>) => {
+      if (!srId) return
+      try {
+        const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
+        const res = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ screening_thresholds: nextThresholds }),
+          },
+        )
+        const j = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setSrThresholds(j?.screening_thresholds || nextThresholds)
+          // Refresh metrics so counts reflect the new thresholds.
+          setMetricsRefreshKey((k) => k + 1)
+        }
+      } catch {
+        // ignore
+      }
+    },
+    [srId],
+  )
 
   // Restore persisted run-all job id
   useEffect(() => {
@@ -323,7 +413,11 @@ export default function CitationsListPage({
         }
       />
 
-      <main className="mx-auto max-w-4xl px-6 py-10">
+      {/*
+        Layout: left floating/side metrics module + right list.
+        (A true fixed overlay can be added later; this keeps it responsive and simple.)
+      */}
+      <main className="mx-auto max-w-6xl px-6 py-10">
         <Dialog open={runAllModalOpen} onOpenChange={() => setRunAllModalOpen(false)}>
           <DialogContent className="sm:max-w-[560px]">
             <DialogHeader>
@@ -362,116 +456,163 @@ export default function CitationsListPage({
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">
-                {dict.screening.citationsList}
-              </h3>
-              <p className="mt-1 text-sm text-gray-600">
-                {dict.screening.citationsListDesc}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                disabled={!canRunAllServerSide || hasActiveRunAll}
-                onClick={() => setRunAllModalOpen(true)}
-                className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
-                title={dict.screening.runAllAI}
-              >
-                <span className="inline-flex items-center gap-1">
-                  {dict.screening.runAllAI}
-                  <Wand2 className="h-4 w-4" />
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!srId || exporting}
-                onClick={async () => {
-                  if (!srId) return
-                  try {
-                    setExporting(true)
-                    const headers = getAuthHeaders()
-                    const res = await fetch(
-                      `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
-                      { method: 'GET', headers },
-                    )
-                    if (!res.ok) {
-                      const text = await res.text().catch(() => '')
-                      throw new Error(text || `Export failed (${res.status})`)
-                    }
-                    const blob = await res.blob()
-                    const url = window.URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = `citations_${srId}.csv`
-                    document.body.appendChild(a)
-                    a.click()
-                    a.remove()
-                    window.URL.revokeObjectURL(url)
-                  } catch (e: any) {
-                    console.error('Export failed', e)
-                    setError(e?.message || 'Export failed')
-                  } finally {
-                    setExporting(false)
-                  }
+        <div className="grid grid-cols-12 gap-6">
+          <aside className="col-span-12 md:col-span-4">
+            <div className="sticky top-6">
+              <ScreeningMetricsPanel
+                title={dict?.screening?.metricsTitle || 'Screening metrics'}
+                filterMode={filterMode}
+                onFilterModeChange={setFilterMode}
+                stats={pageStats}
+                summary={srMetricsSummary}
+                criterionMetrics={srCriterionMetrics}
+                onCriterionThresholdChange={(criterionKey, v) => {
+                  // Update SR-scoped per-step thresholds
+                  const base = srThresholds && typeof srThresholds === 'object' ? { ...srThresholds } : {}
+                  const stepKey = String(screeningStep)
+                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
+                    ? { ...(base as any)[stepKey] }
+                    : {}
+                  stepMap[criterionKey] = v
+                  ;(base as any)[stepKey] = stepMap
+                  setSrThresholds(base)
+                  void persistThresholds(base)
                 }}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
-              >
-                {exporting ? dict.common.downloading : dict.common.export}
-              </button>
+              />
+            </div>
+          </aside>
 
-              <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-                <div className="flex items-center space-x-2">
-                  <Bot className="h-5 w-5 text-green-600" />
-                  <span className="text-sm text-gray-700">
-                    {dict.screening.llmClassified}
-                  </span>
+          <div className="col-span-12 md:col-span-8">
+            <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {dict.screening.citationsList}
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    {dict.screening.citationsListDesc}
+                  </p>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <Check className="h-5 w-5 text-green-600" />
-                  <span className="text-sm text-gray-700">
-                    {dict.screening.humanVerified}
-                  </span>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={!canRunAllServerSide || hasActiveRunAll}
+                    onClick={() => setRunAllModalOpen(true)}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                    title={dict.screening.runAllAI}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {dict.screening.runAllAI}
+                      <Wand2 className="h-4 w-4" />
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!srId || exporting}
+                    onClick={async () => {
+                      if (!srId) return
+                      try {
+                        setExporting(true)
+                        const headers = getAuthHeaders()
+                        const res = await fetch(
+                          `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
+                          { method: 'GET', headers },
+                        )
+                        if (!res.ok) {
+                          const text = await res.text().catch(() => '')
+                          throw new Error(text || `Export failed (${res.status})`)
+                        }
+                        const blob = await res.blob()
+                        const url = window.URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `citations_${srId}.csv`
+                        document.body.appendChild(a)
+                        a.click()
+                        a.remove()
+                        window.URL.revokeObjectURL(url)
+                      } catch (e: any) {
+                        console.error('Export failed', e)
+                        setError(e?.message || 'Export failed')
+                      } finally {
+                        setExporting(false)
+                      }
+                    }}
+                    className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
+                  >
+                    {exporting ? dict.common.downloading : dict.common.export}
+                  </button>
+
+                  <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
+                    <div className="flex items-center space-x-2">
+                      <Bot className="h-5 w-5 text-green-600" />
+                      <span className="text-sm text-gray-700">
+                        {dict.screening.llmClassified}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Check className="h-5 w-5 text-green-600" />
+                      <span className="text-sm text-gray-700">
+                        {dict.screening.humanVerified}
+                      </span>
+                    </div>
+                  </div>
                 </div>
+              </div>
+
+              {/* Run-all status/controls are shown in the bottom-right floating panel. */}
+
+              <div className="mt-6">
+                {loading ? (
+                  <div className="text-sm text-gray-600">
+                    {dict.screening.loadingCitations}
+                  </div>
+                ) : error ? (
+                  <div className="text-sm text-red-600">{error}</div>
+                ) : citationIds && citationIds.length === 0 ? (
+                  <div className="text-sm text-gray-600">
+                    {dict.screening.noCitations}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-3 text-sm text-gray-700">
+                      {dict.screening.totalCitations}{' '}
+                      {citationIds ? citationIds.length : 0}
+                    </div>
+
+                    <PagedList
+                      citationIds={citationIds || []}
+                      srId={srId || ''}
+                      questions={criteriaData?.questions || []}
+                      possible_answers={criteriaData?.possible_answers || []}
+                      include={criteriaData?.include || []}
+                      screeningStep={screeningStep || ''}
+                      pageview={pageview}
+                      threshold={threshold}
+                      thresholdByCriterionKey={
+                        (srThresholds && typeof srThresholds === 'object'
+                          ? (srThresholds as any)[String(screeningStep)]
+                          : null) || undefined
+                      }
+                      filterMode={filterMode}
+                      onThresholdChange={setThreshold}
+                      onFilterModeChange={setFilterMode}
+                      onStatsChange={(s) =>
+                        setPageStats({
+                          scopeLabel: 'this page',
+                          total: s.total,
+                          needsValidation: s.needsValidation,
+                          validated: s.validated,
+                          unvalidated: s.unvalidated,
+                        })
+                      }
+                    />
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-
-          {/* Run-all status/controls are shown in the bottom-right floating panel. */}
-
-          <div className="mt-6">
-            {loading ? (
-              <div className="text-sm text-gray-600">
-                {dict.screening.loadingCitations}
-              </div>
-            ) : error ? (
-              <div className="text-sm text-red-600">{error}</div>
-            ) : citationIds && citationIds.length === 0 ? (
-              <div className="text-sm text-gray-600">
-                {dict.screening.noCitations}
-              </div>
-            ) : (
-              <div>
-                <div className="mb-3 text-sm text-gray-700">
-                  {dict.screening.totalCitations}{' '}
-                  {citationIds ? citationIds.length : 0}
-                </div>
-
-                <PagedList
-                  citationIds={citationIds || []}
-                  srId={srId || ''}
-                  questions={criteriaData?.questions || []}
-                  possible_answers={criteriaData?.possible_answers || []}
-                  include={criteriaData?.include || []}
-                  screeningStep={screeningStep || ''}
-                  pageview={pageview}
-                />
-              </div>
-            )}
           </div>
         </div>
       </main>
