@@ -288,7 +288,7 @@ export default function ScreeningMetricsModal({
                         <div className="text-sm font-semibold text-gray-900">
                           {accPct === null ? '—' : `${accPct.toFixed(0)}%`}
                         </div>
-                        <div className="mt-1 text-[11px] text-gray-500">Accuracy (Critical Agent)</div>
+                        <div className="mt-1 text-[11px] text-gray-500">Critical Agent Agreement</div>
                         <div className="text-sm font-semibold text-gray-900">
                           {accCritPct === null ? '—' : `${accCritPct.toFixed(0)}%`}
                         </div>
@@ -298,6 +298,9 @@ export default function ScreeningMetricsModal({
                     <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                       <div className="rounded border border-gray-100 bg-gray-50 p-2">
                         Low confidence: {m.low_confidence_count}
+                      </div>
+                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
+                        Critical disagreements: {m.critical_disagreement_count}
                       </div>
                     </div>
 

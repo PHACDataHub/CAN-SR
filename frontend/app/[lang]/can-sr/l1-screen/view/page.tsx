@@ -7,6 +7,7 @@ import { ModelSelector } from '@/components/chat'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -102,20 +103,6 @@ type LatestAgentRun = {
   rationale?: string | null
   created_at?: string
   guardrails?: any
-}
-
-function hasGuardrailIssue(g: any): boolean {
-  if (!g) return false
-  try {
-    const obj = typeof g === 'string' ? JSON.parse(g) : g
-    if (!obj || typeof obj !== 'object') return true
-    if (obj.parse_ok === false) return true
-    if (obj.missing_answer) return true
-    if (obj.missing_confidence) return true
-    return false
-  } catch {
-    return true
-  }
 }
 
 function criterionKeyFromQuestion(question: string) {
@@ -634,28 +621,14 @@ export default function CanSrL1ScreenPage() {
                     const r = runsByCriterion[criterionKey] || {}
                     const scr = r.screening
                     const crit = r.critical
-                    const scrConf = Number((scr as any)?.confidence)
                     const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
                     const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
 
-                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < thr : true
-
-                    const critAns = String((crit as any)?.answer || '').trim()
-                    // Conservative: missing/empty critical is treated as disagreement.
-                    const critDisagrees = !crit || critAns === '' || critAns !== 'None of the above'
-
-                    const guardrailIssue = hasGuardrailIssue((scr as any)?.guardrails) || hasGuardrailIssue((crit as any)?.guardrails)
-
-                    const scrAns = String((scr as any)?.answer || '')
-                    const confidentExclude =
-                      Number.isFinite(scrConf) &&
-                      scrConf >= thr &&
-                      scrAns.toLowerCase().includes('(exclude)') &&
-                      !!crit &&
-                      critAns === 'None of the above' &&
-                      !guardrailIssue
-
-                    const needsHuman = !confidentExclude && (lowConfidence || critDisagrees || guardrailIssue)
+                    const { needsHuman, criticalDisagrees: critDisagrees } = needsHumanReviewForCriterion({
+                      threshold: thr,
+                      screening: scr,
+                      critical: crit,
+                    })
 
 
                     const hasAgentic = !!scr || !!crit

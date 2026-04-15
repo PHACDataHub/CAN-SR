@@ -231,7 +231,15 @@ export default function ScreeningMetricsPanel({
 
         {summary ? (
           <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
-            <div className="text-xs font-medium text-gray-700">Progress</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-gray-700">Progress</div>
+              <div className="text-[11px] text-gray-600">
+                Workload Reduction:{' '}
+                <span className="font-medium">
+                  {total > 0 ? `${Math.round((1-(queueTotal / total)) * 100)}%` : '—'}
+                </span>
+              </div>
+            </div>
 
             {/* Combined progress bar */}
             <div className="mt-2">
@@ -349,11 +357,13 @@ export default function ScreeningMetricsPanel({
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
-                          <div className="mt-1 text-[11px] text-gray-500">
-                            Accuracy: {acc === null ? '—' : `${acc}%`}
-                            {accCrit === null ? '' : ` · Accuracy (Critical Agent): ${accCrit}%`}
-                            {cal ? ` · Validated: ${cal.validated_n}` : ''}
-                            {rec === null ? '' : ` · Recommended thr: ${rec}`}
+                          <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
+                            <div>Accuracy: {acc === null ? '—' : `${acc}%`}</div>
+                            {accCrit === null ? null : (
+                              <div>Critical Agent Agreement: {accCrit}%</div>
+                            )}
+                            {cal ? <div>Validated: {cal.validated_n}</div> : null}
+                            {rec === null ? null : <div>Recommended thr: {rec}</div>}
                           </div>
                         </div>
 
@@ -384,8 +394,13 @@ export default function ScreeningMetricsPanel({
                     </summary>
 
                     <div className="mt-2 space-y-2 text-[11px] text-gray-700">
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Low confidence: {c.low_confidence_count}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
+                          Low confidence: {c.low_confidence_count}
+                        </div>
+                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
+                          Critical disagreements: {c.critical_disagreement_count}
+                        </div>
                       </div>
 
                       {cal ? (
