@@ -54,6 +54,8 @@ class ScreeningMetricsCriterion(BaseModel):
     confident_exclude_count: int
     needs_human_review_count: int
     accuracy: Optional[float] = None
+    # NOTE: this is NOT human accuracy; it is agreement between screening + critical agents.
+    accuracy_critical_agent: Optional[float] = None
 
 
 class ScreeningMetricsSummary(BaseModel):
@@ -323,6 +325,42 @@ def _criterion_key_from_question(question: str) -> str:
         s = re.sub(r"_+", "_", s)
         s = re.sub(r"^_+|_+$", "", s)
         return s[:56]
+
+
+def _questions_for_step(cp: Any, step_norm: str) -> List[str]:
+    """Return criteria questions for a step.
+
+    IMPORTANT: For L2 we still apply L1 criteria during full-text screening,
+    so L2 == (L1 questions + L2 questions).
+    """
+
+    if not isinstance(cp, dict):
+        return []
+
+    def _get(step_key: str) -> List[str]:
+        blk = cp.get(step_key)
+        if not isinstance(blk, dict):
+            return []
+        qs = blk.get("questions")
+        if not isinstance(qs, list):
+            return []
+        out: List[str] = []
+        for q in qs:
+            if isinstance(q, str) and q.strip():
+                out.append(q)
+        return out
+
+    if step_norm == "l2":
+        seen: set[str] = set()
+        merged: List[str] = []
+        for q in _get("l1") + _get("l2"):
+            if q in seen:
+                continue
+            seen.add(q)
+            merged.append(q)
+        return merged
+
+    return _get(step_norm)
 
 
 
@@ -1099,17 +1137,42 @@ async def run_fulltext_agentic(
             except Exception:
                 continue
 
-    # Load L2 criteria
+    # Load L2 criteria (L2 = L1 + L2 questions)
     cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
-    l2 = cp.get("l2") if isinstance(cp, dict) else None
-    questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
-    possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
-    addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
-    questions = questions if isinstance(questions, list) else []
-    possible = possible if isinstance(possible, list) else []
-    addinfos = addinfos if isinstance(addinfos, list) else []
+    l1_blk = cp.get("l1") if isinstance(cp, dict) else None
+    l2_blk = cp.get("l2") if isinstance(cp, dict) else None
 
-    if not questions:
+    l1_questions = (l1_blk or {}).get("questions") if isinstance(l1_blk, dict) else []
+    l2_questions = (l2_blk or {}).get("questions") if isinstance(l2_blk, dict) else []
+    l1_possible = (l1_blk or {}).get("possible_answers") if isinstance(l1_blk, dict) else []
+    l2_possible = (l2_blk or {}).get("possible_answers") if isinstance(l2_blk, dict) else []
+    l1_addinfos = (l1_blk or {}).get("additional_infos") if isinstance(l1_blk, dict) else []
+    l2_addinfos = (l2_blk or {}).get("additional_infos") if isinstance(l2_blk, dict) else []
+
+    # Normalize lists
+    l1_questions = l1_questions if isinstance(l1_questions, list) else []
+    l2_questions = l2_questions if isinstance(l2_questions, list) else []
+    l1_possible = l1_possible if isinstance(l1_possible, list) else []
+    l2_possible = l2_possible if isinstance(l2_possible, list) else []
+    l1_addinfos = l1_addinfos if isinstance(l1_addinfos, list) else []
+    l2_addinfos = l2_addinfos if isinstance(l2_addinfos, list) else []
+
+    # Merge preserving order and remembering which block it came from so we can
+    # pick the right options/additional_infos.
+    merged_questions: List[Tuple[str, str, int]] = []  # (question, source_step, index)
+    seen_q: set[str] = set()
+    for idx, q in enumerate(l1_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged_questions.append((q, "l1", idx))
+    for idx, q in enumerate(l2_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged_questions.append((q, "l2", idx))
+
+    if not merged_questions:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SR has no L2 criteria questions configured")
 
     async def _call_llm(prompt: str) -> Tuple[str, Dict[str, Any], int]:
@@ -1145,13 +1208,18 @@ async def run_fulltext_agentic(
 
     results: List[Dict[str, Any]] = []
 
-    for i, q in enumerate(questions):
+    for q, source_step, idx in merged_questions:
         if not isinstance(q, str) or not q.strip():
             continue
 
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
-        opts = [str(o) for o in opts if o is not None and str(o).strip()]
-        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+        if source_step == "l1":
+            opts_raw = l1_possible[idx] if idx < len(l1_possible) and isinstance(l1_possible[idx], list) else []
+            xtra = l1_addinfos[idx] if idx < len(l1_addinfos) and isinstance(l1_addinfos[idx], str) else ""
+        else:
+            opts_raw = l2_possible[idx] if idx < len(l2_possible) and isinstance(l2_possible[idx], list) else []
+            xtra = l2_addinfos[idx] if idx < len(l2_addinfos) and isinstance(l2_addinfos[idx], str) else ""
+
+        opts = [str(o) for o in opts_raw if o is not None and str(o).strip()]
 
         if not opts:
             results.append({"question": q, "criterion_key": snake_case(q, max_len=56), "error": "No options configured"})
@@ -1206,9 +1274,13 @@ async def run_fulltext_agentic(
         try:
             cpa = sr.get("critical_prompt_additions") or {}
             if isinstance(cpa, dict):
-                block = cpa.get("l2")
-                if isinstance(block, dict):
-                    critical_additions = str(block.get(criterion_key) or "")
+                # Prefer L2 additions (fulltext step). If this question originated from L1,
+                # fall back to L1 additions when L2 is missing.
+                block_l2 = cpa.get("l2") if isinstance(cpa.get("l2"), dict) else {}
+                block_l1 = cpa.get("l1") if isinstance(cpa.get("l1"), dict) else {}
+                critical_additions = str((block_l2 or {}).get(criterion_key) or "")
+                if (not critical_additions.strip()) and source_step == "l1":
+                    critical_additions = str((block_l1 or {}).get(criterion_key) or "")
         except Exception:
             critical_additions = ""
         if not critical_additions.strip():
@@ -1348,7 +1420,7 @@ async def get_latest_agent_runs(
     return AgentRunsQueryResponse(sr_id=sr_id, pipeline=pipeline_norm, citation_ids=parsed_ids, runs=rows)
 
 
-@router.get("/metrics", response_model=ScreeningMetricsResponse)
+@router.get("/metrics", response_model=ScreeningMetricsResponse, response_model_exclude_none=True)
 async def get_screening_metrics(
     sr_id: str,
     step: str = "l1",
@@ -1378,11 +1450,9 @@ async def get_screening_metrics(
 
     table_name = (screening or {}).get("table_name") or "citations"
 
-    # Criteria questions for step
+    # Criteria questions for step (L2 includes L1 + L2)
     cp = sr.get("criteria_parsed") or {}
-    crit_block = cp.get(step_norm) if isinstance(cp, dict) else None
-    questions = (crit_block or {}).get("questions") if isinstance(crit_block, dict) else []
-    questions = questions if isinstance(questions, list) else []
+    questions = _questions_for_step(cp, step_norm)
 
     # Threshold map
     sr_thresholds = sr.get("screening_thresholds") or {}
@@ -1667,28 +1737,37 @@ async def get_screening_metrics(
     for c in criteria:
         ck = c["criterion_key"]
         a = agg.get(ck) or {}
-        # Prefer human-vs-AI agreement on the validated set when available.
-        # Fallback to critical-agreement proxy when no human labels exist yet.
+        # Accuracy is human-vs-AI agreement on the validated set (when canonical human labels exist).
+        # Do NOT fall back to critical agreement here (misleading).
+        accuracy: Optional[float] = None
+        accuracy_critical_agent: Optional[float] = None
         try:
             h_total = int(a.get("human_total_count") or 0)
             h_agree = int(a.get("human_agree_count") or 0)
             if h_total > 0:
                 accuracy = (h_agree / h_total)
-            else:
-                crit_total = int(a.get("crit_total_count") or 0)
-                crit_agree = int(a.get("crit_agree_count") or 0)
-                accuracy = (crit_agree / crit_total) if crit_total > 0 else None
         except Exception:
             accuracy = None
-        crit_out.append(
-            {
-                "criterion_key": ck,
-                "label": c["label"],
-                "threshold": float(c["threshold"]),
-                "accuracy": accuracy,
-                **a,
-            }
-        )
+
+        # Separate metric: agreement between screening agent and critical agent.
+        try:
+            crit_total = int(a.get("crit_total_count") or 0)
+            crit_agree = int(a.get("crit_agree_count") or 0)
+            accuracy_critical_agent = (crit_agree / crit_total) if crit_total > 0 else None
+        except Exception:
+            accuracy_critical_agent = None
+
+        row: Dict[str, Any] = {
+            "criterion_key": ck,
+            "label": c["label"],
+            "threshold": float(c["threshold"]),
+            **a,
+        }
+        if accuracy is not None:
+            row["accuracy"] = accuracy
+        if accuracy_critical_agent is not None:
+            row["accuracy_critical_agent"] = accuracy_critical_agent
+        crit_out.append(row)
 
     return ScreeningMetricsResponse(
         sr_id=sr_id,
@@ -1804,11 +1883,9 @@ async def get_screening_calibration(
 
     table_name = (screening or {}).get("table_name") or "citations"
 
-    # Criteria questions for step
+    # Criteria questions for step (L2 includes L1 + L2)
     cp = sr.get("criteria_parsed") or {}
-    crit_block = cp.get(step_norm) if isinstance(cp, dict) else None
-    questions = (crit_block or {}).get("questions") if isinstance(crit_block, dict) else []
-    questions = questions if isinstance(questions, list) else []
+    questions = _questions_for_step(cp, step_norm)
 
     criteria: List[Dict[str, str]] = []
     for q in questions:
@@ -2103,11 +2180,9 @@ async def get_calibration_samples(
 
     table_name = (screening or {}).get("table_name") or "citations"
 
-    # Criteria questions for step
+    # Criteria questions for step (L2 includes L1 + L2)
     cp = sr.get("criteria_parsed") or {}
-    crit_block = cp.get(step_norm) if isinstance(cp, dict) else None
-    questions = (crit_block or {}).get("questions") if isinstance(crit_block, dict) else []
-    questions = questions if isinstance(questions, list) else []
+    questions = _questions_for_step(cp, step_norm)
 
     criteria: List[Dict[str, str]] = []
     for q in questions:

@@ -695,11 +695,6 @@ export default function CitationsListPage({
                   </div>
                 ) : (
                   <div>
-                    <div className="mb-3 text-sm text-gray-700">
-                      {dict.screening.totalCitations}{' '}
-                      {citationIds ? citationIds.length : 0}
-                    </div>
-
                     <PagedList
                       citationIds={citationIds || []}
                       srId={srId || ''}

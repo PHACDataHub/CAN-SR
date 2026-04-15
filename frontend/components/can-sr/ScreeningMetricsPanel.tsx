@@ -31,6 +31,7 @@ export type ScreeningCriterionMetrics = {
   confident_exclude_count: number
   needs_human_review_count: number
   accuracy?: number | null
+  accuracy_critical_agent?: number | null
 }
 
 export type CalibrationPoint = {
@@ -321,6 +322,7 @@ export default function ScreeningMetricsPanel({
             <div className="mt-2 space-y-2">
               {criterionMetrics.map((c) => {
                 const acc = typeof c.accuracy === 'number' ? Math.round(c.accuracy * 100) : null
+                const accCrit = typeof c.accuracy_critical_agent === 'number' ? Math.round(c.accuracy_critical_agent * 100) : null
                 const textVal = thresholdText[c.criterion_key] ?? (Number.isFinite(c.threshold) ? String(c.threshold) : '0.9')
                 const cal = calibByKey.get(c.criterion_key)
                 const rec =
@@ -349,6 +351,7 @@ export default function ScreeningMetricsPanel({
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
                           <div className="mt-1 text-[11px] text-gray-500">
                             Accuracy: {acc === null ? '—' : `${acc}%`}
+                            {accCrit === null ? '' : ` · Accuracy (Critical Agent): ${accCrit}%`}
                             {cal ? ` · Validated: ${cal.validated_n}` : ''}
                             {rec === null ? '' : ` · Recommended thr: ${rec}`}
                           </div>

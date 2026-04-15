@@ -350,15 +350,39 @@ async def _run_l2_for_citation(
     if not row:
         return (0, 0, 1)
 
+    # L2 fulltext screening applies BOTH L1 + L2 criteria.
     cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
+    l1 = cp.get("l1") if isinstance(cp, dict) else None
     l2 = cp.get("l2") if isinstance(cp, dict) else None
-    questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
-    possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
-    addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
-    questions = questions if isinstance(questions, list) else []
-    possible = possible if isinstance(possible, list) else []
-    addinfos = addinfos if isinstance(addinfos, list) else []
-    if not questions:
+
+    l1_questions = (l1 or {}).get("questions") if isinstance(l1, dict) else []
+    l2_questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
+    l1_possible = (l1 or {}).get("possible_answers") if isinstance(l1, dict) else []
+    l2_possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
+    l1_addinfos = (l1 or {}).get("additional_infos") if isinstance(l1, dict) else []
+    l2_addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
+
+    l1_questions = l1_questions if isinstance(l1_questions, list) else []
+    l2_questions = l2_questions if isinstance(l2_questions, list) else []
+    l1_possible = l1_possible if isinstance(l1_possible, list) else []
+    l2_possible = l2_possible if isinstance(l2_possible, list) else []
+    l1_addinfos = l1_addinfos if isinstance(l1_addinfos, list) else []
+    l2_addinfos = l2_addinfos if isinstance(l2_addinfos, list) else []
+
+    merged: List[tuple[str, str, int]] = []  # (question, source_step, idx)
+    seen_q: set[str] = set()
+    for idx, q in enumerate(l1_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged.append((q, "l1", idx))
+    for idx, q in enumerate(l2_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged.append((q, "l2", idx))
+
+    if not merged:
         return (0, 1, 0)
 
     include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or ["title", "abstract"]
@@ -419,13 +443,17 @@ async def _run_l2_for_citation(
                 continue
 
     any_ran = False
-    for i, q in enumerate(questions):
+    for q, source_step, idx in merged:
         # More responsive pause/cancel: check between questions
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise RunAllCanceled()
         await _wait_if_paused(job_id)
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
-        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+        if source_step == "l1":
+            opts = l1_possible[idx] if idx < len(l1_possible) and isinstance(l1_possible[idx], list) else []
+            xtra = l1_addinfos[idx] if idx < len(l1_addinfos) and isinstance(l1_addinfos[idx], str) else ""
+        else:
+            opts = l2_possible[idx] if idx < len(l2_possible) and isinstance(l2_possible[idx], list) else []
+            xtra = l2_addinfos[idx] if idx < len(l2_addinfos) and isinstance(l2_addinfos[idx], str) else ""
         col = snake_case_column(q)
         existing = row.get(col)
         if _should_skip_ai_output(existing, force=force):

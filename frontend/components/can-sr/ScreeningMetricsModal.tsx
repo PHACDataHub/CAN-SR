@@ -246,6 +246,7 @@ export default function ScreeningMetricsModal({
             <div className="mt-2 space-y-3">
               {(criterionMetrics || []).map((m) => {
                 const accPct = typeof m.accuracy === 'number' ? m.accuracy * 100 : null
+                const accCritPct = typeof (m as any).accuracy_critical_agent === 'number' ? (m as any).accuracy_critical_agent * 100 : null
                 const cal = calibByKey.get(m.criterion_key)
                 const rec =
                   cal && typeof cal.recommended_threshold === 'number'
@@ -286,6 +287,10 @@ export default function ScreeningMetricsModal({
                         <div className="text-[11px] text-gray-500">Accuracy</div>
                         <div className="text-sm font-semibold text-gray-900">
                           {accPct === null ? '—' : `${accPct.toFixed(0)}%`}
+                        </div>
+                        <div className="mt-1 text-[11px] text-gray-500">Accuracy (Critical Agent)</div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {accCritPct === null ? '—' : `${accCritPct.toFixed(0)}%`}
                         </div>
                       </div>
                     </div>
