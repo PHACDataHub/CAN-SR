@@ -43,6 +43,65 @@ function sparkline(values: number[], width = 140, height = 34): string {
     .join(' ')
 }
 
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0
+  return Math.max(0, Math.min(1, v))
+}
+
+function renderConfidenceHistogram(hist: { bin_start: number; bin_end: number; agree: number; disagree: number }[]) {
+  const bins = Array.isArray(hist) ? hist : []
+  const totals = bins.map((b) => (b.agree || 0) + (b.disagree || 0))
+  const max = Math.max(1, ...totals)
+  return (
+    <div className="mt-2">
+      <div className="text-[11px] text-gray-500">Confidence distribution (validated set)</div>
+      <div className="mt-1 flex items-end gap-1">
+        {bins.map((b, i) => {
+          const total = (b.agree || 0) + (b.disagree || 0)
+          const agree = b.agree || 0
+          const disagree = b.disagree || 0
+          const h = Math.round((total / max) * 44)
+          const agreePct = total > 0 ? agree / total : 0
+          const start = clamp01(Number(b.bin_start))
+          const end = clamp01(Number(b.bin_end))
+          return (
+            <div
+              key={i}
+              className="w-3"
+              title={`${start.toFixed(2)}–${end.toFixed(2)}: total ${total} (agree ${agree}, disagree ${disagree})`}
+            >
+              <div
+                className="w-3 rounded-sm bg-rose-400"
+                style={{ height: `${h}px` }}
+              >
+                {/* overlay agree segment */}
+                <div
+                  className="w-3 rounded-sm bg-emerald-500"
+                  style={{ height: `${Math.max(0, Math.round(h * agreePct))}px` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-gray-400">
+        <span>0.0</span>
+        <span>1.0</span>
+      </div>
+      <div className="mt-1 flex items-center gap-3 text-[10px] text-gray-500">
+        <div className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" />
+          Agree
+        </div>
+        <div className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-rose-400" />
+          Disagree
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ScreeningMetricsModal({
   open,
   onOpenChange,
@@ -233,16 +292,7 @@ export default function ScreeningMetricsModal({
 
                     <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                       <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Needs review (this criterion): {m.needs_human_review_count}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Confident exclude: {m.confident_exclude_count}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
                         Low confidence: {m.low_confidence_count}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Critical disagreement: {m.critical_disagreement_count}
                       </div>
                     </div>
 
@@ -299,6 +349,8 @@ export default function ScreeningMetricsModal({
                         />
                       </svg>
                     </div>
+
+                    {hist.length ? renderConfidenceHistogram(hist) : null}
                   </div>
                 )
               })}

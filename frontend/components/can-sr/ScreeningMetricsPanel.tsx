@@ -87,6 +87,19 @@ export type ScreeningMetricsPanelProps = {
   /** Optional: open a larger reporting drawer. */
   onOpenDetails?: () => void
 
+  /**
+   * Optional save controls for per-criterion thresholds.
+   * When provided, the save button will be shown in the Criteria header.
+   */
+  thresholdsDirty?: boolean
+  savingThresholds?: boolean
+  onSaveThresholds?: () => void
+
+  /**
+   * Some layouts want the Filter control above the main list view instead of in the metrics panel.
+   */
+  showFilter?: boolean
+
   filterMode: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
   onFilterModeChange: (v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all') => void
   stats?: ScreeningMetricsStats
@@ -108,11 +121,24 @@ export default function ScreeningMetricsPanel({
   onCriterionThresholdCommit,
   calibration,
   onOpenDetails,
+  thresholdsDirty,
+  savingThresholds,
+  onSaveThresholds,
+  showFilter = true,
   filterMode,
   onFilterModeChange,
-  stats,
+  stats: _stats,
 }: ScreeningMetricsPanelProps) {
   const [thresholdText, setThresholdText] = React.useState<Record<string, string>>({})
+
+  // Kept for backwards-compatibility with callers that still compute page-local stats.
+  void _stats
+
+  const calibByKey = React.useMemo(() => {
+    const m = new Map<string, CalibrationCriterion>()
+    for (const c of calibration || []) m.set(c.criterion_key, c)
+    return m
+  }, [calibration])
 
   // Keep a stable text representation so users can type freely.
   React.useEffect(() => {
@@ -183,22 +209,24 @@ export default function ScreeningMetricsPanel({
           </div>
         ) : null}
 
-        <div className="flex items-center justify-between gap-3">
-          <label className="text-sm text-gray-700">Filter</label>
-          <select
-            value={filterMode}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-              onFilterModeChange(e.target.value as any)
-            }
-            className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
-          >
-            <option value="needs">Needs human review</option>
-            <option value="unvalidated">Unvalidated</option>
-            <option value="validated">Validated</option>
-            <option value="not_screened">Not screened yet</option>
-            <option value="all">All</option>
-          </select>
-        </div>
+        {showFilter ? (
+          <div className="flex items-center justify-between gap-3">
+            <label className="text-sm text-gray-700">Filter</label>
+            <select
+              value={filterMode}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                onFilterModeChange(e.target.value as any)
+              }
+              className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+            >
+              <option value="needs">Needs human review</option>
+              <option value="unvalidated">Unvalidated</option>
+              <option value="validated">Validated</option>
+              <option value="not_screened">Not screened yet</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+        ) : null}
 
         {summary ? (
           <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
@@ -271,12 +299,48 @@ export default function ScreeningMetricsPanel({
 
         {criterionMetrics?.length ? (
           <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
-            <div className="text-xs font-medium text-gray-700">Criteria thresholds</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-gray-700">Criteria</div>
+              {onSaveThresholds ? (
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] text-gray-600">
+                    {thresholdsDirty ? 'Unsaved changes' : 'Up to date'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onSaveThresholds}
+                    disabled={!thresholdsDirty || savingThresholds}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    {savingThresholds ? 'Saving…' : 'Save thresholds'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
             <div className="mt-2 space-y-2">
               {criterionMetrics.map((c) => {
                 const acc = typeof c.accuracy === 'number' ? Math.round(c.accuracy * 100) : null
                 const textVal = thresholdText[c.criterion_key] ?? (Number.isFinite(c.threshold) ? String(c.threshold) : '0.9')
+                const cal = calibByKey.get(c.criterion_key)
+                const rec =
+                  cal && typeof cal.recommended_threshold === 'number'
+                    ? Math.round(cal.recommended_threshold * 100) / 100
+                    : null
+
+                const curve = Array.isArray(cal?.curve) ? cal!.curve : []
+                const recPoint =
+                  rec === null
+                    ? null
+                    : curve.find((p) => Math.abs(p.threshold - rec) < 1e-9) || null
+                const wr =
+                  typeof recPoint?.workload_reduction === 'number'
+                    ? Math.round(recPoint.workload_reduction * 100)
+                    : null
+                const recall =
+                  typeof recPoint?.recall === 'number' ? Math.round(recPoint.recall * 100) : null
+                const fpr = typeof recPoint?.fpr === 'number' ? Math.round(recPoint.fpr * 100) : null
+
                 return (
                   <details key={c.criterion_key} className="rounded border border-gray-100 bg-white p-2">
                     <summary className="cursor-pointer list-none">
@@ -285,6 +349,8 @@ export default function ScreeningMetricsPanel({
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
                           <div className="mt-1 text-[11px] text-gray-500">
                             Accuracy: {acc === null ? '—' : `${acc}%`}
+                            {cal ? ` · Validated: ${cal.validated_n}` : ''}
+                            {rec === null ? '' : ` · Recommended thr: ${rec}`}
                           </div>
                         </div>
 
@@ -314,83 +380,36 @@ export default function ScreeningMetricsPanel({
                       </div>
                     </summary>
 
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-700">
+                    <div className="mt-2 space-y-2 text-[11px] text-gray-700">
                       <div className="rounded border border-gray-100 bg-gray-50 p-2">
                         Low confidence: {c.low_confidence_count}
                       </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Disagreement / missing critical: {c.critical_disagreement_count}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Confident exclude: {c.confident_exclude_count}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Has run: {c.has_run_count}/{c.total_citations}
-                      </div>
-                      <div className="col-span-2 rounded border border-gray-100 bg-gray-50 p-2">
-                        Triggered review (this criterion): {c.needs_human_review_count}
-                      </div>
-                    </div>
-                  </details>
-                )
-              })}
-            </div>
-          </div>
-        ) : null}
 
-        {calibration?.length ? (
-          <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
-            <div className="text-xs font-medium text-gray-700">Calibration (validated set)</div>
-            <div className="mt-2 space-y-2">
-              {calibration.map((c) => {
-                const rec =
-                  typeof c.recommended_threshold === 'number'
-                    ? Math.round(c.recommended_threshold * 100) / 100
-                    : null
-                const best = Array.isArray(c.curve)
-                  ? c.curve.find(
-                      (p) =>
-                        typeof c.recommended_threshold === 'number' &&
-                        Math.abs(p.threshold - c.recommended_threshold) < 1e-9,
-                    )
-                  : undefined
-
-                const wr =
-                  typeof best?.workload_reduction === 'number'
-                    ? Math.round(best.workload_reduction * 100)
-                    : null
-                const recall =
-                  typeof best?.recall === 'number' ? Math.round(best.recall * 100) : null
-                const fpr = typeof best?.fpr === 'number' ? Math.round(best.fpr * 100) : null
-
-                return (
-                  <details key={c.criterion_key} className="rounded border border-gray-100 bg-white p-2">
-                    <summary className="cursor-pointer list-none">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
-                          <div className="mt-1 text-[11px] text-gray-500">
-                            Validated: {c.validated_n}
-                            {rec === null ? '' : ` · Recommended thr: ${rec}`}
+                      {cal ? (
+                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
+                          <div className="text-[11px] font-medium text-gray-700">Calibration (validated set)</div>
+                          <div className="mt-1 grid grid-cols-2 gap-2">
+                            <div className="rounded border border-gray-100 bg-white p-2">
+                              Recommended thr: {rec === null ? '—' : rec}
+                            </div>
+                            <div className="rounded border border-gray-100 bg-white p-2">
+                              Validated n: {cal.validated_n}
+                            </div>
+                            <div className="rounded border border-gray-100 bg-white p-2">
+                              Recall @ rec: {recall === null ? '—' : `${recall}%`}
+                            </div>
+                            <div className="rounded border border-gray-100 bg-white p-2">
+                              FPR @ rec: {fpr === null ? '—' : `${fpr}%`}
+                            </div>
+                            <div className="col-span-2 rounded border border-gray-100 bg-white p-2">
+                              Workload ↓ @ rec: {wr === null ? '—' : `${wr}%`}
+                            </div>
                           </div>
-                        </div>
-                        <span className="text-[11px] text-gray-400">▾</span>
-                      </div>
-                    </summary>
-
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-700">
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        Recall: {recall === null ? '—' : `${recall}%`}
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                        FPR: {fpr === null ? '—' : `${fpr}%`}
-                      </div>
-                      <div className="col-span-2 rounded border border-gray-100 bg-gray-50 p-2">
-                        Workload reduction: {wr === null ? '—' : `${wr}%`}
-                      </div>
-                      {c.recommended_reason ? (
-                        <div className="col-span-2 text-[11px] text-gray-500">
-                          {c.recommended_reason}
+                          {cal.recommended_reason ? (
+                            <div className="mt-2 text-[11px] text-gray-500">
+                              {cal.recommended_reason}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -399,14 +418,7 @@ export default function ScreeningMetricsPanel({
               })}
             </div>
           </div>
-        ) : (
-          <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700">
-            <div className="font-medium">Calibration (validated set)</div>
-            <div className="mt-1 text-gray-500">
-              No calibration data yet. Validate citations to accumulate a comparison set.
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

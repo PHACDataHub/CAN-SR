@@ -35,6 +35,13 @@ function formatValidationDate(v: string): string {
   return d.toLocaleString()
 }
 
+function extractXmlTag(text: string, tag: string): string {
+  if (!text) return ''
+  const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i')
+  const m = text.match(re)
+  return m && m[1] ? String(m[1]).trim() : ''
+}
+
 /*
   Full-text single-citation viewer for L2 screening.
 
@@ -136,7 +143,7 @@ export default function CanSrL2ScreenViewPage() {
 
   // Agentic runs (screening_agent_runs) for this citation
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
-  const [loadingRuns, setLoadingRuns] = useState(false)
+  const [, setLoadingRuns] = useState(false)
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
@@ -690,6 +697,7 @@ export default function CanSrL2ScreenViewPage() {
       <SRHeader
         title={dict.screening.fullText}
         backHref={`/can-sr/l2-screen?sr_id=${encodeURIComponent(srId || '')}`}
+        backLabel={dict.cansr.backToCitations}
         right={
           <ModelSelector
             selectedModel={selectedModel}
@@ -699,122 +707,6 @@ export default function CanSrL2ScreenViewPage() {
       />
 
       <main className="mx-auto max-w-8xl px-3 py-3">
-        {/* Agentic summary + Validate */}
-        <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900">Agentic results</h3>
-              <p className="text-xs text-gray-600">
-                Latest <code>screening</code> + <code>critical</code> runs for L2/fulltext per criterion.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input
-                  type="checkbox"
-                  checked={l2Checked}
-                  disabled={validating}
-                  onChange={async (e) => {
-                    if (!srId || !citationId) return
-                    setValidating(true)
-                    try {
-                      const headers = {
-                        'Content-Type': 'application/json',
-                        ...getAuthHeaders(),
-                      }
-                      await fetch('/api/can-sr/screen/validate', {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify({
-                          sr_id: srId,
-                          citation_id: Number(citationId),
-                          step: 'l2',
-                          checked: Boolean(e.target.checked),
-                        }),
-                      })
-                      await fetchCitationById(String(citationId))
-                    } finally {
-                      setValidating(false)
-                    }
-                  }}
-                />
-                <span>
-                  Validated by <span className="font-medium">{String(userEmail || '—')}</span>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          {l2ValidationsSorted.length ? (
-            <div className="mt-2 space-y-1">
-              {l2ValidationsSorted.map((v, idx) => (
-                <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
-                  Validated on {formatValidationDate(v.validated_at)} by {v.user}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-2 text-xs text-gray-600">Not validated</div>
-          )}
-
-          {loadingRuns ? (
-            <div className="mt-2 text-sm text-gray-600">Loading agent runs…</div>
-          ) : criteriaData?.questions?.length ? (
-            <div className="mt-2 space-y-2">
-              {criteriaData.questions
-                .map((q, idx) => ({ q, idx }))
-                .filter(({ idx }) => sourceFlags[idx] === 'l2')
-                .map(({ q, idx }) => {
-                  const criterionKey = q
-                    ? q
-                        .trim()
-                        .toLowerCase()
-                        .replace(/[^\w]+/g, '_')
-                        .replace(/_+/g, '_')
-                        .replace(/^_+|_+$/g, '')
-                        .slice(0, 56)
-                    : ''
-
-                  const r = runsByCriterion[criterionKey] || {}
-                  const scr = r.screening
-                  const crit = r.critical
-
-                  const critDisagrees =
-                    crit &&
-                    String((crit as any)?.answer || '').trim() !== '' &&
-                    String((crit as any)?.answer || '').trim() !== 'None of the above'
-
-                  return (
-                    <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-3">
-                      <div className="text-sm font-medium text-gray-800">{q}</div>
-                      <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-gray-700">
-                        <div className="rounded-md border border-gray-100 bg-white p-2">
-                          <div className="font-semibold">Screening</div>
-                          <div>Answer: {String((scr as any)?.answer ?? '—')}</div>
-                          <div>Confidence: {String((scr as any)?.confidence ?? '—')}</div>
-                        </div>
-                        <div
-                          className={
-                            'rounded-md border border-gray-100 bg-white p-2 ' +
-                            (critDisagrees ? 'border-amber-300 bg-amber-50' : '')
-                          }
-                        >
-                          <div className="font-semibold">Critical</div>
-                          <div>Answer: {String((crit as any)?.answer ?? '—')}</div>
-                          <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
-                          {critDisagrees ? (
-                            <div className="mt-1 font-medium text-amber-700">Disagrees</div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-            </div>
-          ) : (
-            <div className="mt-2 text-sm text-gray-600">No criteria loaded yet.</div>
-          )}
-        </div>
 
         <div className="grid grid-cols-12 gap-3">
           {/* Workspace (left) */}
@@ -827,6 +719,54 @@ export default function CanSrL2ScreenViewPage() {
             <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
               <div>
                 <h4 className="text-xl font-semibold text-gray-900 text-center">{dict.screening.screeningQuestions}</h4>
+              </div>
+
+              <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
+                <label className="flex items-center gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    checked={l2Checked}
+                    disabled={validating}
+                    onChange={async (e) => {
+                      if (!srId || !citationId) return
+                      setValidating(true)
+                      try {
+                        const headers = {
+                          'Content-Type': 'application/json',
+                          ...getAuthHeaders(),
+                        }
+                        await fetch('/api/can-sr/screen/validate', {
+                          method: 'POST',
+                          headers,
+                          body: JSON.stringify({
+                            sr_id: srId,
+                            citation_id: Number(citationId),
+                            step: 'l2',
+                            checked: Boolean(e.target.checked),
+                          }),
+                        })
+                        await fetchCitationById(String(citationId))
+                      } finally {
+                        setValidating(false)
+                      }
+                    }}
+                  />
+                  <span>
+                    Validated by <span className="font-medium">{String(userEmail || '—')}</span>
+                  </span>
+                </label>
+
+                {l2ValidationsSorted.length ? (
+                  <div className="mt-2 space-y-1">
+                    {l2ValidationsSorted.map((v, idx) => (
+                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
+                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-gray-600">Not validated</div>
+                )}
               </div>
 
               {loadingCriteria ? (
@@ -845,10 +785,50 @@ export default function CanSrL2ScreenViewPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
+                    // Per-question highlight when low confidence or agentic disagreement.
+                    const criterionKey = q
+                      ? q
+                          .trim()
+                          .toLowerCase()
+                          .replace(/[^\w]+/g, '_')
+                          .replace(/_+/g, '_')
+                          .replace(/^_+|_+$/g, '')
+                          .slice(0, 56)
+                      : ''
+
+                    const r = (runsByCriterion as any)?.[criterionKey] || {}
+                    const scr = r.screening
+                    const crit = r.critical
+                    const scrConf = Number((scr as any)?.confidence)
+                    const threshold = 0.9
+                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < threshold : false
+                    const critAns = String((crit as any)?.answer || '').trim()
+                    const critDisagrees = !!crit && critAns !== '' && critAns !== 'None of the above'
+                    const needsHuman = lowConfidence || critDisagrees
+                    const hasAgentic = !!scr || !!crit
+
+                    // Prefer agentic screening run when available to avoid mismatches
+                    const displayConfidence =
+                      Number.isFinite(Number((scr as any)?.confidence))
+                        ? Number((scr as any)?.confidence)
+                        : Number(aiData?.confidence)
+
+                    const aiExpl =
+                      (typeof (aiData as any)?.explanation === 'string' ? String((aiData as any).explanation) : '') ||
+                      (typeof (aiData as any)?.rationale === 'string' ? String((aiData as any).rationale) : '') ||
+                      (typeof (aiData as any)?.llm_raw === 'string' ? String((aiData as any).llm_raw) : '')
+
+                    const scrRationale = typeof (scr as any)?.rationale === 'string' ? String((scr as any).rationale) : ''
+                    const displayExplanationRaw = (scrRationale || aiExpl || '').trim()
+                    const displayExplanation =
+                      extractXmlTag(displayExplanationRaw, 'rationale') || displayExplanationRaw
+
                     return (
                       <div
                         key={idx}
-                        className="rounded-md border border-gray-100 p-3"
+                        className={
+                          'rounded-md border-2 p-3 ' + (needsHuman ? 'border-amber-400' : 'border-gray-100')
+                        }
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -935,16 +915,30 @@ export default function CanSrL2ScreenViewPage() {
                               <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
                                 <div className="mt-2">
                                   <strong>{dict.screening.confidence}</strong>{' '}
-                                  {String(aiData.confidence ?? '')}
+                                  {Number.isFinite(displayConfidence)
+                                    ? String(displayConfidence)
+                                    : String(aiData.confidence ?? '')}
                                 </div>
                                 <div className="mt-2">
                                   <strong>{dict.screening.explanation}</strong>
                                   <div className="mt-1 text-sm text-gray-700">
-                                    {aiData.explanation ??
-                                      aiData.llm_raw ??
-                                      dict.screening.noExplanation}
+                                    {displayExplanation || dict.screening.noExplanation}
                                   </div>
                                 </div>
+
+                                {hasAgentic && crit ? (
+                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+                                    <div className="mt-1 font-semibold text-gray-800">
+                                      Critical agent{' '}
+                                      {critDisagrees ? (
+                                        <span className="text-amber-700">disagrees</span>
+                                      ) : (
+                                        <span className="text-emerald-700">agrees</span>
+                                      )}
+                                    </div>
+                                    <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                                  </div>
+                                ) : null}
                                 {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
                                   <div className="mt-2">
                                     <strong>{dict.screening.evidence}</strong>

@@ -83,7 +83,7 @@ export default function CitationsListPage({
 
   // Phase 1 single-threshold is deprecated; kept for backward compatibility.
   const [threshold, setThreshold] = useState<number>(0.9)
-  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('needs')
+  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('all')
   // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
   const [_pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
 
@@ -535,25 +535,6 @@ export default function CitationsListPage({
         <div className="grid grid-cols-12 gap-6">
           <aside className="col-span-12 md:col-span-5">
             <div className="sticky top-6">
-              {/* Save controls */}
-              {(screeningStep === 'l1' || screeningStep === 'l2') ? (
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="text-xs text-gray-600">
-                    {thresholdsDirty ? 'Unsaved threshold changes' : 'Thresholds up to date'}
-                  </div>
-                  <Button
-                    variant="outline"
-                    disabled={!thresholdsDirty || savingThresholds}
-                    onClick={() => {
-                      const next = draftThresholds && typeof draftThresholds === 'object' ? draftThresholds : {}
-                      void persistThresholds(next)
-                    }}
-                  >
-                    {savingThresholds ? 'Saving…' : 'Save thresholds'}
-                  </Button>
-                </div>
-              ) : null}
-
               <ScreeningMetricsPanel
                 title={dict?.screening?.metricsTitle || 'Screening metrics'}
                 filterMode={filterMode}
@@ -563,6 +544,13 @@ export default function CitationsListPage({
                 summary={srMetricsSummary}
                 criterionMetrics={srCriterionMetrics}
                 calibration={srCalibration}
+                showFilter={false}
+                thresholdsDirty={thresholdsDirty}
+                savingThresholds={savingThresholds}
+                onSaveThresholds={() => {
+                  const next = draftThresholds && typeof draftThresholds === 'object' ? draftThresholds : {}
+                  void persistThresholds(next)
+                }}
                 onCriterionThresholdChange={(criterionKey, v) => {
                   // Update draft per-step thresholds
                   const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
@@ -675,6 +663,26 @@ export default function CitationsListPage({
               {/* Run-all status/controls are shown in the bottom-right floating panel. */}
 
               <div className="mt-6">
+                {/* Filter bar moved above the list view */}
+                {(screeningStep === 'l1' || screeningStep === 'l2') ? (
+                  <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
+                    <label className="text-sm text-gray-700">Filter</label>
+                    <select
+                      value={filterMode}
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                        setFilterMode(e.target.value as any)
+                      }
+                      className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+                    >
+                      <option value="all">All</option>
+                      <option value="needs">Needs human review</option>
+                      <option value="unvalidated">Unvalidated</option>
+                      <option value="validated">Validated</option>
+                      <option value="not_screened">Not screened yet</option>
+                    </select>
+                  </div>
+                ) : null}
+
                 {loading ? (
                   <div className="text-sm text-gray-600">
                     {dict.screening.loadingCitations}
