@@ -8,6 +8,7 @@ import type {
   ScreeningCriterionMetrics,
   ScreeningMetricsSummary,
 } from '@/components/can-sr/ScreeningMetricsPanel'
+import { getAuthToken, getTokenType } from '@/lib/auth'
 
 type Props = {
   open: boolean
@@ -142,9 +143,14 @@ export default function ScreeningMetricsModal({
     const load = async () => {
       setLoadingCPA(true)
       try {
+        const token = getAuthToken()
+        const tokenType = getTokenType()
         const res = await fetch(
           `/api/can-sr/reviews/critical-prompt-additions?sr_id=${encodeURIComponent(String(srId))}`,
-          { method: 'GET' },
+          {
+            method: 'GET',
+            headers: token ? { Authorization: `${tokenType} ${token}` } : undefined,
+          },
         )
         const j = await res.json().catch(() => ({}))
         const cpa = res.ok ? j?.critical_prompt_additions : null
@@ -177,12 +183,17 @@ export default function ScreeningMetricsModal({
     if (!(stepNorm === 'l1' || stepNorm === 'l2')) return
     setSavingCPA(true)
     try {
+      const token = getAuthToken()
+      const tokenType = getTokenType()
       const payload = { critical_prompt_additions: criticalAdditions || { l1: {}, l2: {} } }
       const res = await fetch(
         `/api/can-sr/reviews/critical-prompt-additions?sr_id=${encodeURIComponent(String(srId))}`,
         {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            ...(token ? { Authorization: `${tokenType} ${token}` } : {}),
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify(payload),
         },
       )
