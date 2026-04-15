@@ -104,6 +104,21 @@ type LatestAgentRun = {
   confidence?: number | null
   rationale?: string | null
   created_at?: string
+  guardrails?: any
+}
+
+function hasGuardrailIssue(g: any): boolean {
+  if (!g) return false
+  try {
+    const obj = typeof g === 'string' ? JSON.parse(g) : g
+    if (!obj || typeof obj !== 'object') return true
+    if (obj.parse_ok === false) return true
+    if (obj.missing_answer) return true
+    if (obj.missing_confidence) return true
+    return false
+  } catch {
+    return true
+  }
 }
 
 /* Main page component */
@@ -144,6 +159,9 @@ export default function CanSrL2ScreenViewPage() {
   // Agentic runs (screening_agent_runs) for this citation
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
   const [, setLoadingRuns] = useState(false)
+
+  // Per-criterion thresholds for this SR/step
+  const [thresholdByCriterionKey, setThresholdByCriterionKey] = useState<Record<string, number> | null>(null)
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
@@ -169,6 +187,27 @@ export default function CanSrL2ScreenViewPage() {
       return
     }
   }, [srId, citationId, router])
+
+  // Load thresholds for this SR (saved thresholds)
+  useEffect(() => {
+    if (!srId) return
+    const load = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const j = await res.json().catch(() => ({}))
+        const t = res.ok ? j?.screening_thresholds : null
+        const stepMap = t && typeof t === 'object' ? (t as any).l2 : null
+        setThresholdByCriterionKey(stepMap && typeof stepMap === 'object' ? stepMap : {})
+      } catch {
+        setThresholdByCriterionKey({})
+      }
+    }
+    load()
+  }, [srId])
 
   // Load filtered citation ids for navigation (L2 is filtered by L1 pass)
   useEffect(() => {
@@ -785,7 +824,9 @@ export default function CanSrL2ScreenViewPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
-                    // Per-question highlight when low confidence or agentic disagreement.
+                    // Per-question highlight aligned with list/back-end logic.
+                    // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
+                    // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
                     const criterionKey = q
                       ? q
                           .trim()
@@ -800,11 +841,27 @@ export default function CanSrL2ScreenViewPage() {
                     const scr = r.screening
                     const crit = r.critical
                     const scrConf = Number((scr as any)?.confidence)
-                    const threshold = 0.9
-                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < threshold : false
+
+                    const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
+                    const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
+
+                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < thr : true
                     const critAns = String((crit as any)?.answer || '').trim()
-                    const critDisagrees = !!crit && critAns !== '' && critAns !== 'None of the above'
-                    const needsHuman = lowConfidence || critDisagrees
+                    // Conservative: missing/empty critical is treated as disagreement.
+                    const critDisagrees = !crit || critAns === '' || critAns !== 'None of the above'
+
+                    const guardrailIssue = hasGuardrailIssue((scr as any)?.guardrails) || hasGuardrailIssue((crit as any)?.guardrails)
+
+                    const scrAns = String((scr as any)?.answer || '')
+                    const confidentExclude =
+                      Number.isFinite(scrConf) &&
+                      scrConf >= thr &&
+                      scrAns.toLowerCase().includes('(exclude)') &&
+                      !!crit &&
+                      critAns === 'None of the above' &&
+                      !guardrailIssue
+
+                    const needsHuman = !confidentExclude && (lowConfidence || critDisagrees || guardrailIssue)
                     const hasAgentic = !!scr || !!crit
 
                     // Prefer agentic screening run when available to avoid mismatches

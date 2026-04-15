@@ -101,6 +101,29 @@ type LatestAgentRun = {
   confidence?: number | null
   rationale?: string | null
   created_at?: string
+  guardrails?: any
+}
+
+function hasGuardrailIssue(g: any): boolean {
+  if (!g) return false
+  try {
+    const obj = typeof g === 'string' ? JSON.parse(g) : g
+    if (!obj || typeof obj !== 'object') return true
+    if (obj.parse_ok === false) return true
+    if (obj.missing_answer) return true
+    if (obj.missing_confidence) return true
+    return false
+  } catch {
+    return true
+  }
+}
+
+function criterionKeyFromQuestion(question: string) {
+  if (!question) return ''
+  let s = question.trim().toLowerCase()
+  s = s.replace(/[^\w]+/g, '_')
+  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  return s.slice(0, 56)
 }
 
 /* Main page component */
@@ -109,11 +132,6 @@ export default function CanSrL1ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
-  const thresholdParam = searchParams?.get('threshold')
-  const threshold = useMemo(() => {
-    const v = Number(thresholdParam)
-    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9
-  }, [thresholdParam])
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
@@ -143,6 +161,9 @@ export default function CanSrL1ScreenPage() {
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
   const [, setLoadingRuns] = useState(false)
 
+  // Per-criterion thresholds for this SR/step
+  const [thresholdByCriterionKey, setThresholdByCriterionKey] = useState<Record<string, number> | null>(null)
+
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
@@ -162,6 +183,27 @@ export default function CanSrL1ScreenPage() {
       return
     }
   }, [srId, citationId, router])
+
+  // Load thresholds for this SR (saved thresholds)
+  useEffect(() => {
+    if (!srId) return
+    const load = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const j = await res.json().catch(() => ({}))
+        const t = res.ok ? j?.screening_thresholds : null
+        const stepMap = t && typeof t === 'object' ? (t as any).l1 : null
+        setThresholdByCriterionKey(stepMap && typeof stepMap === 'object' ? stepMap : {})
+      } catch {
+        setThresholdByCriterionKey({})
+      }
+    }
+    load()
+  }, [srId])
 
   // Load the citation id list for navigation
   useEffect(() => {
@@ -584,25 +626,36 @@ export default function CanSrL1ScreenPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
-                    // Per-question highlight when low confidence or agentic disagreement.
-                    const criterionKey = q
-                      ? q
-                          .trim()
-                          .toLowerCase()
-                          .replace(/[^\w]+/g, '_')
-                          .replace(/_+/g, '_')
-                          .replace(/^_+|_+$/g, '')
-                          .slice(0, 56)
-                      : ''
+                    // Per-question highlight aligned with list/back-end logic.
+                    // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
+                    // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
+                    const criterionKey = criterionKeyFromQuestion(q)
 
                     const r = runsByCriterion[criterionKey] || {}
                     const scr = r.screening
                     const crit = r.critical
                     const scrConf = Number((scr as any)?.confidence)
-                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < threshold : false
+                    const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
+                    const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
+
+                    const lowConfidence = Number.isFinite(scrConf) ? scrConf < thr : true
+
                     const critAns = String((crit as any)?.answer || '').trim()
-                    const critDisagrees = !!crit && critAns !== '' && critAns !== 'None of the above'
-                    const needsHuman = lowConfidence || critDisagrees
+                    // Conservative: missing/empty critical is treated as disagreement.
+                    const critDisagrees = !crit || critAns === '' || critAns !== 'None of the above'
+
+                    const guardrailIssue = hasGuardrailIssue((scr as any)?.guardrails) || hasGuardrailIssue((crit as any)?.guardrails)
+
+                    const scrAns = String((scr as any)?.answer || '')
+                    const confidentExclude =
+                      Number.isFinite(scrConf) &&
+                      scrConf >= thr &&
+                      scrAns.toLowerCase().includes('(exclude)') &&
+                      !!crit &&
+                      critAns === 'None of the above' &&
+                      !guardrailIssue
+
+                    const needsHuman = !confidentExclude && (lowConfidence || critDisagrees || guardrailIssue)
 
 
                     const hasAgentic = !!scr || !!crit
@@ -813,7 +866,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}&threshold=${encodeURIComponent(String(threshold))}`,
+                )}`,
               )
             }}
             className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
@@ -836,7 +889,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}&threshold=${encodeURIComponent(String(threshold))}`,
+                )}`,
               )
             }}
             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
