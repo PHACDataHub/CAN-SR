@@ -2,7 +2,12 @@
 
 import React from 'react'
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import type {
   CalibrationCriterion,
   LiveConfidenceHistogramCriterion,
@@ -24,116 +29,186 @@ type Props = {
   step?: 'l1' | 'l2' | string
 }
 
-function pct(n: number | null | undefined, d: number | null | undefined): number | null {
+function pct(
+  n: number | null | undefined,
+  d: number | null | undefined,
+): number | null {
   const nn = typeof n === 'number' ? n : null
   const dd = typeof d === 'number' ? d : null
   if (nn === null || dd === null || dd <= 0) return null
   return (nn / dd) * 100
 }
 
-function sparkline(values: number[], width = 140, height = 34): string {
-  if (!values.length) return ''
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min || 1
-  const dx = width / Math.max(1, values.length - 1)
-  return values
-    .map((v, i) => {
-      const x = i * dx
-      const y = height - ((v - min) / span) * height
-      return `${x.toFixed(2)},${y.toFixed(2)}`
+type HistogramBin = {
+  bin_start: number
+  bin_end: number
+  unlabelled: number
+  agree: number
+  disagree: number
+}
+
+type ThresholdMarkers = { current?: number | null; recommended?: number | null }
+
+function markerList(markers?: ThresholdMarkers) {
+  const markerPositions: {
+    kind: 'current' | 'recommended'
+    xPct: number
+    label: string
+  }[] = []
+  const cur =
+    typeof markers?.current === 'number' ? clamp01(markers!.current) : null
+  const rec =
+    typeof markers?.recommended === 'number'
+      ? clamp01(markers!.recommended)
+      : null
+  if (cur !== null) {
+    markerPositions.push({
+      kind: 'current',
+      xPct: cur * 100,
+      label: `Current thr ${Math.round(cur * 100)}% (${cur.toFixed(2)})`,
     })
-    .join(' ')
+  }
+  if (rec !== null) {
+    markerPositions.push({
+      kind: 'recommended',
+      xPct: rec * 100,
+      label: `Recommended thr ${Math.round(rec * 100)}% (${rec.toFixed(2)})`,
+    })
+  }
+  return { markerPositions, cur, rec }
 }
 
-function clamp01(v: number): number {
-  if (!Number.isFinite(v)) return 0
-  return Math.max(0, Math.min(1, v))
-}
-
-function renderLiveConfidenceHistogram(
-  hist: {
-    bin_start: number
-    bin_end: number
-    unlabelled: number
-    agree: number
-    disagree: number
-  }[],
-  markers?: { current?: number | null; recommended?: number | null },
+function renderStackedHistogramSvg(
+  bins: HistogramBin[],
+  markers?: ThresholdMarkers,
 ) {
-  const bins = Array.isArray(hist) ? hist : []
-  const totals = bins.map((b) => (b.unlabelled || 0) + (b.agree || 0) + (b.disagree || 0))
+  const safeBins = Array.isArray(bins) ? bins : []
+  const totals = safeBins.map(
+    (b) => (b.unlabelled || 0) + (b.agree || 0) + (b.disagree || 0),
+  )
   const max = Math.max(1, ...totals)
 
-  const markerPositions: { kind: 'current' | 'recommended'; xPct: number; label: string }[] = []
-  const cur = typeof markers?.current === 'number' ? clamp01(markers!.current) : null
-  const rec = typeof markers?.recommended === 'number' ? clamp01(markers!.recommended) : null
-  if (cur !== null) markerPositions.push({ kind: 'current', xPct: cur * 100, label: `Current thr ${cur.toFixed(2)}` })
-  if (rec !== null) markerPositions.push({ kind: 'recommended', xPct: rec * 100, label: `Recommended thr ${rec.toFixed(2)}` })
+  const { markerPositions, cur, rec } = markerList(markers)
+
+  const viewW = 100
+  const viewH = 52
+  const topPad = 2
+  const chartH = 44
 
   return (
     <div className="mt-2">
-      <div className="text-[11px] text-gray-500">Confidence distribution (live)</div>
-      <div className="relative mt-1">
-        {/* marker lines */}
-        {markerPositions.map((m) => (
-          <div
-            key={m.kind}
-            className="pointer-events-none absolute top-0 h-[46px]"
-            style={{ left: `${m.xPct}%` }}
-            title={m.label}
-          >
-            <div
-              className={
-                m.kind === 'current'
-                  ? 'h-[46px] w-px bg-gray-700/70'
-                  : 'h-[46px] w-px border-l border-dashed border-blue-600/70'
-              }
-            />
-          </div>
-        ))}
+      <div className="text-[11px] text-gray-500">
+        Confidence distribution (live)
+      </div>
+      <div className="mt-1">
+        <svg
+          viewBox={`0 0 ${viewW} ${viewH}`}
+          width="100%"
+          height={viewH}
+          preserveAspectRatio="none"
+        >
+          {/* bars */}
+          {safeBins.map((b, i) => {
+            const start = clamp01(Number(b.bin_start))
+            const end = clamp01(Number(b.bin_end))
+            const x0 = start * 100
+            const x1 = end * 100
+            const w = Math.max(0, x1 - x0)
 
-        <div className="flex items-end gap-1">
-          {bins.map((b, i) => {
             const unlabelled = b.unlabelled || 0
             const agree = b.agree || 0
             const disagree = b.disagree || 0
             const total = unlabelled + agree + disagree
-            const h = Math.round((total / max) * 44)
+            const h = total > 0 ? (total / max) * chartH : 0
 
-            // segment heights
-            const uh = total > 0 ? Math.round((h * unlabelled) / total) : 0
-            const gh = total > 0 ? Math.round((h * agree) / total) : 0
-            const rh = Math.max(0, h - uh - gh) // remainder
+            const uh = total > 0 ? (h * unlabelled) / total : 0
+            const gh = total > 0 ? (h * agree) / total : 0
+            const rh = Math.max(0, h - uh - gh)
 
-            const start = clamp01(Number(b.bin_start))
-            const end = clamp01(Number(b.bin_end))
+            const yBottom = topPad + chartH
+            const yRed = yBottom - rh
+            const yGreen = yRed - gh
+            const yBlue = yGreen - uh
+
+            const title = `${start.toFixed(2)}–${end.toFixed(2)}: total ${total} (unlabelled ${unlabelled}, agree ${agree}, disagree ${disagree})`
 
             return (
-              <div
-                key={i}
-                className="w-3"
-                title={`${start.toFixed(2)}–${end.toFixed(2)}: total ${total} (unlabelled ${unlabelled}, agree ${agree}, disagree ${disagree})`}
-              >
-                {/* stack from bottom up */}
-                <div className="flex w-3 flex-col justify-end" style={{ height: `${h}px` }}>
-                  {/* disagree (red) */}
-                  {rh > 0 ? (
-                    <div className="w-3 rounded-sm bg-rose-400" style={{ height: `${rh}px` }} />
-                  ) : null}
-                  {/* agree (green) */}
-                  {gh > 0 ? (
-                    <div className="w-3 rounded-sm bg-emerald-500" style={{ height: `${gh}px` }} />
-                  ) : null}
-                  {/* unlabelled (blue) */}
-                  {uh > 0 ? (
-                    <div className="w-3 rounded-sm bg-blue-500" style={{ height: `${uh}px` }} />
-                  ) : null}
-                </div>
-              </div>
+              <g key={i}>
+                <title>{title}</title>
+                {/* disagree (red) */}
+                {rh > 0 ? (
+                  <rect
+                    x={x0}
+                    y={yRed}
+                    width={w}
+                    height={rh}
+                    fill="rgb(251 113 133)"
+                  />
+                ) : null}
+                {/* agree (green) */}
+                {gh > 0 ? (
+                  <rect
+                    x={x0}
+                    y={yGreen}
+                    width={w}
+                    height={gh}
+                    fill="rgb(16 185 129)"
+                  />
+                ) : null}
+                {/* unlabelled (blue) */}
+                {uh > 0 ? (
+                  <rect
+                    x={x0}
+                    y={yBlue}
+                    width={w}
+                    height={uh}
+                    fill="rgb(59 130 246)"
+                  />
+                ) : null}
+              </g>
             )
           })}
-        </div>
+
+          {/* marker lines */}
+          {markerPositions.map((m) => {
+            const x = (m.xPct / 100) * viewW
+            return (
+              <g key={m.kind}>
+                <title>{m.label}</title>
+                {m.kind === 'current' ? (
+                  <line
+                    x1={x}
+                    x2={x}
+                    y1={topPad}
+                    y2={topPad + chartH}
+                    stroke="rgba(55,65,81,0.85)"
+                    strokeWidth={0.6}
+                  />
+                ) : (
+                  <line
+                    x1={x}
+                    x2={x}
+                    y1={topPad}
+                    y2={topPad + chartH}
+                    stroke="rgba(37,99,235,0.85)"
+                    strokeWidth={0.6}
+                    strokeDasharray="2,2"
+                  />
+                )}
+              </g>
+            )
+          })}
+
+          {/* axis baseline */}
+          <line
+            x1={0}
+            x2={viewW}
+            y1={topPad + chartH}
+            y2={topPad + chartH}
+            stroke="rgba(229,231,235,1)"
+            strokeWidth={0.6}
+          />
+        </svg>
       </div>
 
       <div className="mt-1 flex items-center justify-between text-[10px] text-gray-400">
@@ -156,13 +231,13 @@ function renderLiveConfidenceHistogram(
         {cur !== null ? (
           <div className="inline-flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-sm bg-gray-700/70" />
-            Current
+            Current ({Math.round(cur * 100)}%)
           </div>
         ) : null}
         {rec !== null ? (
           <div className="inline-flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-sm border border-dashed border-blue-600/70" />
-            Recommended
+            Recommended ({Math.round(rec * 100)}%)
           </div>
         ) : null}
       </div>
@@ -170,13 +245,149 @@ function renderLiveConfidenceHistogram(
   )
 }
 
-function renderConfidenceHistogram(hist: { bin_start: number; bin_end: number; agree: number; disagree: number }[]) {
+function renderDisagreementShareChart(
+  bins: {
+    bin_start: number
+    bin_end: number
+    agree?: number
+    disagree?: number
+    unlabelled?: number
+  }[],
+  markers?: ThresholdMarkers,
+) {
+  const safeBins = Array.isArray(bins) ? bins : []
+  const { markerPositions } = markerList(markers)
+
+  // Fixed y scale: 0..1 (0..100%)
+  const viewW = 100
+  const viewH = 38
+  const topPad = 2
+  const chartH = 30
+
+  const points: string[] = []
+  for (const b of safeBins) {
+    const start = clamp01(Number(b.bin_start))
+    const end = clamp01(Number(b.bin_end))
+    const mid = (start + end) / 2
+    const agree = Number(b.agree || 0)
+    const disagree = Number(b.disagree || 0)
+    const labelled = agree + disagree
+    if (labelled <= 0) continue
+    const share = disagree / labelled
+    const x = (mid * viewW).toFixed(4)
+    const y = (topPad + (1 - clamp01(share)) * chartH).toFixed(4)
+    points.push(`${x},${y}`)
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[11px] text-gray-500">
+          Disagreement share by confidence bin
+        </div>
+        <div className="text-[10px] text-gray-400">0–100%</div>
+      </div>
+      <div className="mt-1">
+        <svg
+          viewBox={`0 0 ${viewW} ${viewH}`}
+          width="100%"
+          height={viewH}
+          preserveAspectRatio="none"
+        >
+          {/* y grid */}
+          <line
+            x1={0}
+            x2={viewW}
+            y1={topPad}
+            y2={topPad}
+            stroke="rgba(229,231,235,1)"
+            strokeWidth={0.6}
+          />
+          <line
+            x1={0}
+            x2={viewW}
+            y1={topPad + chartH}
+            y2={topPad + chartH}
+            stroke="rgba(229,231,235,1)"
+            strokeWidth={0.6}
+          />
+          {/* marker lines */}
+          {markerPositions.map((m) => {
+            const x = (m.xPct / 100) * viewW
+            return m.kind === 'current' ? (
+              <line
+                key={m.kind}
+                x1={x}
+                x2={x}
+                y1={topPad}
+                y2={topPad + chartH}
+                stroke="rgba(55,65,81,0.6)"
+                strokeWidth={0.6}
+              />
+            ) : (
+              <line
+                key={m.kind}
+                x1={x}
+                x2={x}
+                y1={topPad}
+                y2={topPad + chartH}
+                stroke="rgba(37,99,235,0.65)"
+                strokeWidth={0.6}
+                strokeDasharray="2,2"
+              />
+            )
+          })}
+
+          {/* series */}
+          {points.length ? (
+            <polyline
+              fill="none"
+              stroke="rgb(244 63 94)"
+              strokeWidth="1.6"
+              points={points.join(' ')}
+            />
+          ) : null}
+        </svg>
+      </div>
+    </div>
+  )
+}
+
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0
+  return Math.max(0, Math.min(1, v))
+}
+
+function renderLiveConfidenceHistogram(
+  hist: {
+    bin_start: number
+    bin_end: number
+    unlabelled: number
+    agree: number
+    disagree: number
+  }[],
+  markers?: { current?: number | null; recommended?: number | null },
+) {
+  const bins = Array.isArray(hist) ? (hist as HistogramBin[]) : []
+  return renderStackedHistogramSvg(bins, markers)
+}
+
+function renderConfidenceHistogram(
+  hist: {
+    bin_start: number
+    bin_end: number
+    agree: number
+    disagree: number
+  }[],
+) {
   const bins = Array.isArray(hist) ? hist : []
   const totals = bins.map((b) => (b.agree || 0) + (b.disagree || 0))
   const max = Math.max(1, ...totals)
   return (
     <div className="mt-2">
-      <div className="text-[11px] text-gray-500">Confidence distribution (validated set)</div>
+      <div className="text-[11px] text-gray-500">
+        Confidence distribution (validated set)
+      </div>
       <div className="mt-1 flex items-end gap-1">
         {bins.map((b, i) => {
           const total = (b.agree || 0) + (b.disagree || 0)
@@ -199,7 +410,9 @@ function renderConfidenceHistogram(hist: { bin_start: number; bin_end: number; a
                 {/* overlay agree segment */}
                 <div
                   className="w-3 rounded-sm bg-emerald-500"
-                  style={{ height: `${Math.max(0, Math.round(h * agreePct))}px` }}
+                  style={{
+                    height: `${Math.max(0, Math.round(h * agreePct))}px`,
+                  }}
                 />
               </div>
             </div>
@@ -261,7 +474,10 @@ export default function ScreeningMetricsModal({
 
   // --- Critical prompt additions editor (Phase 3+)
   const stepNorm = (step || '').toLowerCase() as any
-  const [criticalAdditions, setCriticalAdditions] = React.useState<Record<string, any> | null>(null)
+  const [criticalAdditions, setCriticalAdditions] = React.useState<Record<
+    string,
+    any
+  > | null>(null)
   const [loadingCPA, setLoadingCPA] = React.useState(false)
   const [savingCPA, setSavingCPA] = React.useState(false)
 
@@ -279,12 +495,16 @@ export default function ScreeningMetricsModal({
           `/api/can-sr/reviews/critical-prompt-additions?sr_id=${encodeURIComponent(String(srId))}`,
           {
             method: 'GET',
-            headers: token ? { Authorization: `${tokenType} ${token}` } : undefined,
+            headers: token
+              ? { Authorization: `${tokenType} ${token}` }
+              : undefined,
           },
         )
         const j = await res.json().catch(() => ({}))
         const cpa = res.ok ? j?.critical_prompt_additions : null
-        setCriticalAdditions(typeof cpa === 'object' && cpa ? cpa : { l1: {}, l2: {} })
+        setCriticalAdditions(
+          typeof cpa === 'object' && cpa ? cpa : { l1: {}, l2: {} },
+        )
       } catch {
         setCriticalAdditions({ l1: {}, l2: {} })
       } finally {
@@ -297,7 +517,10 @@ export default function ScreeningMetricsModal({
   const updateAddition = (criterionKey: string, value: string) => {
     setCriticalAdditions((prev) => {
       const base = prev && typeof prev === 'object' ? prev : { l1: {}, l2: {} }
-      const block = (base as any)[stepNorm] && typeof (base as any)[stepNorm] === 'object' ? (base as any)[stepNorm] : {}
+      const block =
+        (base as any)[stepNorm] && typeof (base as any)[stepNorm] === 'object'
+          ? (base as any)[stepNorm]
+          : {}
       return {
         ...(base as any),
         [stepNorm]: {
@@ -315,7 +538,9 @@ export default function ScreeningMetricsModal({
     try {
       const token = getAuthToken()
       const tokenType = getTokenType()
-      const payload = { critical_prompt_additions: criticalAdditions || { l1: {}, l2: {} } }
+      const payload = {
+        critical_prompt_additions: criticalAdditions || { l1: {}, l2: {} },
+      }
       const res = await fetch(
         `/api/can-sr/reviews/critical-prompt-additions?sr_id=${encodeURIComponent(String(srId))}`,
         {
@@ -329,7 +554,9 @@ export default function ScreeningMetricsModal({
       )
       const j = await res.json().catch(() => ({}))
       if (res.ok) {
-        setCriticalAdditions(j?.critical_prompt_additions || payload.critical_prompt_additions)
+        setCriticalAdditions(
+          j?.critical_prompt_additions || payload.critical_prompt_additions,
+        )
       }
     } finally {
       setSavingCPA(false)
@@ -342,7 +569,8 @@ export default function ScreeningMetricsModal({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <div className="text-xs text-gray-600">
-            {stepLabel ? `${stepLabel} · ` : ''}Operational + reporting view (validated-set calibration)
+            {stepLabel ? `${stepLabel} · ` : ''}Operational + reporting view
+            (validated-set calibration)
           </div>
         </DialogHeader>
 
@@ -359,7 +587,9 @@ export default function ScreeningMetricsModal({
               </div>
             </div>
             <div className="rounded border border-gray-100 bg-gray-50 p-3">
-              <div className="text-[11px] text-gray-500">Needs human review (unvalidated)</div>
+              <div className="text-[11px] text-gray-500">
+                Needs human review (unvalidated)
+              </div>
               <div className="mt-1 text-sm font-semibold text-gray-900">
                 {queueRemaining} remaining
               </div>
@@ -372,9 +602,13 @@ export default function ScreeningMetricsModal({
             </div>
             <div className="rounded border border-gray-100 bg-gray-50 p-3">
               <div className="text-[11px] text-gray-500">Not screened yet</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">{notScreened}</div>
+              <div className="mt-1 text-sm font-semibold text-gray-900">
+                {notScreened}
+              </div>
               <div className="mt-1 text-[11px] text-gray-600">
-                {notScreenedPct === null ? '—' : `${notScreenedPct.toFixed(1)}% of SR`}
+                {notScreenedPct === null
+                  ? '—'
+                  : `${notScreenedPct.toFixed(1)}% of SR`}
               </div>
             </div>
             <div className="rounded border border-gray-100 bg-gray-50 p-3">
@@ -382,17 +616,25 @@ export default function ScreeningMetricsModal({
               <div className="mt-1 text-sm font-semibold text-gray-900">
                 {summary?.auto_excluded ?? 0}
               </div>
-              <div className="mt-1 text-[11px] text-gray-600">(confident exclude + critical agrees)</div>
+              <div className="mt-1 text-[11px] text-gray-600">
+                (confident exclude + critical agrees)
+              </div>
             </div>
           </div>
 
           {/* Per-criterion */}
           <div className="mt-6">
-            <div className="text-xs font-semibold text-gray-800">Per-criterion analytics</div>
+            <div className="text-xs font-semibold text-gray-800">
+              Per-criterion analytics
+            </div>
             <div className="mt-2 space-y-3">
               {(criterionMetrics || []).map((m) => {
-                const accPct = typeof m.accuracy === 'number' ? m.accuracy * 100 : null
-                const accCritPct = typeof (m as any).accuracy_critical_agent === 'number' ? (m as any).accuracy_critical_agent * 100 : null
+                const accPct =
+                  typeof m.accuracy === 'number' ? m.accuracy * 100 : null
+                const accCritPct =
+                  typeof (m as any).accuracy_critical_agent === 'number'
+                    ? (m as any).accuracy_critical_agent * 100
+                    : null
                 const cal = calibByKey.get(m.criterion_key)
                 const rec =
                   cal && typeof cal.recommended_threshold === 'number'
@@ -402,42 +644,57 @@ export default function ScreeningMetricsModal({
                 const recPoint =
                   rec === null
                     ? null
-                    : curve.find((p) => Math.abs(p.threshold - rec) < 1e-9) || null
+                    : curve.find((p) => Math.abs(p.threshold - rec) < 1e-9) ||
+                      null
                 const wr =
                   recPoint && typeof recPoint.workload_reduction === 'number'
                     ? recPoint.workload_reduction * 100
                     : null
                 const recall =
-                  recPoint && typeof recPoint.recall === 'number' ? recPoint.recall * 100 : null
-                const fpr = recPoint && typeof recPoint.fpr === 'number' ? recPoint.fpr * 100 : null
+                  recPoint && typeof recPoint.recall === 'number'
+                    ? recPoint.recall * 100
+                    : null
+                const fpr =
+                  recPoint && typeof recPoint.fpr === 'number'
+                    ? recPoint.fpr * 100
+                    : null
 
                 const hist = Array.isArray(cal?.histogram) ? cal!.histogram : []
                 const live = liveByKey.get(m.criterion_key)
-                const disagreeShare = hist.map((b) => {
-                  const t = (b.agree || 0) + (b.disagree || 0)
-                  return t > 0 ? (b.disagree || 0) / t : 0
-                })
-                const points = sparkline(disagreeShare)
 
                 return (
-                  <div key={m.criterion_key} className="rounded border border-gray-100 bg-white p-3">
+                  <div
+                    key={m.criterion_key}
+                    className="rounded border border-gray-100 bg-white p-3"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-xs font-medium text-gray-900">{m.label}</div>
+                        <div className="truncate text-xs font-medium text-gray-900">
+                          {m.label}
+                        </div>
                         <div className="mt-1 text-[11px] text-gray-600">
-                          Current threshold: <span className="font-medium">{m.threshold}</span>
-                          {rec === null ? '' : ` · Recommended: ${rec.toFixed(2)}`}
+                          Current threshold:{' '}
+                          <span className="font-medium">{m.threshold}</span>
+                          {rec === null
+                            ? ''
+                            : ` · Recommended: ${rec.toFixed(2)}`}
                           {cal ? ` · Validated n=${cal.validated_n}` : ''}
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-[11px] text-gray-500">Accuracy</div>
+                        <div className="text-[11px] text-gray-500">
+                          Accuracy
+                        </div>
                         <div className="text-sm font-semibold text-gray-900">
                           {accPct === null ? '—' : `${accPct.toFixed(0)}%`}
                         </div>
-                        <div className="mt-1 text-[11px] text-gray-500">Critical Agent Agreement</div>
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          Critical Agent Agreement
+                        </div>
                         <div className="text-sm font-semibold text-gray-900">
-                          {accCritPct === null ? '—' : `${accCritPct.toFixed(0)}%`}
+                          {accCritPct === null
+                            ? '—'
+                            : `${accCritPct.toFixed(0)}%`}
                         </div>
                       </div>
                     </div>
@@ -451,18 +708,20 @@ export default function ScreeningMetricsModal({
                       </div>
                     </div>
 
-                    {(stepNorm === 'l1' || stepNorm === 'l2') ? (
+                    {stepNorm === 'l1' || stepNorm === 'l2' ? (
                       <div className="mt-3 rounded border border-gray-100 bg-gray-50 p-2">
                         <div className="mb-1 text-[11px] font-medium text-gray-700">
                           Critical prompt additions (for this criterion)
                         </div>
                         <textarea
-                          value={
-                            String(
-                              (criticalAdditions as any)?.[stepNorm]?.[m.criterion_key] || '',
-                            )
+                          value={String(
+                            (criticalAdditions as any)?.[stepNorm]?.[
+                              m.criterion_key
+                            ] || '',
+                          )}
+                          onChange={(e) =>
+                            updateAddition(m.criterion_key, e.target.value)
                           }
-                          onChange={(e) => updateAddition(m.criterion_key, e.target.value)}
                           rows={3}
                           className="w-full rounded border border-gray-200 bg-white px-2 py-1 text-[11px]"
                           placeholder="Add SR-specific instructions that will be injected into the CRITICAL prompt for this criterion."
@@ -491,19 +750,17 @@ export default function ScreeningMetricsModal({
                       </div>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <div className="text-[11px] text-gray-500">
-                        Disagreement share by confidence bin
-                      </div>
-                      <svg width={140} height={34} className="shrink-0">
-                        <polyline
-                          fill="none"
-                          stroke="rgb(244 63 94)"
-                          strokeWidth="2"
-                          points={points}
-                        />
-                      </svg>
-                    </div>
+                    {Array.isArray(live?.histogram) && live!.histogram.length
+                      ? renderDisagreementShareChart(live!.histogram, {
+                          current: m.threshold,
+                          recommended: rec,
+                        })
+                      : hist.length
+                        ? renderDisagreementShareChart(hist as any, {
+                            current: m.threshold,
+                            recommended: rec,
+                          })
+                        : null}
 
                     {/* Live (unlabelled/agree/disagree) distribution with threshold markers */}
                     {Array.isArray(live?.histogram) && live!.histogram.length
@@ -514,16 +771,20 @@ export default function ScreeningMetricsModal({
                       : null}
 
                     {/* Keep validated-set histogram as a fallback when live is unavailable */}
-                    {!live?.histogram?.length && hist.length ? renderConfidenceHistogram(hist) : null}
+                    {!live?.histogram?.length && hist.length
+                      ? renderConfidenceHistogram(hist)
+                      : null}
                   </div>
                 )
               })}
             </div>
 
-            {(stepNorm === 'l1' || stepNorm === 'l2') ? (
+            {stepNorm === 'l1' || stepNorm === 'l2' ? (
               <div className="mt-4 flex items-center justify-between gap-3 rounded border border-gray-100 bg-white p-3">
                 <div className="text-xs text-gray-600">
-                  {loadingCPA ? 'Loading critical prompt additions…' : 'Edit additions above, then save.'}
+                  {loadingCPA
+                    ? 'Loading critical prompt additions…'
+                    : 'Edit additions above, then save.'}
                 </div>
                 <button
                   onClick={saveCPA}
