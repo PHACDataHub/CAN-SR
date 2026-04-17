@@ -59,15 +59,6 @@ async def startup_event():
         await user_db_service.ensure_table_exists()
         print("✓ Users table initialized", flush=True)
 
-    # Agentic screening schema bootstrap (no migrations; runtime schema evolution)
-    try:
-        print("🤖 Ensuring agentic screening tables...", flush=True)
-        await run_in_threadpool(cits_dp_service.ensure_agentic_screening_schema)
-        print("✓ Agentic screening tables initialized", flush=True)
-    except Exception as e:
-        # Do not fail startup; allow deployments without Postgres / in degraded mode.
-        print(f"⚠️ Failed to ensure agentic screening tables: {e}", flush=True)
-
     # Procrastinate schema + run-all job tables
     try:
         from api.jobs.procrastinate_app import (
