@@ -7,6 +7,7 @@ import { ModelSelector } from '@/components/chat'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -54,10 +55,62 @@ function humanScreenColumn(name: string) {
   return base.replace(/^llm_/, 'human_')
 }
 
+type ValidationEntry = { user: string; validated_at: string }
+
+function parseValidations(v: any): ValidationEntry[] {
+  if (!v) return []
+  try {
+    const parsed = typeof v === 'string' ? JSON.parse(v) : v
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x: any) => x && typeof x === 'object')
+      .map((x: any) => ({
+        user: String(x.user ?? x.email ?? x.validated_by ?? ''),
+        validated_at: String(x.validated_at ?? x.timestamp ?? ''),
+      }))
+      .filter((x: any) => x.user)
+  } catch {
+    return []
+  }
+}
+
+function formatValidationDate(v: string): string {
+  if (!v) return ''
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  return d.toLocaleString()
+}
+
+function extractXmlTag(text: string, tag: string): string {
+  if (!text) return ''
+  const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i')
+  const m = text.match(re)
+  return m && m[1] ? String(m[1]).trim() : ''
+}
+
 /* Types for local clarity */
 type CriteriaData = {
   questions: string[]
   possible_answers: string[][]
+}
+
+type LatestAgentRun = {
+  citation_id: number
+  criterion_key: string
+  stage: 'screening' | 'critical' | string
+  answer?: string | null
+  confidence?: number | null
+  rationale?: string | null
+  created_at?: string
+  guardrails?: any
+}
+
+function criterionKeyFromQuestion(question: string) {
+  if (!question) return ''
+  let s = question.trim().toLowerCase()
+  s = s.replace(/[^\w]+/g, '_')
+  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  return s.slice(0, 56)
 }
 
 /* Main page component */
@@ -66,6 +119,7 @@ export default function CanSrL1ScreenPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  const filterMode = searchParams?.get('filter') || 'all'
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
@@ -91,12 +145,53 @@ export default function CanSrL1ScreenPage() {
   // Collapsible open state for LLM panels
   const [panelOpen, setPanelOpen] = useState<Record<number, boolean>>({})
 
+  // Agentic runs (screening_agent_runs) for this citation
+  const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
+  const [, setLoadingRuns] = useState(false)
+
+  // Per-criterion thresholds for this SR/step
+  const [thresholdByCriterionKey, setThresholdByCriterionKey] = useState<Record<string, number> | null>(null)
+
+  const [validating, setValidating] = useState(false)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+
+  const l1Validations = useMemo(() => parseValidations((citation as any)?.l1_validations), [citation])
+  const l1Checked = useMemo(() => {
+    const me = String(userEmail || '')
+    if (!me) return false
+    return l1Validations.some((v) => v.user === me)
+  }, [l1Validations, userEmail])
+  const l1ValidationsSorted = useMemo(() => {
+    return [...l1Validations].sort((a, b) => String(b.validated_at || '').localeCompare(String(a.validated_at || '')))
+  }, [l1Validations])
+
   useEffect(() => {
     if (!srId || !citationId) {
       router.replace('/can-sr')
       return
     }
   }, [srId, citationId, router])
+
+  // Load thresholds for this SR (saved thresholds)
+  useEffect(() => {
+    if (!srId) return
+    const load = async () => {
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const j = await res.json().catch(() => ({}))
+        const t = res.ok ? j?.screening_thresholds : null
+        const stepMap = t && typeof t === 'object' ? (t as any).l1 : null
+        setThresholdByCriterionKey(stepMap && typeof stepMap === 'object' ? stepMap : {})
+      } catch {
+        setThresholdByCriterionKey({})
+      }
+    }
+    load()
+  }, [srId])
 
   // Load the citation id list for navigation
   useEffect(() => {
@@ -105,7 +200,9 @@ export default function CanSrL1ScreenPage() {
       try {
         const headers = getAuthHeaders()
         const res = await fetch(
-          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}`,
+          `/api/can-sr/screen/citation-ids?sr_id=${encodeURIComponent(srId)}&step=l1&filter=${encodeURIComponent(
+            filterMode,
+          )}`,
           { method: 'GET', headers },
         )
         const data = await res.json().catch(() => ({}))
@@ -119,7 +216,51 @@ export default function CanSrL1ScreenPage() {
       }
     }
     loadIds()
-  }, [srId])
+  }, [srId, filterMode])
+
+  const navSessionKey = useMemo(() => {
+    if (!srId) return null
+    return `navProgress:${srId}:l1:${filterMode}`
+  }, [srId, filterMode])
+
+  const progressInfo = useMemo(() => {
+    const cur = Number(citationId)
+    const idx = Number.isFinite(cur) ? citationIdList.indexOf(cur) : -1
+    const total = citationIdList.length
+    let startedAt = idx
+    try {
+      if (navSessionKey) {
+        const raw = window.sessionStorage.getItem(navSessionKey)
+        const parsed = raw ? JSON.parse(raw) : null
+        if (parsed && typeof parsed.startIndex === 'number') startedAt = parsed.startIndex
+        // set once
+        if (!raw && idx >= 0) {
+          window.sessionStorage.setItem(navSessionKey, JSON.stringify({ startIndex: idx, startedAt: Date.now() }))
+          startedAt = idx
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { idx, total, startedAt }
+  }, [citationId, citationIdList, navSessionKey])
+
+  // Fetch current user email for the "Validated by [UserEmail]" checkbox label.
+  useEffect(() => {
+    const loadMe = async () => {
+      try {
+        const headers = { ...getAuthHeaders() }
+        const res = await fetch('/api/auth/me', { method: 'GET', headers })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setUserEmail(String(data?.user?.email || data?.email || ''))
+        }
+      } catch {
+        // ignore
+      }
+    }
+    loadMe()
+  }, [])
 
   // Load citation row
   // Extracted fetch function so we can re-use it when navigating between citations
@@ -158,6 +299,49 @@ export default function CanSrL1ScreenPage() {
     // fetch for current citation on mount / when params change
     fetchCitationById(citationId)
   }, [srId, citationId])
+
+  // Load latest agent runs for this citation (screening + critical per criterion)
+  useEffect(() => {
+    if (!srId || !citationId) return
+    const loadRuns = async () => {
+      setLoadingRuns(true)
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
+            srId,
+          )}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(
+            String(citationId),
+          )}`,
+          { method: 'GET', headers },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(data?.runs)) {
+          setAgentRuns(data.runs as LatestAgentRun[])
+        } else {
+          setAgentRuns([])
+        }
+      } catch {
+        setAgentRuns([])
+      } finally {
+        setLoadingRuns(false)
+      }
+    }
+    loadRuns()
+  }, [srId, citationId])
+
+  const runsByCriterion = useMemo(() => {
+    const by: Record<string, { screening?: LatestAgentRun; critical?: LatestAgentRun }> = {}
+    for (const r of agentRuns) {
+      const key = String((r as any)?.criterion_key || '')
+      if (!key) continue
+      if (!by[key]) by[key] = {}
+      const stage = String((r as any)?.stage || '')
+      if (stage === 'screening') by[key].screening = r
+      if (stage === 'critical') by[key].critical = r
+    }
+    return by
+  }, [agentRuns])
 
   // Load parsed criteria (L1)
   useEffect(() => {
@@ -330,59 +514,50 @@ export default function CanSrL1ScreenPage() {
   }
 
   // Handler: call backend classify endpoint for a single question
-  async function classifyQuestion(questionIndex: number) {
+  async function classifyQuestion(_questionIndex: number) {
+    void _questionIndex
     if (!srId || !citationId || !criteriaData) return
-    const question = criteriaData.questions[questionIndex]
-    const options = criteriaData.possible_answers[questionIndex] || []
     try {
       const headers = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       }
-      const bodyPayload = {
-        question,
-        options,
-        include_columns: ['title', 'abstract'],
-        screening_step: 'l1',
-      }
-      const res = await fetch(
-        `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
-          citationId,
-        )}`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(bodyPayload),
-        },
-      )
-      const data = await res.json().catch(() => ({}))
-      // Expect the backend to return the classification_json or similar structure
-      // Try flexible extraction:
-      const classification =
-        data?.classification_json ||
-        data?.result ||
-        data?.classification ||
-        data?.llm_classification ||
-        data
-      if (classification && typeof classification === 'object') {
-        // Always show AI panel.
-        // IMPORTANT: do NOT overwrite an existing human selection in the UI.
-        if ((classification as any).selected !== undefined) {
-          setSelections((prev) => {
-            const already = prev?.[questionIndex]
-            if (already !== undefined && String(already).trim() !== '') return prev
-            return { ...prev, [questionIndex]: (classification as any).selected }
-          })
+
+      // Phase 1->2 wiring: reuse the existing per-question “AI” button, but call the
+      // agentic orchestrator endpoint which runs BOTH screening + critical and persists
+      // them to screening_agent_runs.
+      const res = await fetch('/api/can-sr/screen/title-abstract/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(citationId),
+          model: selectedModel,
+          temperature: 0.0,
+          max_tokens: 1200,
+          prompt_version: 'v1',
+        }),
+      })
+      await res.json().catch(() => ({}))
+
+      // Refresh latest runs + citation row so the UI shows critical + validations immediately.
+      await fetchCitationById(String(citationId))
+
+      try {
+        const r2 = await fetch(
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
+            srId,
+          )}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(
+            String(citationId),
+          )}`,
+          { method: 'GET', headers: getAuthHeaders() },
+        )
+        const j2 = await r2.json().catch(() => ({}))
+        if (r2.ok && Array.isArray(j2?.runs)) {
+          setAgentRuns(j2.runs as LatestAgentRun[])
         }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: classification }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
-      } else {
-        // If server returned a simple string, set it as selection
-        if (typeof data === 'string') {
-          setSelections((prev) => ({ ...prev, [questionIndex]: data }))
-        }
-        setAiPanels((prev) => ({ ...prev, [questionIndex]: data || null }))
-        setPanelOpen((prev) => ({ ...prev, [questionIndex]: false }))
+      } catch {
+        // ignore
       }
     } catch (err) {
       console.error('Classify API error', err)
@@ -427,7 +602,7 @@ export default function CanSrL1ScreenPage() {
       <GCHeader />
       <SRHeader
         title={dict.screening.titleAbstract}
-        backHref={`/can-sr/l1-screen?sr_id=${encodeURIComponent(srId || '')}`}
+        backHref={`/can-sr/l1-screen?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterMode)}`}
         backLabel={dict.cansr.backToCitations}
         right={
           <ModelSelector
@@ -437,29 +612,49 @@ export default function CanSrL1ScreenPage() {
         }
       />
 
+
       <main className="mx-auto max-w-6xl px-6 py-8">
+
+        {/* Filter/session progress bar */}
+        {progressInfo.total > 0 && progressInfo.idx >= 0 ? (
+          <div className="mb-4 rounded-md border border-gray-200 bg-white p-3">
+            <div className="flex items-center justify-between text-xs text-gray-600">
+              <div>
+                Progress: <span className="font-medium">{progressInfo.idx + 1}</span> / {progressInfo.total}
+              </div>
+              <div>
+                Since start: <span className="font-medium">{Math.max(0, progressInfo.idx - progressInfo.startedAt + 1)}</span>
+              </div>
+            </div>
+            <div className="mt-2 h-2 w-full overflow-hidden rounded bg-gray-200">
+              <div
+                className="h-2 bg-emerald-600"
+                style={{ width: `${Math.min(100, ((progressInfo.idx + 1) / progressInfo.total) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-12 gap-6">
           {/* Workspace (left) */}
-          <div className="col-span-7">
+          <div className="col-span-12 md:col-span-7">
             <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
               {workspace}
             </div>
           </div>
 
           {/* Selection sidebar (right) */}
-          <aside className="col-span-5">
+          <aside className="col-span-12 md:col-span-5">
             <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h4 className="text-md font-semibold text-gray-900">{dict.screening.selection}</h4>
-              <p className="text-sm text-gray-600">
-                {dict.screening.selectionDesc}
-              </p>
+              <h4 className="text-md font-semibold text-gray-900">
+                {dict.screening.selection}
+              </h4>
+              <p className="text-sm text-gray-600">{dict.screening.selectionDesc}</p>
 
               {loadingCriteria ? (
                 <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
-                <div className="text-sm text-gray-600">
-                  {dict.screening.noCriteria}
-                </div>
+                <div className="text-sm text-gray-600">{dict.screening.noCriteria}</div>
               ) : (
                 <div className="space-y-4">
                   {criteriaData.questions.map((q, idx) => {
@@ -469,10 +664,49 @@ export default function CanSrL1ScreenPage() {
                     const aiSelected =
                       aiData && aiData.selected ? aiData.selected : undefined
 
+                    // Per-question highlight aligned with list/back-end logic.
+                    // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
+                    // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
+                    const criterionKey = criterionKeyFromQuestion(q)
+
+                    const r = runsByCriterion[criterionKey] || {}
+                    const scr = r.screening
+                    const crit = r.critical
+                    const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
+                    const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
+
+                    const { needsHuman, criticalDisagrees: critDisagrees } = needsHumanReviewForCriterion({
+                      threshold: thr,
+                      screening: scr,
+                      critical: crit,
+                    })
+
+
+                    const hasAgentic = !!scr || !!crit
+
+                    // Prefer agentic screening run when available to avoid mismatches
+                    const displayConfidence =
+                      Number.isFinite(Number((scr as any)?.confidence))
+                        ? Number((scr as any)?.confidence)
+                        : Number(aiData?.confidence)
+
+                    const aiExpl =
+                      (typeof (aiData as any)?.explanation === 'string' ? String((aiData as any).explanation) : '') ||
+                      (typeof (aiData as any)?.rationale === 'string' ? String((aiData as any).rationale) : '') ||
+                      (typeof (aiData as any)?.llm_raw === 'string' ? String((aiData as any).llm_raw) : '')
+
+                    const scrRationale = typeof (scr as any)?.rationale === 'string' ? String((scr as any).rationale) : ''
+                    const displayExplanationRaw = (scrRationale || aiExpl || '').trim()
+                    const displayExplanation =
+                      extractXmlTag(displayExplanationRaw, 'rationale') || displayExplanationRaw
+
                     return (
                       <div
                         key={idx}
-                        className="rounded-md border border-gray-100 p-3"
+                        className={
+	                          'rounded-md border-2 p-3 ' +
+	                          (needsHuman ? 'border-amber-400' : 'border-gray-100')
+                        }
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -553,16 +787,30 @@ export default function CanSrL1ScreenPage() {
                               <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
                                 <div className="mt-2">
                                   <strong>{dict.screening.confidence}</strong>{' '}
-                                  {String(aiData.confidence ?? '')}
+                                  {Number.isFinite(displayConfidence)
+                                    ? String(displayConfidence)
+                                    : String(aiData.confidence ?? '')}
                                 </div>
                                 <div className="mt-2">
                                   <strong>{dict.screening.explanation}</strong>
                                   <div className="mt-1 text-sm text-gray-700">
-                                    {aiData.explanation ??
-                                      aiData.llm_raw ??
-                                      dict.screening.noExplanation}
+                                    {displayExplanation || dict.screening.noExplanation}
                                   </div>
                                 </div>
+
+	                                {hasAgentic && crit ? (
+	                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+	                                    <div className="mt-1 font-semibold text-gray-800">
+	                                      Critical agent{' '}
+	                                      {critDisagrees ? (
+	                                        <span className="text-amber-700">disagrees</span>
+	                                      ) : (
+	                                        <span className="text-emerald-700">agrees</span>
+	                                      )}
+	                                    </div>
+	                                    <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
+	                                  </div>
+	                                ) : null}
                               </div>
                             ) : null}
                           </div>
@@ -572,6 +820,56 @@ export default function CanSrL1ScreenPage() {
                   })}
                 </div>
               )}
+
+              {/* Validation checkbox at the bottom of selection area */}
+              <div className="mt-4 rounded-md border border-gray-100 bg-gray-50 p-3">
+                <label className="flex items-center gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    checked={l1Checked}
+                    disabled={validating}
+                    onChange={async (e) => {
+                      if (!srId || !citationId) return
+                      setValidating(true)
+                      try {
+                        const headers = {
+                          'Content-Type': 'application/json',
+                          ...getAuthHeaders(),
+                        }
+                        await fetch('/api/can-sr/screen/validate', {
+                          method: 'POST',
+                          headers,
+                          body: JSON.stringify({
+                            sr_id: srId,
+                            citation_id: Number(citationId),
+                            step: 'l1',
+                            checked: Boolean(e.target.checked),
+                          }),
+                        })
+                        await fetchCitationById(String(citationId))
+                      } finally {
+                        setValidating(false)
+                      }
+                    }}
+                  />
+                  <span>
+                    Validated by{' '}
+                    <span className="font-medium">
+                      {String(userEmail || '—')}
+                    </span>
+                  </span>
+                </label>
+
+                {l1ValidationsSorted.length ? (
+                  <div className="mt-2 space-y-1">
+                    {l1ValidationsSorted.map((v, idx) => (
+                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
+                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
           </aside>
         </div>
@@ -592,7 +890,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}`,
+                )}&filter=${encodeURIComponent(filterMode)}`,
               )
             }}
             className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
@@ -605,7 +903,12 @@ export default function CanSrL1ScreenPage() {
               const cur = Number(citationId)
               if (Number.isNaN(cur)) return
               const idx = citationIdList.indexOf(cur)
-              if (idx === -1 || idx >= citationIdList.length - 1) return
+              if (idx === -1) return
+              if (idx >= citationIdList.length - 1) {
+                // end of list => return to list, preserving filter
+                router.push(`/${lang}/can-sr/l1-screen?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterMode)}`)
+                return
+              }
               const target = String(citationIdList[idx + 1])
               // proactively fetch and reset selection state so UI updates immediately
               setSelections({})
@@ -615,7 +918,7 @@ export default function CanSrL1ScreenPage() {
               router.push(
                 `/${lang}/can-sr/l1-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   target,
-                )}`,
+                )}&filter=${encodeURIComponent(filterMode)}`,
               )
             }}
             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"

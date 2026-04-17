@@ -14,49 +14,39 @@ const buildCitationAiCalls: BuildCitationAiCalls = ({
   criteria,
   getAuthHeaders,
 }) => {
-  const calls: AiCall[] = []
-
-  for (let i = 0; i < (criteria?.questions || []).length; i++) {
-    const question = criteria.questions[i]
-    const options = criteria.possible_answers?.[i] || []
-
-    calls.push({
-      key: `l1_classify_${i}`,
-      label: `L1: ${question}`,
+  // Phase 2 wiring: L1 run-all uses the agentic orchestrator endpoint.
+  // We keep the existing “Run all AI” modal behavior, but instead of running per-question
+  // classify calls, we run a single orchestrated run per citation.
+  return [
+    {
+      key: `l1_agentic_run`,
+      label: `L1 agentic (screening + critical)`,
       run: async () => {
         const headers = {
           ...getAuthHeaders(),
           'Content-Type': 'application/json',
         }
 
-        const res = await fetch(
-          `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(
-            srId,
-          )}&citation_id=${encodeURIComponent(String(citationId))}`,
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              question,
-              options,
-              include_columns: ['title', 'abstract'],
-              screening_step: 'l1',
-              model,
-              temperature: 0.0,
-              max_tokens: 2000,
-            }),
-          },
-        )
+        const res = await fetch('/api/can-sr/screen/title-abstract/run', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            sr_id: srId,
+            citation_id: Number(citationId),
+            model,
+            temperature: 0.0,
+            max_tokens: 1200,
+            prompt_version: 'v1',
+          }),
+        })
 
         if (!res.ok) {
           const text = await res.text().catch(() => '')
-          throw new Error(text || `L1 classify failed (${res.status})`)
+          throw new Error(text || `L1 agentic run failed (${res.status})`)
         }
       },
-    })
-  }
-
-  return calls
+    },
+  ]
 }
 
 export default function L1ScreenPage() {

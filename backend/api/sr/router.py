@@ -52,6 +52,21 @@ class SystematicReviewRead(BaseModel):
     # convenience structured metadata extracted from criteria (l1, l2, parameters)
     criteria_parsed: Optional[Dict[str, Any]] = None
 
+    # Per-step, per-criterion thresholds (SR-scoped). Example:
+    # {
+    #   "l1": {"population": 0.9, "intervention": 0.85},
+    #   "l2": {"outcome": 0.9}
+    # }
+    screening_thresholds: Optional[Dict[str, Any]] = None
+
+    # SR-scoped per-step per-criterion additions injected into CRITICAL prompts.
+    # Shape:
+    # {
+    #   "l1": {"criterion_key": "..."},
+    #   "l2": {"criterion_key": "..."}
+    # }
+    critical_prompt_additions: Optional[Dict[str, Any]] = None
+
 
 
 
@@ -136,6 +151,8 @@ async def create_systematic_review(
         criteria=sr_doc.get("criteria"),
         criteria_yaml=sr_doc.get("criteria_yaml"),
         criteria_parsed=sr_doc.get("criteria_parsed"),
+        screening_thresholds=sr_doc.get("screening_thresholds"),
+        critical_prompt_additions=sr_doc.get("critical_prompt_additions"),
     )
 
 
@@ -261,6 +278,7 @@ async def list_systematic_reviews_for_user(
                 criteria=doc.get("criteria"),
                 criteria_yaml=doc.get("criteria_yaml"),
                 criteria_parsed=doc.get("criteria_parsed"),
+                screening_thresholds=doc.get("screening_thresholds"),
             )
         )
 
@@ -293,6 +311,7 @@ async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depen
         criteria=doc.get("criteria"),
         criteria_yaml=doc.get("criteria_yaml"),
         criteria_parsed=doc.get("criteria_parsed"),
+        screening_thresholds=doc.get("screening_thresholds"),
     )
 
 
@@ -390,7 +409,137 @@ async def update_systematic_review_criteria(
         criteria=doc.get("criteria"),
         criteria_yaml=doc.get("criteria_yaml"),
         criteria_parsed=doc.get("criteria_parsed"),
+        screening_thresholds=doc.get("screening_thresholds"),
     )
+
+
+class ThresholdsUpdateRequest(BaseModel):
+    screening_thresholds: Dict[str, Any] = {}
+
+
+class CriticalPromptAdditionsUpdateRequest(BaseModel):
+    critical_prompt_additions: Dict[str, Any] = {}
+
+
+@router.get("/{sr_id}/screening_thresholds")
+async def get_screening_thresholds(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+    """Get SR-scoped per-step per-criterion thresholds."""
+
+    try:
+        doc, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+
+    thresholds = doc.get("screening_thresholds") or {}
+    if not isinstance(thresholds, dict):
+        thresholds = {}
+    return {"sr_id": sr_id, "screening_thresholds": thresholds}
+
+
+@router.put("/{sr_id}/screening_thresholds")
+async def update_screening_thresholds(
+    sr_id: str,
+    payload: ThresholdsUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Update SR-scoped per-step per-criterion thresholds.
+
+    Any SR member may update thresholds (per product requirement).
+    """
+
+    try:
+        _doc, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+
+    thresholds = payload.screening_thresholds or {}
+    if not isinstance(thresholds, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="screening_thresholds must be an object")
+
+    # Normalize: only allow known steps keys, but keep it permissive.
+    normalized: Dict[str, Any] = {}
+    for step in ("l1", "l2"):
+        block = thresholds.get(step)
+        if isinstance(block, dict):
+            out: Dict[str, float] = {}
+            for k, v in block.items():
+                if not isinstance(k, str) or not k.strip():
+                    continue
+                try:
+                    f = float(v)
+                except Exception:
+                    continue
+                f = max(0.0, min(1.0, f))
+                out[k] = f
+            normalized[step] = out
+        else:
+            normalized[step] = {}
+
+    await run_in_threadpool(srdb_service.update_screening_thresholds, sr_id, normalized)
+    return {"status": "success", "sr_id": sr_id, "screening_thresholds": normalized}
+
+
+@router.get("/{sr_id}/critical_prompt_additions")
+async def get_critical_prompt_additions(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+    """Get SR-scoped per-step per-criterion critical prompt additions."""
+
+    try:
+        doc, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+
+    cpa = doc.get("critical_prompt_additions") or {}
+    if not isinstance(cpa, dict):
+        cpa = {}
+    return {"sr_id": sr_id, "critical_prompt_additions": cpa}
+
+
+@router.put("/{sr_id}/critical_prompt_additions")
+async def update_critical_prompt_additions(
+    sr_id: str,
+    payload: CriticalPromptAdditionsUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Update SR-scoped per-step per-criterion critical prompt additions.
+
+    Any SR member may update these (mirrors thresholds permissions).
+    """
+
+    try:
+        _doc, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+
+    cpa = payload.critical_prompt_additions or {}
+    if not isinstance(cpa, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="critical_prompt_additions must be an object")
+
+    normalized: Dict[str, Any] = {}
+    for step in ("l1", "l2"):
+        block = cpa.get(step)
+        if isinstance(block, dict):
+            out: Dict[str, str] = {}
+            for k, v in block.items():
+                if not isinstance(k, str) or not k.strip():
+                    continue
+                if v is None:
+                    out[k] = ""
+                else:
+                    out[k] = str(v)
+            normalized[step] = out
+        else:
+            normalized[step] = {}
+
+    await run_in_threadpool(srdb_service.update_critical_prompt_additions, sr_id, normalized)
+    return {"status": "success", "sr_id": sr_id, "critical_prompt_additions": normalized}
 
 
 @router.delete("/{sr_id}")

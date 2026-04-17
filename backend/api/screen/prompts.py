@@ -73,3 +73,154 @@ Notes:
 - Use table numbers from the Tables section for "evidence_tables"
 - Use figure numbers from the Figures section for "evidence_figures"
 """
+
+
+# ---------------------------------------------------------------------------
+# Agentic screening (GREP-Agent style) prompt contracts
+# ---------------------------------------------------------------------------
+
+# NOTE:
+# CAN-SR historically used JSON output for screening. The agentic plan expects
+# XML-tag parsing (<answer>, <confidence>, <rationale>) so we can reuse a stable
+# parsing contract across screening + critical steps.
+
+PROMPT_XML_TEMPLATE_TA = """
+You are a highly critical, helpful scientific evaluator completing an academic review.
+
+Task:
+Answer the question "{question}" for the following citation.
+
+Citation:
+{cit}
+
+Choose EXACTLY ONE of these options (exact text):
+{options}
+
+Additional guidance:
+{xtra}
+
+Output requirement:
+Return ONLY the following XML tags (no Markdown, no extra prose):
+<answer>...</answer>
+<confidence>...</confidence>
+<rationale>...</rationale>
+
+Confidence requirements:
+- confidence is a float between 0 and 1
+- be conservative; do not overestimate confidence
+"""
+
+
+PROMPT_XML_TEMPLATE_TA_CRITICAL = """
+You are a critical reviewer double-checking another model's screening answer.
+
+Original question:
+"{question}"
+
+Citation:
+{cit}
+
+The first model answered:
+"{screening_answer}"
+
+Now, you MUST choose from the following forced alternatives.
+Rules:
+- You are NOT allowed to choose the original answer.
+- If you agree with the original answer, choose "None of the above".
+
+Forced alternatives (choose exactly one; exact text):
+{options}
+
+Additional guidance:
+{xtra}
+
+CRITICAL PROMPT ADDITIONS (SR-scoped):
+{critical_additions}
+
+Output requirement:
+Return ONLY the following XML tags (no Markdown, no extra prose):
+<answer>...</answer>
+<confidence>...</confidence>
+<rationale>...</rationale>
+
+Confidence requirements:
+- confidence is a float between 0 and 1
+- be conservative; do not overestimate confidence
+"""
+
+
+PROMPT_XML_TEMPLATE_FULLTEXT = """
+You are assisting with a scientific full-text screening task.
+
+Task:
+Evaluate the question "{question}" against the paper content provided as numbered sentences (e.g., "[0] ...", "[1] ...").
+
+Choose EXACTLY ONE of these options (exact text):
+{options}
+
+Additional guidance:
+{xtra}
+
+Full text (numbered sentences):
+{fulltext}
+
+Tables (numbered):
+{tables}
+
+Figures (numbered; captions correspond to images provided alongside this message):
+{figures}
+
+Output requirement:
+Return ONLY the following XML tags (no Markdown, no extra prose):
+<answer>...</answer>
+<confidence>...</confidence>
+<rationale>...</rationale>
+
+Confidence requirements:
+- confidence is a float between 0 and 1
+- be conservative; do not overestimate confidence
+"""
+
+
+PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL = """
+You are a critical reviewer double-checking another model's full-text screening answer.
+
+Original question:
+"{question}"
+
+The first model answered:
+"{screening_answer}"
+
+Now, you MUST choose from the following forced alternatives.
+Rules:
+- You are NOT allowed to choose the original answer.
+- If you agree with the original answer, choose "None of the above".
+
+Forced alternatives (choose exactly one; exact text):
+{options}
+
+Additional guidance:
+{xtra}
+
+CRITICAL PROMPT ADDITIONS (SR-scoped):
+{critical_additions}
+
+Full text (numbered sentences):
+{fulltext}
+
+Tables (numbered):
+{tables}
+
+Figures (numbered; captions correspond to images provided alongside this message):
+{figures}
+
+Output requirement:
+Return ONLY the following XML tags (no Markdown, no extra prose):
+<answer>...</answer>
+<confidence>...</confidence>
+<rationale>...</rationale>
+
+Confidence requirements:
+- confidence is a float between 0 and 1
+- be conservative; do not overestimate confidence
+"""

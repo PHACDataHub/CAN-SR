@@ -13,8 +13,15 @@ Methods raise RuntimeError when psycopg2 is not available so callers
 can surface a 503 with an actionable message.
 """
 from typing import Any, Dict, List, Optional, Tuple
-import psycopg2
-import psycopg2.extras
+
+# psycopg2 is optional in some deploy/test contexts.
+# Per module docstring contract: methods should raise RuntimeError when psycopg2
+# is unavailable so routers can surface a 503.
+try:
+    import psycopg2  # type: ignore
+    import psycopg2.extras  # type: ignore
+except Exception:  # pragma: no cover
+    psycopg2 = None
 import json
 import re
 import os
@@ -22,6 +29,8 @@ import io
 import csv
 import urllib.parse as up
 import hashlib
+from datetime import datetime
+import uuid
 
 # Local settings import (for POSTGRES_ADMIN_DSN / DATABASE_URL usage)
 try:
@@ -145,6 +154,590 @@ class CitsDPService:
         # nothing stateful for now; keep class for ergonomics and easier testing
         pass
 
+    def _require_psycopg2(self) -> None:
+        if psycopg2 is None:
+            raise RuntimeError(
+                "psycopg2 is not installed. Install backend dependencies (requirements.txt) "
+                "or run with the docker backend image."
+            )
+
+    # -----------------------
+    # Schema helpers
+    # -----------------------
+    def table_exists(self, table_name: str = "citations") -> bool:
+        """Return True if a public table exists.
+
+        NOTE: We intentionally use runtime schema evolution (ALTER TABLE ...)
+        throughout CAN-SR, so callers need a safe way to check existence before
+        attempting to add columns.
+        """
+        table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+                LIMIT 1
+                """,
+                (table_name,),
+            )
+            return cur.fetchone() is not None
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def ensure_step_validation_columns(self, table_name: str = "citations") -> None:
+        """Ensure step-level validation columns exist for a screening table.
+
+        CAN-SR uses per-upload screening tables, so we create these columns on
+        those tables (not just a single shared citations table).
+
+        This is intentionally NOT backwards-compatible: it will eagerly add the
+        columns to whatever table is passed.
+        """
+        if not self.table_exists(table_name):
+            return
+
+        # L1 (Title/Abstract)
+        self.create_column("l1_validated_by", "TEXT", table_name=table_name)
+        self.create_column("l1_validated_at", "TIMESTAMPTZ", table_name=table_name)
+
+        # L2 (Full Text)
+        self.create_column("l2_validated_by", "TEXT", table_name=table_name)
+        self.create_column("l2_validated_at", "TIMESTAMPTZ", table_name=table_name)
+
+        # Parameters / extraction
+        self.create_column("parameters_validated_by", "TEXT", table_name=table_name)
+        self.create_column("parameters_validated_at", "TIMESTAMPTZ", table_name=table_name)
+
+    def ensure_screening_agent_runs_table(self) -> None:
+        """Ensure the normalized agent-run storage table exists.
+
+        We keep it in the shared Postgres DB (public schema). Because CAN-SR uses
+        per-upload screening tables (each with its own id sequence), we store
+        both the `sr_id` and the screening `table_name` alongside `citation_id`.
+        """
+        conn = None
+        try:
+            self._require_psycopg2()
+            conn = postgres_server.conn
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_agent_runs (
+                    id TEXT PRIMARY KEY,
+                    sr_id TEXT NOT NULL,
+                    table_name TEXT NOT NULL,
+                    citation_id INT NOT NULL,
+                    pipeline TEXT NOT NULL,
+                    criterion_key TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    answer TEXT,
+                    confidence DOUBLE PRECISION,
+                    rationale TEXT,
+                    raw_response TEXT,
+                    model TEXT,
+                    prompt_version TEXT,
+                    temperature DOUBLE PRECISION,
+                    top_p DOUBLE PRECISION,
+                    seed INT,
+                    latency_ms INT,
+                    input_tokens INT,
+                    output_tokens INT,
+                    cost_usd DOUBLE PRECISION,
+                    guardrails JSONB,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+
+            # Runtime schema evolution for existing deployments
+            try:
+                cur.execute("ALTER TABLE screening_agent_runs ADD COLUMN IF NOT EXISTS guardrails JSONB")
+            except Exception:
+                try:
+                    cur.execute("ALTER TABLE screening_agent_runs ADD COLUMN guardrails JSONB")
+                except Exception:
+                    pass
+
+            # A couple of pragmatic indexes for common lookups.
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_screening_agent_runs_citation
+                ON screening_agent_runs (sr_id, table_name, citation_id, pipeline)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_screening_agent_runs_criterion
+                ON screening_agent_runs (sr_id, pipeline, criterion_key, stage)
+                """
+            )
+
+            conn.commit()
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def ensure_agentic_screening_schema(self) -> None:
+        """One-call bootstrap for agentic screening.
+
+        This is safe to call at startup (creates only global tables), and can
+        also be called by endpoints before use.
+        """
+        self.ensure_screening_agent_runs_table()
+
+    # -----------------------
+    # Agent-run persistence
+    # -----------------------
+    def insert_screening_agent_run(self, run: Dict[str, Any]) -> str:
+        """Insert a single screening_agent_runs row.
+
+        Expected keys (most optional):
+        - sr_id, table_name, citation_id, pipeline, criterion_key, stage
+        - answer, confidence, rationale, raw_response
+        - model, prompt_version, temperature, top_p, seed
+        - latency_ms, input_tokens, output_tokens, cost_usd
+
+        Returns the generated run id.
+        """
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+
+        run_id = str(run.get("id") or uuid.uuid4())
+        sr_id = str(run.get("sr_id") or "")
+        table_name = str(run.get("table_name") or "")
+        citation_id = int(run.get("citation_id") or 0)
+        pipeline = str(run.get("pipeline") or "")
+        criterion_key = str(run.get("criterion_key") or "")
+        stage = str(run.get("stage") or "")
+
+        if not (sr_id and table_name and citation_id and pipeline and criterion_key and stage):
+            raise ValueError("insert_screening_agent_run missing required fields")
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO screening_agent_runs (
+                    id, sr_id, table_name, citation_id, pipeline, criterion_key, stage,
+                    answer, confidence, rationale, raw_response,
+                    model, prompt_version, temperature, top_p, seed,
+                    latency_ms, input_tokens, output_tokens, cost_usd, guardrails, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    run_id,
+                    sr_id,
+                    table_name,
+                    citation_id,
+                    pipeline,
+                    criterion_key,
+                    stage,
+                    run.get("answer"),
+                    run.get("confidence"),
+                    run.get("rationale"),
+                    run.get("raw_response"),
+                    run.get("model"),
+                    run.get("prompt_version"),
+                    run.get("temperature"),
+                    run.get("top_p"),
+                    run.get("seed"),
+                    run.get("latency_ms"),
+                    run.get("input_tokens"),
+                    run.get("output_tokens"),
+                    run.get("cost_usd"),
+                    json.dumps(run.get("guardrails")) if run.get("guardrails") is not None else None,
+                    run.get("created_at") or datetime.utcnow().isoformat() + "Z",
+                ),
+            )
+            conn.commit()
+            return run_id
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def agent_runs_exist(self, *, sr_id: str, table_name: str, pipeline: str) -> bool:
+        """Return True if we have any normalized agent runs for this SR+table+pipeline."""
+
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1
+                FROM screening_agent_runs
+                WHERE sr_id=%s AND table_name=%s AND pipeline=%s
+                LIMIT 1
+                """,
+                (str(sr_id), str(table_name), str(pipeline)),
+            )
+            return cur.fetchone() is not None
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def legacy_llm_outputs_exist_for_step(
+        self,
+        *,
+        table_name: str,
+        criteria_parsed: Dict[str, Any],
+        step: str,
+    ) -> bool:
+        """Return True if any legacy llm_* JSONB columns for this step contain data."""
+
+        table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
+        if not self.table_exists(table_name):
+            return False
+
+        step_norm = str(step or "").lower().strip()
+        if step_norm not in {"l1", "l2"}:
+            return False
+
+        qs = (((criteria_parsed or {}).get(step_norm) or {}).get("questions") or [])
+        if not isinstance(qs, list) or not qs:
+            return False
+
+        # Determine which llm_* columns exist
+        cols_meta = self.get_table_columns(table_name)
+        existing_cols = {c.get("column_name") for c in cols_meta if c and c.get("column_name")}
+        llm_cols = []
+        for q in qs:
+            if not isinstance(q, str) or not q.strip():
+                continue
+            col = snake_case_column(q)
+            if col in existing_cols:
+                llm_cols.append(col)
+        if not llm_cols:
+            return False
+
+        # Any non-null legacy output?
+        or_sql = " OR ".join([f'"{c}" IS NOT NULL' for c in llm_cols])
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(f'SELECT 1 FROM "{table_name}" WHERE {or_sql} LIMIT 1')
+            return cur.fetchone() is not None
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def legacy_needs_rerun(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        criteria_parsed: Dict[str, Any],
+        step: str,
+    ) -> bool:
+        """Return True when legacy llm_* outputs exist but normalized runs do not.
+
+        This is the signal to:
+        - warn the user that they must run run-all
+        - auto-enable force overwrite for run-all
+        """
+
+        step_norm = str(step or "").lower().strip()
+        if step_norm not in {"l1", "l2"}:
+            return False
+        pipeline = "title_abstract" if step_norm == "l1" else "fulltext"
+        legacy = self.legacy_llm_outputs_exist_for_step(table_name=table_name, criteria_parsed=criteria_parsed, step=step_norm)
+        if not legacy:
+            return False
+        return not self.agent_runs_exist(sr_id=sr_id, table_name=table_name, pipeline=pipeline)
+
+    def list_latest_agent_runs(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        citation_ids: List[int],
+        pipeline: str,
+    ) -> List[Dict[str, Any]]:
+        """Return latest agent runs per (citation_id, criterion_key, stage) for a set of citations.
+
+        This is designed for list pages where we need to compute "needs validation"
+        without loading full raw responses.
+        """
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+
+        sr_id = str(sr_id or "")
+        table_name = str(table_name or "")
+        pipeline = str(pipeline or "")
+
+        ids: List[int] = []
+        for i in citation_ids or []:
+            try:
+                ids.append(int(i))
+            except Exception:
+                continue
+        if not (sr_id and table_name and pipeline and ids):
+            return []
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # DISTINCT ON picks the first row per group according to ORDER BY.
+            cur.execute(
+                """
+                SELECT DISTINCT ON (citation_id, criterion_key, stage)
+                    id,
+                    sr_id,
+                    table_name,
+                    citation_id,
+                    pipeline,
+                    criterion_key,
+                    stage,
+                    answer,
+                    confidence,
+                    rationale,
+                    guardrails,
+                    model,
+                    prompt_version,
+                    temperature,
+                    top_p,
+                    seed,
+                    latency_ms,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    created_at
+                FROM screening_agent_runs
+                WHERE sr_id = %s
+                  AND table_name = %s
+                  AND pipeline = %s
+                  AND citation_id = ANY(%s)
+                ORDER BY citation_id, criterion_key, stage, created_at DESC
+                """,
+                (sr_id, table_name, pipeline, ids),
+            )
+
+            rows = cur.fetchall() or []
+            return [dict(r) for r in rows if r]
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def confidence_histogram_for_criterion(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        citation_ids: List[int],
+        pipeline: str,
+        criterion_key: str,
+        human_col: str,
+        validations_col: Optional[str] = None,
+        legacy_validated_by: Optional[str] = None,
+        bins: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Return a 3-way confidence histogram (unlabelled/agree/disagree) for one criterion.
+
+        This is used by operational dashboards to show how confidence distributions
+        shift as humans label citations.
+
+        Notes:
+        - Uses latest *screening* run per citation for the given criterion.
+        - Uses the citations table's per-criterion JSONB human column (human_{criterion_key}).
+          Agreement is a string match on `selected` vs `answer` after trimming.
+        - IMPORTANT: "labelled" is defined as **validated for the step**.
+          If a citation is *not validated*, it is treated as unlabelled even if
+          a human_* column exists (CAN-SR may auto-fill human_* from llm_*).
+        """
+
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+
+        sr_id = str(sr_id or "")
+        table_name = str(table_name or "")
+        pipeline = str(pipeline or "")
+        criterion_key = str(criterion_key or "")
+        bins = int(bins or 10)
+        if bins <= 0:
+            bins = 10
+
+        ids: List[int] = []
+        for i in citation_ids or []:
+            try:
+                ids.append(int(i))
+            except Exception:
+                continue
+        if not (sr_id and table_name and pipeline and criterion_key and ids):
+            return []
+
+        # Validate identifiers we interpolate into SQL.
+        table_name = _validate_ident(table_name, kind="table_name")
+        human_col = _validate_ident(str(human_col or ""), kind="column")
+        validations_col = str(validations_col or "").strip() or None
+        legacy_validated_by = str(legacy_validated_by or "").strip() or None
+        if validations_col is not None:
+            validations_col = _validate_ident(validations_col, kind="column")
+        if legacy_validated_by is not None:
+            legacy_validated_by = _validate_ident(legacy_validated_by, kind="column")
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Determine which columns exist. We intentionally treat missing human_*
+            # columns as "unlabelled" rather than erroring, because the UI should
+            # still be able to render a confidence distribution before any human
+            # answers have been recorded.
+            try:
+                existing_cols = {c.get("column_name") for c in self.get_table_columns(table_name)}
+            except Exception:
+                existing_cols = set()
+
+            has_human_col = human_col in existing_cols
+            has_validations_col = bool(validations_col) and (validations_col in existing_cols)
+            has_legacy_validated_by = bool(legacy_validated_by) and (legacy_validated_by in existing_cols)
+
+            human_sel_expr = (
+                f"NULLIF(BTRIM(COALESCE((c.\"{human_col}\"->>'selected'), '')), '')"
+                if has_human_col
+                else "NULL"
+            )
+
+            validated_expr_parts: List[str] = []
+            if has_validations_col and validations_col:
+                # validations_col is JSONB list; validated if array length > 0.
+                validated_expr_parts.append(
+                    f"(jsonb_array_length(COALESCE(c.\"{validations_col}\", '[]'::jsonb)) > 0)"
+                )
+            if has_legacy_validated_by and legacy_validated_by:
+                validated_expr_parts.append(
+                    f"(NULLIF(BTRIM(COALESCE(c.\"{legacy_validated_by}\", '')), '') IS NOT NULL)"
+                )
+            validated_expr = " OR ".join(validated_expr_parts) if validated_expr_parts else "FALSE"
+
+            # We select the latest screening run per citation_id for this criterion,
+            # then bucket by confidence and compute three counts.
+            cur.execute(
+                f"""
+                WITH latest AS (
+                    SELECT DISTINCT ON (r.citation_id)
+                        r.citation_id,
+                        r.answer,
+                        r.confidence
+                    FROM screening_agent_runs r
+                    WHERE r.sr_id = %s
+                      AND r.table_name = %s
+                      AND r.pipeline = %s
+                      AND r.criterion_key = %s
+                      AND r.stage = 'screening'
+                      AND r.citation_id = ANY(%s)
+                    ORDER BY r.citation_id, r.created_at DESC
+                ),
+                joined AS (
+                    SELECT
+                        l.citation_id,
+                        l.answer,
+                        CASE
+                          WHEN l.confidence IS NULL THEN 0.0
+                          WHEN l.confidence < 0 THEN 0.0
+                          WHEN l.confidence > 1 THEN 1.0
+                          ELSE l.confidence
+                        END AS confidence,
+                        CASE
+                          WHEN ({validated_expr}) THEN {human_sel_expr}
+                          ELSE NULL
+                        END AS human_selected
+                    FROM latest l
+                    JOIN "{table_name}" c ON c.id = l.citation_id
+                ),
+                binned AS (
+                    SELECT
+                        LEAST(%s - 1, GREATEST(0, FLOOR(confidence * %s)::int)) AS bin_index,
+                        human_selected,
+                        NULLIF(BTRIM(COALESCE(answer, '')), '') AS ai_answer
+                    FROM joined
+                )
+                SELECT
+                    bin_index,
+                    SUM(CASE WHEN human_selected IS NULL THEN 1 ELSE 0 END) AS unlabelled,
+                    SUM(CASE WHEN human_selected IS NOT NULL AND ai_answer IS NOT NULL AND human_selected = ai_answer THEN 1 ELSE 0 END) AS agree,
+                    SUM(CASE WHEN human_selected IS NOT NULL AND (ai_answer IS NULL OR human_selected <> ai_answer) THEN 1 ELSE 0 END) AS disagree
+                FROM binned
+                GROUP BY bin_index
+                ORDER BY bin_index ASC
+                """,
+                (sr_id, table_name, pipeline, criterion_key, ids, bins, bins),
+            )
+
+            rows = cur.fetchall() or []
+            # Normalize to dense bins [0..bins-1] for stable UI.
+            by_bin: Dict[int, Dict[str, int]] = {}
+            for r in rows:
+                try:
+                    bi = int(r.get("bin_index"))
+                except Exception:
+                    continue
+                by_bin[bi] = {
+                    "unlabelled": int(r.get("unlabelled") or 0),
+                    "agree": int(r.get("agree") or 0),
+                    "disagree": int(r.get("disagree") or 0),
+                }
+
+            out: List[Dict[str, Any]] = []
+            for bi in range(bins):
+                start = bi / float(bins)
+                end = (bi + 1) / float(bins)
+                cnts = by_bin.get(bi) or {"unlabelled": 0, "agree": 0, "disagree": 0}
+                out.append(
+                    {
+                        "bin_start": start,
+                        "bin_end": end,
+                        **cnts,
+                    }
+                )
+            return out
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
     # -----------------------
     # Low level connection helpers
     # -----------------------
@@ -160,6 +753,7 @@ class CitsDPService:
         col_type is the SQL type (e.g. TEXT, JSONB).
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -193,6 +787,7 @@ class CitsDPService:
         Update a JSONB column for a citation. Creates the column if needed.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -227,6 +822,7 @@ class CitsDPService:
         Update a TEXT column for a citation. Creates the column if needed.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -259,6 +855,7 @@ class CitsDPService:
     ) -> int:
         """Update a BOOLEAN column for a citation. Creates the column if needed."""
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -284,6 +881,7 @@ class CitsDPService:
     def get_table_columns(self, table_name: str = "citations") -> List[Dict[str, str]]:
         """Return [{name, data_type, udt_name}] for table columns ordered by ordinal_position."""
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -368,6 +966,7 @@ class CitsDPService:
         Intended for auto-filling human_* from llm_* while never overwriting.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -407,6 +1006,7 @@ class CitsDPService:
         Uses Postgres COPY for correctness and performance.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -439,6 +1039,7 @@ class CitsDPService:
           explicit scalar columns (selected/explanation/confidence/found/value/...).
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
 
         # 1) Determine columns to export
         cols_meta = self.get_table_columns(table_name)
@@ -596,6 +1197,7 @@ class CitsDPService:
         Return a dict mapping column -> value for the citation row, or None.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -638,6 +1240,7 @@ class CitsDPService:
             List[dict] rows. Missing ids are omitted.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         ids: List[int] = []
         for i in citation_ids or []:
             try:
@@ -691,6 +1294,7 @@ class CitsDPService:
         - undecided: any question missing/unanswered
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
 
         cp = criteria_parsed or {}
         l1_qs = (cp.get("l1") or {}).get("questions") if isinstance(cp.get("l1"), dict) else None
@@ -815,6 +1419,7 @@ class CitsDPService:
         Return list of integer primary keys (id) from citations table ordered by id.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -862,6 +1467,7 @@ class CitsDPService:
         Return list of fulltext_url values (non-null) from citations table.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -898,6 +1504,7 @@ class CitsDPService:
         Creates columns if necessary. Returns rows modified (0/1).
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         # create columns if missing
         self.create_column("fulltext_url", "TEXT", table_name=table_name)
         # compute md5
@@ -929,6 +1536,7 @@ class CitsDPService:
         Return the value stored in `column` for the citation row (or None).
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -968,6 +1576,7 @@ class CitsDPService:
     def drop_table(self, table_name: str, cascade: bool = True) -> None:
         """Drop a screening table in the shared database."""
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -994,6 +1603,7 @@ class CitsDPService:
         is per-upload (e.g. sr_<sr>_<ts>_citations) inside the shared DB.
         """
         table_name = _validate_ident(table_name, kind="table_name")
+        self._require_psycopg2()
         conn = None
         try:
             conn = postgres_server.conn
@@ -1009,6 +1619,15 @@ class CitsDPService:
             col_defs.append('"fulltext_url" TEXT')
             col_defs.append('"fulltext" TEXT')
             col_defs.append('"fulltext_md5" TEXT')
+
+            # Step-level validation fields (agentic screening plan)
+            col_defs.append('"l1_validated_by" TEXT')
+            col_defs.append('"l1_validated_at" TIMESTAMP WITH TIME ZONE')
+            col_defs.append('"l2_validated_by" TEXT')
+            col_defs.append('"l2_validated_at" TIMESTAMP WITH TIME ZONE')
+            col_defs.append('"parameters_validated_by" TEXT')
+            col_defs.append('"parameters_validated_at" TIMESTAMP WITH TIME ZONE')
+
             col_defs.append('"created_at" TIMESTAMP WITH TIME ZONE DEFAULT now()')
 
             cols_sql = ", ".join(col_defs)
