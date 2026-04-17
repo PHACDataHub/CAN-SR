@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams, useRouter } from 'next/navigation'
+import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import PagedList from '@/components/can-sr/PagedList'
@@ -14,6 +14,7 @@ import ScreeningMetricsPanel, {
   type ScreeningMetricsSummary,
   type ScreeningCriterionMetrics,
   type CalibrationCriterion,
+  type LiveConfidenceHistogramCriterion,
 } from '@/components/can-sr/ScreeningMetricsPanel'
 import ScreeningMetricsModal from '@/components/can-sr/ScreeningMetricsModal'
 import {
@@ -70,6 +71,7 @@ export default function CitationsListPage({
   void buildCitationAiCalls
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { lang } = useParams<{ lang: string }>()
   const srId = searchParams?.get('sr_id')
   const dict = useDictionary()
 
@@ -84,6 +86,70 @@ export default function CitationsListPage({
   // Phase 1 single-threshold is deprecated; kept for backward compatibility.
   const [threshold, setThreshold] = useState<number>(0.9)
   const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('all')
+  const [filterHydrated, setFilterHydrated] = useState<boolean>(false)
+
+  const filterParam = searchParams?.get('filter')
+  const filterStorageKey = useMemo(() => {
+    if (!srId) return null
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return null
+    return `canSr:lastFilter:${srId}:${screeningStep}`
+  }, [srId, screeningStep])
+
+  const normalizeFilter = useCallback(
+    (v: any): 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all' | null => {
+      const s = String(v || '').toLowerCase().trim()
+      if (s === 'needs') return 'needs'
+      if (s === 'validated') return 'validated'
+      if (s === 'unvalidated') return 'unvalidated'
+      if (s === 'not_screened') return 'not_screened'
+      if (s === 'all') return 'all'
+      return null
+    },
+    [],
+  )
+
+  // Hydrate filter from URL (preferred) or from localStorage (fallback).
+  // IMPORTANT: do not depend on `filterMode` here, otherwise user changes can get
+  // overwritten by a stale URL param, and in some cases can lead to update loops.
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return
+
+    const fromUrl = normalizeFilter(filterParam)
+    if (fromUrl) {
+      setFilterMode((prev) => (prev === fromUrl ? prev : fromUrl))
+      setFilterHydrated(true)
+      return
+    }
+
+    // Only fall back to storage when URL doesn't specify a filter.
+    if (filterStorageKey) {
+      try {
+        const stored = window.localStorage.getItem(filterStorageKey)
+        const fromStore = normalizeFilter(stored)
+        if (fromStore) setFilterMode((prev) => (prev === fromStore ? prev : fromStore))
+      } catch {
+        // ignore
+      }
+    }
+
+    // Even if no stored value exists, we consider hydration complete.
+    setFilterHydrated(true)
+  }, [srId, screeningStep, filterParam, filterStorageKey, normalizeFilter])
+
+  // Persist last-used filter (keyed by SR + step). We intentionally *do not*
+  // mutate the URL here to avoid navigation loops that can cause repeated
+  // data fetching (e.g. agent-runs/latest).
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return
+    if (!filterStorageKey) return
+    try {
+      window.localStorage.setItem(filterStorageKey, filterMode)
+    } catch {
+      // ignore
+    }
+  }, [srId, screeningStep, filterMode, filterStorageKey])
   // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
   const [_pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
 
@@ -91,6 +157,7 @@ export default function CitationsListPage({
   const [srMetricsSummary, setSrMetricsSummary] = useState<ScreeningMetricsSummary | undefined>(undefined)
   const [srCriterionMetrics, setSrCriterionMetrics] = useState<ScreeningCriterionMetrics[] | undefined>(undefined)
   const [srCalibration, setSrCalibration] = useState<CalibrationCriterion[] | undefined>(undefined)
+  const [srLiveHistogram, setSrLiveHistogram] = useState<LiveConfidenceHistogramCriterion[] | undefined>(undefined)
   const [_srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
 
   // Backend warnings (e.g., legacy data needs run-all)
@@ -149,31 +216,60 @@ export default function CitationsListPage({
       throw new Error('Missing srId: Redirecting to /can-sr')
     }
 
+    // Avoid firing the initial list fetch with the default `all` filter.
+    // Wait until we have hydrated filterMode from URL/localStorage.
+    if ((screeningStep === 'l1' || screeningStep === 'l2') && !filterHydrated) {
+      return
+    }
+
     const loadCitations = async () => {
       setLoading(true)
       setError(null)
       try {
         const headers = getAuthHeaders()
-        let filterStep = ''
-        if (screeningStep === 'l2') {
-          filterStep = 'l1'
-        } else if (screeningStep === 'extract') {
-          filterStep = 'l2'
-        }
-        const res = await fetch(
-          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterStep)}`,
-          { method: 'GET', headers },
-        )
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          const errMsg =
-            data?.error ||
-            data?.detail ||
-            `Failed to load citations (${res.status})`
-          setError(errMsg)
-          setCitationIds([])
+        // For list paging we use backend-computed filtered citation ids so filtering applies
+        // across ALL pages (fixes empty list when current page has no matches).
+        if (screeningStep === 'l1' || screeningStep === 'l2') {
+          const res = await fetch(
+            `/api/can-sr/screen/citation-ids?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+              screeningStep,
+            )}&filter=${encodeURIComponent(filterMode)}`,
+            { method: 'GET', headers },
+          )
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) {
+            const errMsg =
+              data?.error ||
+              data?.detail ||
+              `Failed to load citations (${res.status})`
+            setError(errMsg)
+            setCitationIds([])
+          } else {
+            setCitationIds(Array.isArray(data?.citation_ids) ? data.citation_ids : [])
+          }
         } else {
-          setCitationIds(data?.citation_ids || [])
+          // extract view still uses legacy list endpoint (server eligibility differs)
+          let filterStep = ''
+          if (screeningStep === 'extract') {
+            filterStep = 'l2'
+          }
+          const res = await fetch(
+            `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(
+              filterStep,
+            )}`,
+            { method: 'GET', headers },
+          )
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) {
+            const errMsg =
+              data?.error ||
+              data?.detail ||
+              `Failed to load citations (${res.status})`
+            setError(errMsg)
+            setCitationIds([])
+          } else {
+            setCitationIds(data?.citation_ids || [])
+          }
         }
       } catch (err: any) {
         console.error('Failed to fetch citations', err)
@@ -208,7 +304,7 @@ export default function CitationsListPage({
 
     loadCriteria()
     loadCitations()
-  }, [srId, router, screeningStep])
+  }, [srId, router, screeningStep, filterMode, filterHydrated])
 
   // Load SR thresholds + metrics (L1/L2 only)
   useEffect(() => {
@@ -267,10 +363,25 @@ export default function CitationsListPage({
         } else {
           setSrCalibration(undefined)
         }
+
+        // 4) live confidence histogram (unlabelled/agree/disagree)
+        const hRes = await fetch(
+          `/api/can-sr/screen/confidence-histogram?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}&bins=20`,
+          { method: 'GET', headers },
+        )
+        const hJson = await hRes.json().catch(() => ({}))
+        if (hRes.ok && Array.isArray(hJson?.criteria)) {
+          setSrLiveHistogram(hJson.criteria as LiveConfidenceHistogramCriterion[])
+        } else {
+          setSrLiveHistogram(undefined)
+        }
       } catch {
         setSrMetricsSummary(undefined)
         setSrCriterionMetrics(undefined)
         setSrCalibration(undefined)
+        setSrLiveHistogram(undefined)
         setSrThresholds(null)
         setSrWarnings(null)
       }
@@ -490,6 +601,7 @@ export default function CitationsListPage({
           summary={srMetricsSummary}
           criterionMetrics={srCriterionMetrics}
           calibration={srCalibration}
+          liveHistogram={srLiveHistogram}
           srId={srId}
           step={screeningStep}
         />
@@ -669,9 +781,21 @@ export default function CitationsListPage({
                     <label className="text-sm text-gray-700">Filter</label>
                     <select
                       value={filterMode}
-                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                        setFilterMode(e.target.value as any)
-                      }
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                        const next = e.target.value as any
+                        setFilterMode(next)
+                        // Keep URL in sync on *user intent* (safe, avoids effect-driven loops).
+                        try {
+                          const params = new URLSearchParams(searchParams?.toString() || '')
+                          params.set('sr_id', String(srId || ''))
+                          params.set('filter', String(next))
+                          router.replace(
+                            `/${encodeURIComponent(String(lang || 'en'))}/can-sr/${encodeURIComponent(pageview)}?${params.toString()}`,
+                          )
+                        } catch {
+                          // ignore
+                        }
+                      }}
                       className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
                     >
                       <option value="all">All</option>
@@ -710,6 +834,7 @@ export default function CitationsListPage({
                           : null) || undefined
                       }
                       filterMode={filterMode}
+                      serverFiltered={screeningStep === 'l1' || screeningStep === 'l2'}
                       onThresholdChange={setThreshold}
                       onFilterModeChange={setFilterMode}
                       onStatsChange={(s) => {

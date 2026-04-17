@@ -54,6 +54,27 @@ export type CalibrationHistogramBin = {
   disagree: number
 }
 
+export type LiveConfidenceHistogramBin = {
+  bin_start: number
+  bin_end: number
+  unlabelled: number
+  agree: number
+  disagree: number
+}
+
+export type LiveConfidenceHistogramCriterion = {
+  criterion_key: string
+  label: string
+  histogram: LiveConfidenceHistogramBin[]
+}
+
+export type LiveConfidenceHistogramResponse = {
+  sr_id: string
+  step: string
+  bins: number
+  criteria: LiveConfidenceHistogramCriterion[]
+}
+
 export type CalibrationCriterion = {
   criterion_key: string
   label: string
@@ -164,11 +185,14 @@ export default function ScreeningMetricsPanel({
   const queueValidated = summary?.validated_needs_review ?? 0
   const queueRemaining = Math.max(0, queueTotal - queueValidated)
 
-  const validatedPct = total > 0 ? (validatedAll / total) * 100 : 0
-  const queuePct = total > 0 ? (queueTotal / total) * 100 : 0
-  const notScreenedPct = total > 0 ? (notScreened / total) * 100 : 0
+  // Everything that is NOT validated, NOT in the remaining queue, and NOT not-screened.
+  // (Typically: confident excludes + confident includes at current thresholds.)
+  const resolvedRemaining = Math.max(0, total - validatedAll - queueRemaining - notScreened)
 
-  const queueStartPct = Math.min(100, Math.max(0, validatedPct))
+  const validatedPct = total > 0 ? (validatedAll / total) * 100 : 0
+  const queueRemainingPct = total > 0 ? (queueRemaining / total) * 100 : 0
+  const resolvedPct = total > 0 ? (resolvedRemaining / total) * 100 : 0
+  const notScreenedPct = total > 0 ? (notScreened / total) * 100 : 0
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -241,7 +265,7 @@ export default function ScreeningMetricsPanel({
               </div>
             </div>
 
-            {/* Combined progress bar */}
+            {/* Single overall progress bar (segments sum to 100%) */}
             <div className="mt-2">
               <div className="relative h-3 w-full overflow-hidden rounded bg-gray-200">
                 {/* Validated (green) */}
@@ -250,43 +274,33 @@ export default function ScreeningMetricsPanel({
                   style={{ width: `${Math.min(100, Math.max(0, validatedPct))}%` }}
                 />
 
-                {/* Needs human review queue (amber) as part of remainder */}
+                {/* Remaining human review queue (amber) */}
                 <div
                   className="absolute top-0 h-3 bg-amber-400"
                   style={{
                     left: `${Math.min(100, Math.max(0, validatedPct))}%`,
-                    width: `${Math.min(100, Math.max(0, queuePct))}%`,
+                    width: `${Math.min(100, Math.max(0, queueRemainingPct))}%`,
                   }}
                 />
 
-                {/* Not screened yet (gray) */}
+                {/* Resolved (no human review needed) (gray) */}
                 <div
                   className="absolute top-0 h-3 bg-gray-400"
                   style={{
-                    left: `${Math.min(100, Math.max(0, validatedPct + queuePct))}%`,
+                    left: `${Math.min(100, Math.max(0, validatedPct + queueRemainingPct))}%`,
+                    width: `${Math.min(100, Math.max(0, resolvedPct))}%`,
+                  }}
+                  title="Resolved (not in queue)"
+                />
+
+                {/* Not screened yet (light gray) */}
+                <div
+                  className="absolute top-0 h-3 bg-gray-300"
+                  style={{
+                    left: `${Math.min(100, Math.max(0, validatedPct + queueRemainingPct + resolvedPct))}%`,
                     width: `${Math.min(100, Math.max(0, notScreenedPct))}%`,
                   }}
                 />
-
-                {/* Inner overlay: progress within queue (thin bar) */}
-                {queueTotal > 0 ? (
-                  <div
-                    className="absolute top-0 h-1 bg-amber-700"
-                    style={{
-                      left: `${Math.min(100, Math.max(0, validatedPct))}%`,
-                      width: `${Math.min(100, Math.max(0, (queueValidated / total) * 100))}%`,
-                    }}
-                  />
-                ) : null}
-
-                {/* Dotted marker: start of human review queue */}
-                {total > 0 ? (
-                  <div
-                    className="absolute top-0 h-3 border-l border-dashed border-gray-900/40"
-                    style={{ left: `${queueStartPct}%` }}
-                    title="Human review queue starts here"
-                  />
-                ) : null}
               </div>
             </div>
 
@@ -297,6 +311,9 @@ export default function ScreeningMetricsPanel({
               <div>
                 <span className="font-medium text-gray-700">Human review queue:</span> {queueRemaining} remaining (of {queueTotal})
               </div>
+              {/* <div>
+                <span className="font-medium text-gray-700">Resolved (no review needed):</span> {resolvedRemaining}
+              </div> */}
               <div>
                 <span className="font-medium text-gray-700">Not screened yet:</span> {notScreened}
               </div>

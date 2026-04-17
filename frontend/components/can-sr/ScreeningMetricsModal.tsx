@@ -5,6 +5,7 @@ import React from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type {
   CalibrationCriterion,
+  LiveConfidenceHistogramCriterion,
   ScreeningCriterionMetrics,
   ScreeningMetricsSummary,
 } from '@/components/can-sr/ScreeningMetricsPanel'
@@ -18,6 +19,7 @@ type Props = {
   summary?: ScreeningMetricsSummary
   criterionMetrics?: ScreeningCriterionMetrics[]
   calibration?: CalibrationCriterion[]
+  liveHistogram?: LiveConfidenceHistogramCriterion[]
   srId?: string | null
   step?: 'l1' | 'l2' | string
 }
@@ -47,6 +49,125 @@ function sparkline(values: number[], width = 140, height = 34): string {
 function clamp01(v: number): number {
   if (!Number.isFinite(v)) return 0
   return Math.max(0, Math.min(1, v))
+}
+
+function renderLiveConfidenceHistogram(
+  hist: {
+    bin_start: number
+    bin_end: number
+    unlabelled: number
+    agree: number
+    disagree: number
+  }[],
+  markers?: { current?: number | null; recommended?: number | null },
+) {
+  const bins = Array.isArray(hist) ? hist : []
+  const totals = bins.map((b) => (b.unlabelled || 0) + (b.agree || 0) + (b.disagree || 0))
+  const max = Math.max(1, ...totals)
+
+  const markerPositions: { kind: 'current' | 'recommended'; xPct: number; label: string }[] = []
+  const cur = typeof markers?.current === 'number' ? clamp01(markers!.current) : null
+  const rec = typeof markers?.recommended === 'number' ? clamp01(markers!.recommended) : null
+  if (cur !== null) markerPositions.push({ kind: 'current', xPct: cur * 100, label: `Current thr ${cur.toFixed(2)}` })
+  if (rec !== null) markerPositions.push({ kind: 'recommended', xPct: rec * 100, label: `Recommended thr ${rec.toFixed(2)}` })
+
+  return (
+    <div className="mt-2">
+      <div className="text-[11px] text-gray-500">Confidence distribution (live)</div>
+      <div className="relative mt-1">
+        {/* marker lines */}
+        {markerPositions.map((m) => (
+          <div
+            key={m.kind}
+            className="pointer-events-none absolute top-0 h-[46px]"
+            style={{ left: `${m.xPct}%` }}
+            title={m.label}
+          >
+            <div
+              className={
+                m.kind === 'current'
+                  ? 'h-[46px] w-px bg-gray-700/70'
+                  : 'h-[46px] w-px border-l border-dashed border-blue-600/70'
+              }
+            />
+          </div>
+        ))}
+
+        <div className="flex items-end gap-1">
+          {bins.map((b, i) => {
+            const unlabelled = b.unlabelled || 0
+            const agree = b.agree || 0
+            const disagree = b.disagree || 0
+            const total = unlabelled + agree + disagree
+            const h = Math.round((total / max) * 44)
+
+            // segment heights
+            const uh = total > 0 ? Math.round((h * unlabelled) / total) : 0
+            const gh = total > 0 ? Math.round((h * agree) / total) : 0
+            const rh = Math.max(0, h - uh - gh) // remainder
+
+            const start = clamp01(Number(b.bin_start))
+            const end = clamp01(Number(b.bin_end))
+
+            return (
+              <div
+                key={i}
+                className="w-3"
+                title={`${start.toFixed(2)}–${end.toFixed(2)}: total ${total} (unlabelled ${unlabelled}, agree ${agree}, disagree ${disagree})`}
+              >
+                {/* stack from bottom up */}
+                <div className="flex w-3 flex-col justify-end" style={{ height: `${h}px` }}>
+                  {/* disagree (red) */}
+                  {rh > 0 ? (
+                    <div className="w-3 rounded-sm bg-rose-400" style={{ height: `${rh}px` }} />
+                  ) : null}
+                  {/* agree (green) */}
+                  {gh > 0 ? (
+                    <div className="w-3 rounded-sm bg-emerald-500" style={{ height: `${gh}px` }} />
+                  ) : null}
+                  {/* unlabelled (blue) */}
+                  {uh > 0 ? (
+                    <div className="w-3 rounded-sm bg-blue-500" style={{ height: `${uh}px` }} />
+                  ) : null}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="mt-1 flex items-center justify-between text-[10px] text-gray-400">
+        <span>0.0</span>
+        <span>1.0</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-[10px] text-gray-500">
+        <div className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-blue-500" />
+          Unlabelled
+        </div>
+        <div className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" />
+          Agree
+        </div>
+        <div className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-rose-400" />
+          Disagree
+        </div>
+        {cur !== null ? (
+          <div className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-sm bg-gray-700/70" />
+            Current
+          </div>
+        ) : null}
+        {rec !== null ? (
+          <div className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-sm border border-dashed border-blue-600/70" />
+            Recommended
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
 }
 
 function renderConfidenceHistogram(hist: { bin_start: number; bin_end: number; agree: number; disagree: number }[]) {
@@ -111,6 +232,7 @@ export default function ScreeningMetricsModal({
   summary,
   criterionMetrics,
   calibration,
+  liveHistogram,
   srId,
   step,
 }: Props) {
@@ -120,13 +242,21 @@ export default function ScreeningMetricsModal({
     return m
   }, [calibration])
 
+  const liveByKey = React.useMemo(() => {
+    const m = new Map<string, LiveConfidenceHistogramCriterion>()
+    for (const c of liveHistogram || []) m.set(c.criterion_key, c)
+    return m
+  }, [liveHistogram])
+
   const total = summary?.total_citations ?? 0
   const validatedAll = summary?.validated_all ?? 0
-  const needsReview = summary?.needs_review_total ?? 0
+  const queueTotal = summary?.needs_review_total ?? 0
+  const queueValidated = summary?.validated_needs_review ?? 0
+  const queueRemaining = Math.max(0, queueTotal - queueValidated)
   const notScreened = summary?.not_screened_yet ?? 0
 
   const validatedPct = pct(validatedAll, total)
-  const queuePct = pct(needsReview, total)
+  const queuePct = pct(queueTotal, total)
   const notScreenedPct = pct(notScreened, total)
 
   // --- Critical prompt additions editor (Phase 3+)
@@ -229,8 +359,13 @@ export default function ScreeningMetricsModal({
               </div>
             </div>
             <div className="rounded border border-gray-100 bg-gray-50 p-3">
-              <div className="text-[11px] text-gray-500">Human review queue</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">{needsReview}</div>
+              <div className="text-[11px] text-gray-500">Needs human review (unvalidated)</div>
+              <div className="mt-1 text-sm font-semibold text-gray-900">
+                {queueRemaining} remaining
+              </div>
+              <div className="mt-1 text-[11px] text-gray-600">
+                Total flagged: {queueTotal} (validated: {queueValidated})
+              </div>
               <div className="mt-1 text-[11px] text-gray-600">
                 {queuePct === null ? '—' : `${queuePct.toFixed(1)}% of SR`}
               </div>
@@ -277,6 +412,7 @@ export default function ScreeningMetricsModal({
                 const fpr = recPoint && typeof recPoint.fpr === 'number' ? recPoint.fpr * 100 : null
 
                 const hist = Array.isArray(cal?.histogram) ? cal!.histogram : []
+                const live = liveByKey.get(m.criterion_key)
                 const disagreeShare = hist.map((b) => {
                   const t = (b.agree || 0) + (b.disagree || 0)
                   return t > 0 ? (b.disagree || 0) / t : 0
@@ -369,7 +505,16 @@ export default function ScreeningMetricsModal({
                       </svg>
                     </div>
 
-                    {hist.length ? renderConfidenceHistogram(hist) : null}
+                    {/* Live (unlabelled/agree/disagree) distribution with threshold markers */}
+                    {Array.isArray(live?.histogram) && live!.histogram.length
+                      ? renderLiveConfidenceHistogram(live!.histogram, {
+                          current: m.threshold,
+                          recommended: rec,
+                        })
+                      : null}
+
+                    {/* Keep validated-set histogram as a fallback when live is unavailable */}
+                    {!live?.histogram?.length && hist.length ? renderConfidenceHistogram(hist) : null}
                   </div>
                 )
               })}

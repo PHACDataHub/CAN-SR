@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class FilteredCitationIdsResponse(BaseModel):
+    sr_id: str
+    step: str
+    filter: str
+    citation_ids: List[int]
+    total: int
+    filtered_total: int
+
+
 class AgentRunsQueryResponse(BaseModel):
     sr_id: str
     pipeline: str
@@ -76,6 +85,262 @@ class ScreeningMetricsResponse(BaseModel):
     warnings: Optional[List[Dict[str, Any]]] = None
 
 
+def _guardrail_issue_from_run(run: Optional[Dict[str, Any]]) -> bool:
+    """Return True when a run's guardrails indicate a parse/contract issue.
+
+    Keep this in sync with list-page needs-review semantics.
+    """
+    if not run:
+        return False
+    try:
+        g = run.get("guardrails")
+        if g is None:
+            return False
+        if isinstance(g, str):
+            g = json.loads(g)
+        if not isinstance(g, dict):
+            return True
+        if g.get("parse_ok") is False:
+            return True
+        if g.get("missing_answer"):
+            return True
+        if g.get("missing_confidence"):
+            return True
+        return False
+    except Exception:
+        # If unparsable but present -> conservative
+        return True
+
+
+def _is_validated_row_for_step(row: Dict[str, Any], step_norm: str) -> bool:
+    validations_col = f"{step_norm}_validations"
+    legacy_validated_by = f"{step_norm}_validated_by"
+    v = row.get(validations_col)
+    if v:
+        try:
+            parsed = v
+            if isinstance(v, str):
+                parsed = json.loads(v)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                return True
+        except Exception:
+            pass
+    return bool(row.get(legacy_validated_by))
+
+
+def _needs_review_for_citation(
+    *,
+    citation_id: int,
+    per_crit: Dict[str, Dict[str, Dict[str, Any]]],
+    criteria: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compute needs-review booleans used by both metrics and filtered id lists."""
+
+    # Not screened yet (no runs at all)
+    if not per_crit:
+        return {
+            "not_screened": True,
+            "auto_excluded": False,
+            "needs_review": False,
+        }
+
+    has_confident_exclude = False
+    has_critical_disagreement = False
+    has_low_confidence = False
+    has_guardrail_issue = False
+
+    for c in criteria:
+        ck = str(c.get("criterion_key") or "")
+        if not ck:
+            continue
+        thr = float(c.get("threshold") or 0.9)
+
+        rpair = per_crit.get(ck) or {}
+        scr = rpair.get("screening")
+        crit = rpair.get("critical")
+
+        # Screening low confidence + guardrails
+        if scr:
+            try:
+                conf_f = float(scr.get("confidence"))
+            except Exception:
+                conf_f = None
+            if conf_f is not None and conf_f < thr:
+                has_low_confidence = True
+            if _guardrail_issue_from_run(scr):
+                has_guardrail_issue = True
+
+            # Confident exclude requires critical agreement
+            crit_has = bool(crit) and str(crit.get("answer") or "").strip() != ""
+            crit_agrees = crit_has and (not _is_disagreeing_critical_answer(crit.get("answer")))
+            ans = scr.get("answer")
+            if conf_f is not None and conf_f >= thr and _is_exclude_answer(ans) and crit_agrees:
+                has_confident_exclude = True
+
+        # Critical: missing/empty counts as disagreement
+        if not crit or str(crit.get("answer") or "").strip() == "":
+            has_critical_disagreement = True
+        elif _is_disagreeing_critical_answer(crit.get("answer")):
+            has_critical_disagreement = True
+        if _guardrail_issue_from_run(crit):
+            has_guardrail_issue = True
+
+    auto_excluded = bool(has_confident_exclude)
+    needs_review = (not auto_excluded) and (has_critical_disagreement or has_low_confidence or has_guardrail_issue)
+    return {
+        "not_screened": False,
+        "auto_excluded": auto_excluded,
+        "needs_review": needs_review,
+    }
+
+
+@router.get("/citation-ids", response_model=FilteredCitationIdsResponse)
+async def get_filtered_citation_ids(
+    sr_id: str,
+    step: str = "l1",
+    filter: str = "all",
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return a filtered citation id list for list pagination and viewer navigation.
+
+    Filters:
+    - all: all citations in the step scope
+    - needs: needs human review (per current thresholds)
+    - validated: validated citations (for this step)
+    - unvalidated: not validated
+    - not_screened: no agent runs yet (for this step pipeline)
+    """
+
+    step_norm = str(step or "l1").lower().strip()
+    if step_norm not in {"l1", "l2"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+
+    filter_norm = str(filter or "all").lower().strip()
+    if filter_norm not in {"all", "needs", "validated", "unvalidated", "not_screened"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filter")
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Criteria + thresholds
+    cp = sr.get("criteria_parsed") or {}
+    questions = _questions_for_step(cp, step_norm)
+
+    sr_thresholds = sr.get("screening_thresholds") or {}
+    step_thresholds = sr_thresholds.get(step_norm) if isinstance(sr_thresholds, dict) else None
+    step_thresholds = step_thresholds if isinstance(step_thresholds, dict) else {}
+
+    criteria: List[Dict[str, Any]] = []
+    for q in questions:
+        if not isinstance(q, str) or not q.strip():
+            continue
+        ck = _criterion_key_from_question(q)
+        thr_raw = step_thresholds.get(ck)
+        try:
+            thr = float(thr_raw)
+            thr = max(0.0, min(1.0, thr))
+        except Exception:
+            thr = 0.9
+        criteria.append({"criterion_key": ck, "label": q, "threshold": thr})
+
+    # Scope ids for step (L2 scope depends on human L1 include)
+    filter_step = ""
+    if step_norm == "l2":
+        filter_step = "l1"
+    try:
+        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+
+    # Runs + minimal row fields for validation
+    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    try:
+        runs = await run_in_threadpool(
+            cits_dp_service.list_latest_agent_runs,
+            sr_id=sr_id,
+            table_name=table_name,
+            citation_ids=ids,
+            pipeline=pipeline_norm,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agent runs: {e}")
+
+    runs_by_cit: Dict[int, Dict[str, Dict[str, Dict[str, Any]]]] = {}
+    for r in runs or []:
+        try:
+            cid = int(r.get("citation_id"))
+        except Exception:
+            continue
+        ck = str(r.get("criterion_key") or "")
+        stg = str(r.get("stage") or "")
+        if not ck or stg not in {"screening", "critical"}:
+            continue
+        if cid not in runs_by_cit:
+            runs_by_cit[cid] = {}
+        if ck not in runs_by_cit[cid]:
+            runs_by_cit[cid][ck] = {}
+        runs_by_cit[cid][ck][stg] = r
+
+    validations_col = f"{step_norm}_validations"
+    legacy_validated_by = f"{step_norm}_validated_by"
+    try:
+        rows = await run_in_threadpool(
+            cits_dp_service.get_citations_by_ids,
+            ids,
+            table_name,
+            ["id", validations_col, legacy_validated_by],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load citations: {e}")
+
+    # Build response ids in stable order (ids is already ordered)
+    row_by_id: Dict[int, Dict[str, Any]] = {}
+    for r in rows or []:
+        try:
+            row_by_id[int(r.get("id"))] = r
+        except Exception:
+            continue
+
+    filtered_ids: List[int] = []
+    for cid in ids:
+        row = row_by_id.get(int(cid)) or {"id": cid}
+        validated = _is_validated_row_for_step(row, step_norm)
+        per_crit = runs_by_cit.get(int(cid), {})
+        flags = _needs_review_for_citation(citation_id=int(cid), per_crit=per_crit, criteria=criteria)
+
+        if filter_norm == "all":
+            filtered_ids.append(int(cid))
+        elif filter_norm == "validated":
+            if validated:
+                filtered_ids.append(int(cid))
+        elif filter_norm == "unvalidated":
+            if not validated:
+                filtered_ids.append(int(cid))
+        elif filter_norm == "not_screened":
+            if flags.get("not_screened"):
+                filtered_ids.append(int(cid))
+        elif filter_norm == "needs":
+            # "Needs human review" is strictly the *unvalidated* review queue.
+            # If a citation is validated, it should appear under the validated filter instead.
+            if (not validated) and flags.get("needs_review"):
+                filtered_ids.append(int(cid))
+
+    return FilteredCitationIdsResponse(
+        sr_id=sr_id,
+        step=step_norm,
+        filter=filter_norm,
+        citation_ids=filtered_ids,
+        total=len(ids),
+        filtered_total=len(filtered_ids),
+    )
+
+
 class CalibrationPoint(BaseModel):
     threshold: float
     tp: int
@@ -110,6 +375,27 @@ class CalibrationResponse(BaseModel):
     sr_id: str
     step: str
     criteria: List[CalibrationCriterionResponse]
+
+
+class LiveConfidenceHistogramBin(BaseModel):
+    bin_start: float
+    bin_end: float
+    unlabelled: int
+    agree: int
+    disagree: int
+
+
+class LiveConfidenceHistogramCriterionResponse(BaseModel):
+    criterion_key: str
+    label: str
+    histogram: List[LiveConfidenceHistogramBin]
+
+
+class LiveConfidenceHistogramResponse(BaseModel):
+    sr_id: str
+    step: str
+    bins: int
+    criteria: List[LiveConfidenceHistogramCriterionResponse]
 
 
 class CalibrationSampleRow(BaseModel):
@@ -2126,6 +2412,105 @@ async def get_screening_calibration(
         )
 
     return CalibrationResponse(sr_id=sr_id, step=step_norm, criteria=out_criteria)
+
+
+@router.get("/confidence-histogram", response_model=LiveConfidenceHistogramResponse)
+async def get_live_confidence_histogram(
+    sr_id: str,
+    step: str = "l1",
+    bins: int = 20,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    """Operational (live) confidence histogram split by unlabelled/agree/disagree.
+
+    Unlike /calibration, this is NOT restricted to validated citations.
+
+    Definitions:
+    - unlabelled: no human_{criterion_key}.selected exists
+    - agree/disagree: compare latest screening run answer to human selected
+
+    This is designed to be polled frequently by the UI.
+    """
+
+    step_norm = str(step or "l1").lower().strip()
+    if step_norm not in {"l1", "l2"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+
+    try:
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+
+    table_name = (screening or {}).get("table_name") or "citations"
+
+    # Criteria questions for step (L2 includes L1 + L2)
+    cp = sr.get("criteria_parsed") or {}
+    questions = _questions_for_step(cp, step_norm)
+    criteria: List[Dict[str, str]] = []
+    for q in questions:
+        if not isinstance(q, str) or not q.strip():
+            continue
+        ck = _criterion_key_from_question(q)
+        criteria.append({"criterion_key": ck, "label": q})
+
+    # Scope ids for step
+    filter_step = ""
+    if step_norm == "l2":
+        filter_step = "l1"
+    try:
+        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+
+    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+
+    try:
+        bins_i = int(bins)
+    except Exception:
+        bins_i = 20
+    if bins_i <= 0:
+        bins_i = 20
+    if bins_i > 50:
+        bins_i = 50
+
+    out: List[LiveConfidenceHistogramCriterionResponse] = []
+    for c in criteria:
+        ck = c.get("criterion_key") or ""
+        if not ck:
+            continue
+        human_col = f"human_{ck}"
+        try:
+            hist = await run_in_threadpool(
+                cits_dp_service.confidence_histogram_for_criterion,
+                sr_id=sr_id,
+                table_name=table_name,
+                citation_ids=ids,
+                pipeline=pipeline_norm,
+                criterion_key=ck,
+                human_col=human_col,
+                validations_col=f"{step_norm}_validations",
+                legacy_validated_by=f"{step_norm}_validated_by",
+                bins=bins_i,
+            )
+        except RuntimeError as rexc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to compute histogram for {ck}: {e}",
+            )
+
+        out.append(
+            LiveConfidenceHistogramCriterionResponse(
+                criterion_key=ck,
+                label=c.get("label") or ck,
+                histogram=hist or [],
+            )
+        )
+
+    return LiveConfidenceHistogramResponse(sr_id=sr_id, step=step_norm, bins=bins_i, criteria=out)
 
 
 @router.get("/calibration/samples")

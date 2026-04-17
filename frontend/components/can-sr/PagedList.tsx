@@ -15,6 +15,11 @@ type CitationInfo = {
   threshold?: number
   thresholdByCriterionKey?: Record<string, number>
   filterMode?: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
+  /**
+   * When true, `citationIds` is already filtered server-side (and pagination should apply to that list).
+   * In this mode we MUST NOT re-filter rows client-side, otherwise the list can appear empty.
+   */
+  serverFiltered?: boolean
   onThresholdChange?: (v: number) => void
   onFilterModeChange?: (v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all') => void
   onStatsChange?: (stats: {
@@ -81,6 +86,7 @@ export default function PagedList({
   threshold: thresholdProp,
   thresholdByCriterionKey,
   filterMode: filterModeProp,
+  serverFiltered,
   onThresholdChange,
   onFilterModeChange,
   onStatsChange,
@@ -111,6 +117,12 @@ export default function PagedList({
 
   const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
 
+  // Request cancellation + dedupe (prevents slower responses from overwriting newer filter/page state)
+  const batchAbortRef = useRef<AbortController | null>(null)
+  const runsAbortRef = useRef<AbortController | null>(null)
+  const batchKeyRef = useRef<string>('')
+  const runsKeyRef = useRef<string>('')
+
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   // --- paging ---
@@ -119,6 +131,12 @@ export default function PagedList({
     setLastpage(lp)
     setpage((prev: number) => Math.min(Math.max(1, prev), lp))
   }, [citationIds, pageSize])
+
+  // When the server provides a new filtered id list, start from the beginning.
+  useEffect(() => {
+    if (!serverFiltered) return
+    setpage(1)
+  }, [serverFiltered, citationIds?.length])
 
   useEffect(() => {
     const fetchCitations = async () => {
@@ -135,10 +153,24 @@ export default function PagedList({
         return
       }
 
+      const pageKey = `${srId}|${screeningStep}|${page}|${pageSize}|${pageIds.join(',')}`
+      if (batchKeyRef.current === pageKey) {
+        // Already fetched for this exact page selection.
+      } else {
+        batchKeyRef.current = pageKey
+      }
+
+      // Cancel any in-flight batch request (e.g. when filter changes quickly)
+      try {
+        batchAbortRef.current?.abort()
+      } catch {}
+      const batchController = new AbortController()
+      batchAbortRef.current = batchController
+
       const headers = getAuthHeaders()
       const res = await fetch(
         `/api/can-sr/citations/batch?sr_id=${encodeURIComponent(srId)}&ids=${encodeURIComponent(pageIds.join(','))}`,
-        { method: 'GET', headers },
+        { method: 'GET', headers, signal: batchController.signal },
       )
       const data = await res.json().catch(() => ({}))
       const rows: any[] = Array.isArray(data?.citations) ? data.citations : []
@@ -179,11 +211,24 @@ export default function PagedList({
         const shouldFetchRuns = (screeningStep === 'l1' || screeningStep === 'l2') && pageIds.length
         if (shouldFetchRuns) {
           const pipeline = screeningStep === 'l2' ? 'fulltext' : 'title_abstract'
+
+          const runsKey = `${srId}|${pipeline}|${pageIds.join(',')}`
+          // Cancel any in-flight runs request.
+          try {
+            runsAbortRef.current?.abort()
+          } catch {}
+          const runsController = new AbortController()
+          runsAbortRef.current = runsController
+
+          // If we already fetched exactly this set, skip.
+          if (runsKeyRef.current === runsKey) return
+          runsKeyRef.current = runsKey
+
           const r2 = await fetch(
             `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=${encodeURIComponent(
               pipeline,
             )}&citation_ids=${encodeURIComponent(pageIds.join(','))}`,
-            { method: 'GET', headers },
+            { method: 'GET', headers, signal: runsController.signal },
           )
           const j2 = await r2.json().catch(() => ({}))
           if (r2.ok && Array.isArray(j2?.runs)) {
@@ -203,6 +248,18 @@ export default function PagedList({
     }
     fetchCitations()
   }, [citationIds, page, pageSize, questions, srId, screeningStep])
+
+  // Cleanup any in-flight requests on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        batchAbortRef.current?.abort()
+      } catch {}
+      try {
+        runsAbortRef.current?.abort()
+      } catch {}
+    }
+  }, [])
 
   // Reset cached runs when switching steps (avoid mixing l1/l2 pipeline results)
   useEffect(() => {
@@ -333,7 +390,7 @@ export default function PagedList({
     return hasLowConfidence || hasCriticalDisagree || hasAnyGuardrailIssue
   }
 
-  const filteredCitationData = citationData.filter((row: any) => {
+  const filteredCitationData = (serverFiltered ? citationData : citationData.filter((row: any) => {
     const id = Number(row?.id)
     if (!Number.isFinite(id)) return false
     const validated = isValidatedForStep(row)
@@ -350,7 +407,7 @@ export default function PagedList({
     if (filterMode === 'not_screened') return notScreened
     if (filterMode === 'needs') return needs
     return true
-  })
+  }))
 
   // Emit list stats upward (so CitationListPage can render a floating metrics module)
   useEffect(() => {
@@ -554,7 +611,7 @@ export default function PagedList({
               <button
                 onClick={() =>
                   router.push(
-                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}`,
+                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}&filter=${encodeURIComponent(filterMode)}`,
                   )
                 }
                 className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"

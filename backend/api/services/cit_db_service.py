@@ -557,6 +557,187 @@ class CitsDPService:
             if conn:
                 pass
 
+    def confidence_histogram_for_criterion(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        citation_ids: List[int],
+        pipeline: str,
+        criterion_key: str,
+        human_col: str,
+        validations_col: Optional[str] = None,
+        legacy_validated_by: Optional[str] = None,
+        bins: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Return a 3-way confidence histogram (unlabelled/agree/disagree) for one criterion.
+
+        This is used by operational dashboards to show how confidence distributions
+        shift as humans label citations.
+
+        Notes:
+        - Uses latest *screening* run per citation for the given criterion.
+        - Uses the citations table's per-criterion JSONB human column (human_{criterion_key}).
+          Agreement is a string match on `selected` vs `answer` after trimming.
+        - IMPORTANT: "labelled" is defined as **validated for the step**.
+          If a citation is *not validated*, it is treated as unlabelled even if
+          a human_* column exists (CAN-SR may auto-fill human_* from llm_*).
+        """
+
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+
+        sr_id = str(sr_id or "")
+        table_name = str(table_name or "")
+        pipeline = str(pipeline or "")
+        criterion_key = str(criterion_key or "")
+        bins = int(bins or 10)
+        if bins <= 0:
+            bins = 10
+
+        ids: List[int] = []
+        for i in citation_ids or []:
+            try:
+                ids.append(int(i))
+            except Exception:
+                continue
+        if not (sr_id and table_name and pipeline and criterion_key and ids):
+            return []
+
+        # Validate identifiers we interpolate into SQL.
+        table_name = _validate_ident(table_name, kind="table_name")
+        human_col = _validate_ident(str(human_col or ""), kind="column")
+        validations_col = str(validations_col or "").strip() or None
+        legacy_validated_by = str(legacy_validated_by or "").strip() or None
+        if validations_col is not None:
+            validations_col = _validate_ident(validations_col, kind="column")
+        if legacy_validated_by is not None:
+            legacy_validated_by = _validate_ident(legacy_validated_by, kind="column")
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Determine which columns exist. We intentionally treat missing human_*
+            # columns as "unlabelled" rather than erroring, because the UI should
+            # still be able to render a confidence distribution before any human
+            # answers have been recorded.
+            try:
+                existing_cols = {c.get("column_name") for c in self.get_table_columns(table_name)}
+            except Exception:
+                existing_cols = set()
+
+            has_human_col = human_col in existing_cols
+            has_validations_col = bool(validations_col) and (validations_col in existing_cols)
+            has_legacy_validated_by = bool(legacy_validated_by) and (legacy_validated_by in existing_cols)
+
+            human_sel_expr = (
+                f"NULLIF(BTRIM(COALESCE((c.\"{human_col}\"->>'selected'), '')), '')"
+                if has_human_col
+                else "NULL"
+            )
+
+            validated_expr_parts: List[str] = []
+            if has_validations_col and validations_col:
+                # validations_col is JSONB list; validated if array length > 0.
+                validated_expr_parts.append(
+                    f"(jsonb_array_length(COALESCE(c.\"{validations_col}\", '[]'::jsonb)) > 0)"
+                )
+            if has_legacy_validated_by and legacy_validated_by:
+                validated_expr_parts.append(
+                    f"(NULLIF(BTRIM(COALESCE(c.\"{legacy_validated_by}\", '')), '') IS NOT NULL)"
+                )
+            validated_expr = " OR ".join(validated_expr_parts) if validated_expr_parts else "FALSE"
+
+            # We select the latest screening run per citation_id for this criterion,
+            # then bucket by confidence and compute three counts.
+            cur.execute(
+                f"""
+                WITH latest AS (
+                    SELECT DISTINCT ON (r.citation_id)
+                        r.citation_id,
+                        r.answer,
+                        r.confidence
+                    FROM screening_agent_runs r
+                    WHERE r.sr_id = %s
+                      AND r.table_name = %s
+                      AND r.pipeline = %s
+                      AND r.criterion_key = %s
+                      AND r.stage = 'screening'
+                      AND r.citation_id = ANY(%s)
+                    ORDER BY r.citation_id, r.created_at DESC
+                ),
+                joined AS (
+                    SELECT
+                        l.citation_id,
+                        l.answer,
+                        CASE
+                          WHEN l.confidence IS NULL THEN 0.0
+                          WHEN l.confidence < 0 THEN 0.0
+                          WHEN l.confidence > 1 THEN 1.0
+                          ELSE l.confidence
+                        END AS confidence,
+                        CASE
+                          WHEN ({validated_expr}) THEN {human_sel_expr}
+                          ELSE NULL
+                        END AS human_selected
+                    FROM latest l
+                    JOIN "{table_name}" c ON c.id = l.citation_id
+                ),
+                binned AS (
+                    SELECT
+                        LEAST(%s - 1, GREATEST(0, FLOOR(confidence * %s)::int)) AS bin_index,
+                        human_selected,
+                        NULLIF(BTRIM(COALESCE(answer, '')), '') AS ai_answer
+                    FROM joined
+                )
+                SELECT
+                    bin_index,
+                    SUM(CASE WHEN human_selected IS NULL THEN 1 ELSE 0 END) AS unlabelled,
+                    SUM(CASE WHEN human_selected IS NOT NULL AND ai_answer IS NOT NULL AND human_selected = ai_answer THEN 1 ELSE 0 END) AS agree,
+                    SUM(CASE WHEN human_selected IS NOT NULL AND (ai_answer IS NULL OR human_selected <> ai_answer) THEN 1 ELSE 0 END) AS disagree
+                FROM binned
+                GROUP BY bin_index
+                ORDER BY bin_index ASC
+                """,
+                (sr_id, table_name, pipeline, criterion_key, ids, bins, bins),
+            )
+
+            rows = cur.fetchall() or []
+            # Normalize to dense bins [0..bins-1] for stable UI.
+            by_bin: Dict[int, Dict[str, int]] = {}
+            for r in rows:
+                try:
+                    bi = int(r.get("bin_index"))
+                except Exception:
+                    continue
+                by_bin[bi] = {
+                    "unlabelled": int(r.get("unlabelled") or 0),
+                    "agree": int(r.get("agree") or 0),
+                    "disagree": int(r.get("disagree") or 0),
+                }
+
+            out: List[Dict[str, Any]] = []
+            for bi in range(bins):
+                start = bi / float(bins)
+                end = (bi + 1) / float(bins)
+                cnts = by_bin.get(bi) or {"unlabelled": 0, "agree": 0, "disagree": 0}
+                out.append(
+                    {
+                        "bin_start": start,
+                        "bin_end": end,
+                        **cnts,
+                    }
+                )
+            return out
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
     # -----------------------
     # Low level connection helpers
     # -----------------------

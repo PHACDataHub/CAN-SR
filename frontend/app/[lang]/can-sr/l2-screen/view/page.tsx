@@ -114,6 +114,7 @@ export default function CanSrL2ScreenViewPage() {
   const searchParams = useSearchParams()
   const srId = searchParams?.get('sr_id')
   const citationId = searchParams?.get('citation_id')
+  const filterMode = searchParams?.get('filter') || 'all'
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
   const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
@@ -203,7 +204,9 @@ export default function CanSrL2ScreenViewPage() {
       try {
         const headers = getAuthHeaders()
         const res = await fetch(
-          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent('l1')}`,
+          `/api/can-sr/screen/citation-ids?sr_id=${encodeURIComponent(srId)}&step=l2&filter=${encodeURIComponent(
+            filterMode,
+          )}`,
           { method: 'GET', headers },
         )
         const data = await res.json().catch(() => ({}))
@@ -217,7 +220,33 @@ export default function CanSrL2ScreenViewPage() {
       }
     }
     loadIds()
-  }, [srId])
+  }, [srId, filterMode])
+
+  const navSessionKey = useMemo(() => {
+    if (!srId) return null
+    return `navProgress:${srId}:l2:${filterMode}`
+  }, [srId, filterMode])
+
+  const progressInfo = useMemo(() => {
+    const cur = Number(citationId)
+    const idx = Number.isFinite(cur) ? citationIdList.indexOf(cur) : -1
+    const total = citationIdList.length
+    let startedAt = idx
+    try {
+      if (navSessionKey) {
+        const raw = window.sessionStorage.getItem(navSessionKey)
+        const parsed = raw ? JSON.parse(raw) : null
+        if (parsed && typeof parsed.startIndex === 'number') startedAt = parsed.startIndex
+        if (!raw && idx >= 0) {
+          window.sessionStorage.setItem(navSessionKey, JSON.stringify({ startIndex: idx, startedAt: Date.now() }))
+          startedAt = idx
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { idx, total, startedAt }
+  }, [citationId, citationIdList, navSessionKey])
 
   // Fetch current user email for validation toggling.
   useEffect(() => {
@@ -602,7 +631,8 @@ export default function CanSrL2ScreenViewPage() {
   }
 
   // Call backend classify for a single question using fulltext template (screening_step='l2')
-  async function classifyQuestion(questionIndex: number) {
+  async function classifyQuestion(_questionIndex: number) {
+    void _questionIndex
     if (!srId || !citationId || !criteriaData) return
     try {
       const headers = {
@@ -722,7 +752,7 @@ export default function CanSrL2ScreenViewPage() {
       <GCHeader />
       <SRHeader
         title={dict.screening.fullText}
-        backHref={`/can-sr/l2-screen?sr_id=${encodeURIComponent(srId || '')}`}
+        backHref={`/can-sr/l2-screen?sr_id=${encodeURIComponent(srId || '')}&filter=${encodeURIComponent(filterMode)}`}
         backLabel={dict.cansr.backToCitations}
         right={
           <ModelSelector
@@ -733,6 +763,26 @@ export default function CanSrL2ScreenViewPage() {
       />
 
       <main className="mx-auto max-w-8xl px-3 py-3">
+
+        {/* Filter/session progress bar */}
+        {progressInfo.total > 0 && progressInfo.idx >= 0 ? (
+          <div className="mb-3 rounded-md border border-gray-200 bg-white p-3">
+            <div className="flex items-center justify-between text-xs text-gray-600">
+              <div>
+                Progress: <span className="font-medium">{progressInfo.idx + 1}</span> / {progressInfo.total}
+              </div>
+              <div>
+                Since start: <span className="font-medium">{Math.max(0, progressInfo.idx - progressInfo.startedAt + 1)}</span>
+              </div>
+            </div>
+            <div className="mt-2 h-2 w-full overflow-hidden rounded bg-gray-200">
+              <div
+                className="h-2 bg-emerald-600"
+                style={{ width: `${Math.min(100, ((progressInfo.idx + 1) / progressInfo.total) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-12 gap-3">
           {/* Workspace (left) */}
@@ -1075,7 +1125,7 @@ export default function CanSrL2ScreenViewPage() {
                     router.push(
                       `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
-                      )}`,
+                      )}&filter=${encodeURIComponent(filterMode)}`,
                     )
                   }}
                   className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
@@ -1088,7 +1138,11 @@ export default function CanSrL2ScreenViewPage() {
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
                     const idx = citationIdList.indexOf(cur)
-                    if (idx === -1 || idx >= citationIdList.length - 1) return
+                    if (idx === -1) return
+                    if (idx >= citationIdList.length - 1) {
+                      router.push(`/${lang}/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterMode)}`)
+                      return
+                    }
                     const target = String(citationIdList[idx + 1])
                     // proactively fetch and reset selection state so UI updates immediately
                     setSelections({})
@@ -1098,7 +1152,7 @@ export default function CanSrL2ScreenViewPage() {
                     router.push(
                       `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
-                      )}`,
+                      )}&filter=${encodeURIComponent(filterMode)}`,
                     )
                   }}
                   className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
