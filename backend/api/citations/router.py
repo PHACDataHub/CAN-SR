@@ -319,8 +319,10 @@ def _extract_criteria_questions_from_sr(sr: Optional[Dict[str, Any]]) -> Dict[st
         if not isinstance(q, str) or not q.strip():
             continue
         # Use the same key generation as the screening system
-        key = snake_case(q, max_len=56)
-        criterion_key = f"is_{key}" if key else "is_criterion"
+        # snake_case already converts "Is this article primary research?" to "is_this_article_primary_research"
+        criterion_key = snake_case(q, max_len=56)
+        if not criterion_key:
+            criterion_key = "criterion"
         result[criterion_key] = q
     
     return result
@@ -414,9 +416,27 @@ def _populate_human_answers_from_csv(
         # No matching columns found
         return
     
+    # Fetch all rows from the database to get actual citation IDs
+    try:
+        all_rows = cits_dp_service.get_citations_by_ids(
+            list(range(1, len(normalized_rows) + 1)),
+            table_name=table_name
+        )
+    except Exception:
+        # If we can't fetch rows, skip human answer population
+        return
+    
+    # Build a map of row index to citation ID
+    row_id_map: Dict[int, int] = {}
+    for idx, db_row in enumerate(all_rows):
+        if db_row and 'id' in db_row:
+            row_id_map[idx] = db_row['id']
+    
     # Populate human answer columns for each row
     for row_idx, row in enumerate(normalized_rows):
-        citation_id = row_idx + 1  # Assuming id starts at 1 after insert
+        citation_id = row_id_map.get(row_idx)
+        if not citation_id:
+            continue
         
         for col_idx, criterion_key in csv_col_to_criterion.items():
             if col_idx >= len(include_columns):
@@ -446,8 +466,7 @@ def _populate_human_answers_from_csv(
     # Update validation metadata
     try:
         now_iso = datetime.utcnow().isoformat() + "Z"
-        for row_idx in range(len(normalized_rows)):
-            citation_id = row_idx + 1
+        for row_idx, citation_id in row_id_map.items():
             cits_dp_service.update_text_column(
                 citation_id=citation_id,
                 col="l1_validated_by",
