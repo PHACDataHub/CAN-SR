@@ -12,6 +12,46 @@ type CitationInfo = {
   include: string[]
   screeningStep: string
   pageview: string
+  threshold?: number
+  thresholdByCriterionKey?: Record<string, number>
+  filterMode?: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
+  /**
+   * When true, `citationIds` is already filtered server-side (and pagination should apply to that list).
+   * In this mode we MUST NOT re-filter rows client-side, otherwise the list can appear empty.
+   */
+  serverFiltered?: boolean
+  onThresholdChange?: (v: number) => void
+  onFilterModeChange?: (v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all') => void
+  onStatsChange?: (stats: {
+    total: number
+    needsValidation: number
+    validated: number
+    unvalidated: number
+  }) => void
+}
+
+type LatestAgentRun = {
+  citation_id: number
+  criterion_key: string
+  stage: 'screening' | 'critical' | string
+  answer?: string | null
+  confidence?: number | null
+  created_at?: string
+  guardrails?: any
+}
+
+function hasGuardrailIssue(g: any): boolean {
+  if (!g) return false
+  try {
+    const obj = typeof g === 'string' ? JSON.parse(g) : g
+    if (!obj || typeof obj !== 'object') return true
+    if (obj.parse_ok === false) return true
+    if (obj.missing_answer) return true
+    if (obj.missing_confidence) return true
+    return false
+  } catch {
+    return true
+  }
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -28,6 +68,14 @@ function snakeCaseColumn(name: string, llm: boolean) {
   return llm ? `llm_${s}`.slice(0, 60) : `human_${s}`.slice(0, 60)
 }
 
+function criterionKeyFromQuestion(question: string) {
+  if (!question) return ''
+  let s = question.trim().toLowerCase()
+  s = s.replace(/[^\w]+/g, '_')
+  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  return s.slice(0, 56)
+}
+
 export default function PagedList({
   citationIds,
   srId,
@@ -35,6 +83,13 @@ export default function PagedList({
   possible_answers,
   screeningStep,
   pageview,
+  threshold: thresholdProp,
+  thresholdByCriterionKey,
+  filterMode: filterModeProp,
+  serverFiltered,
+  onThresholdChange,
+  onFilterModeChange,
+  onStatsChange,
 }: CitationInfo) {
   const router = useRouter()
   const { lang } = useParams<{ lang: string }>()
@@ -53,14 +108,35 @@ export default function PagedList({
   )
   const [showClassify, setShowClassify] = useState<Record<number, boolean>>({})
 
+  // List controls (controlled by parent when provided; otherwise local state)
+  const [thresholdLocal, setThresholdLocal] = useState<number>(0.9)
+  const [filterModeLocal, setFilterModeLocal] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('needs')
+
+  const threshold = typeof thresholdProp === 'number' ? thresholdProp : thresholdLocal
+  const filterMode = filterModeProp || filterModeLocal
+
+  const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
+
+  // Request cancellation + dedupe (prevents slower responses from overwriting newer filter/page state)
+  const batchAbortRef = useRef<AbortController | null>(null)
+  const runsAbortRef = useRef<AbortController | null>(null)
+  const batchKeyRef = useRef<string>('')
+  const runsKeyRef = useRef<string>('')
+
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   // --- paging ---
   useEffect(() => {
     const lp = Math.max(1, Math.ceil((citationIds?.length || 0) / pageSize))
     setLastpage(lp)
-    setpage((prev) => Math.min(Math.max(1, prev), lp))
+    setpage((prev: number) => Math.min(Math.max(1, prev), lp))
   }, [citationIds, pageSize])
+
+  // When the server provides a new filtered id list, start from the beginning.
+  useEffect(() => {
+    if (!serverFiltered) return
+    setpage(1)
+  }, [serverFiltered, citationIds?.length])
 
   useEffect(() => {
     const fetchCitations = async () => {
@@ -77,10 +153,24 @@ export default function PagedList({
         return
       }
 
+      const pageKey = `${srId}|${screeningStep}|${page}|${pageSize}|${pageIds.join(',')}`
+      if (batchKeyRef.current === pageKey) {
+        // Already fetched for this exact page selection.
+      } else {
+        batchKeyRef.current = pageKey
+      }
+
+      // Cancel any in-flight batch request (e.g. when filter changes quickly)
+      try {
+        batchAbortRef.current?.abort()
+      } catch {}
+      const batchController = new AbortController()
+      batchAbortRef.current = batchController
+
       const headers = getAuthHeaders()
       const res = await fetch(
         `/api/can-sr/citations/batch?sr_id=${encodeURIComponent(srId)}&ids=${encodeURIComponent(pageIds.join(','))}`,
-        { method: 'GET', headers },
+        { method: 'GET', headers, signal: batchController.signal },
       )
       const data = await res.json().catch(() => ({}))
       const rows: any[] = Array.isArray(data?.citations) ? data.citations : []
@@ -112,12 +202,229 @@ export default function PagedList({
         if (row?.fulltext_url) nextShow[id] = true
       }
 
-      setLlmClassified((prev) => ({ ...prev, ...nextLlm }))
-      setHumanVerified((prev) => ({ ...prev, ...nextHuman }))
-      setShowClassify((prev) => ({ ...prev, ...nextShow }))
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, ...nextLlm }))
+      setHumanVerified((prev: Record<number, boolean>) => ({ ...prev, ...nextHuman }))
+      setShowClassify((prev: Record<number, boolean>) => ({ ...prev, ...nextShow }))
+
+      // Fetch latest agent runs for this page (L1=title_abstract, L2=fulltext)
+      try {
+        const shouldFetchRuns = (screeningStep === 'l1' || screeningStep === 'l2') && pageIds.length
+        if (shouldFetchRuns) {
+          const pipeline = screeningStep === 'l2' ? 'fulltext' : 'title_abstract'
+
+          const runsKey = `${srId}|${pipeline}|${pageIds.join(',')}`
+          // Cancel any in-flight runs request.
+          try {
+            runsAbortRef.current?.abort()
+          } catch {}
+          const runsController = new AbortController()
+          runsAbortRef.current = runsController
+
+          // If we already fetched exactly this set, skip.
+          if (runsKeyRef.current === runsKey) return
+          runsKeyRef.current = runsKey
+
+          const r2 = await fetch(
+            `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=${encodeURIComponent(
+              pipeline,
+            )}&citation_ids=${encodeURIComponent(pageIds.join(','))}`,
+            { method: 'GET', headers, signal: runsController.signal },
+          )
+          const j2 = await r2.json().catch(() => ({}))
+          if (r2.ok && Array.isArray(j2?.runs)) {
+            const grouped: Record<number, LatestAgentRun[]> = {}
+            for (const run of j2.runs as LatestAgentRun[]) {
+              const cid = Number((run as any)?.citation_id)
+              if (!Number.isFinite(cid)) continue
+              if (!grouped[cid]) grouped[cid] = []
+              grouped[cid].push(run)
+            }
+            setLatestRunsByCitation((prev: Record<number, LatestAgentRun[]>) => ({ ...prev, ...grouped }))
+          }
+        }
+      } catch {
+        // best-effort
+      }
     }
     fetchCitations()
-  }, [citationIds, page, pageSize, questions, srId])
+  }, [citationIds, page, pageSize, questions, srId, screeningStep])
+
+  // Cleanup any in-flight requests on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        batchAbortRef.current?.abort()
+      } catch {}
+      try {
+        runsAbortRef.current?.abort()
+      } catch {}
+    }
+  }, [])
+
+  // Reset cached runs when switching steps (avoid mixing l1/l2 pipeline results)
+  useEffect(() => {
+    setLatestRunsByCitation({})
+  }, [screeningStep])
+
+  const isValidatedForStep = (row: any): boolean => {
+    if (!row) return false
+    const hasValidationsList = (v: any): boolean => {
+      if (!v) return false
+      if (Array.isArray(v)) return v.length > 0
+      if (typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v)
+          return Array.isArray(parsed) && parsed.length > 0
+        } catch {
+          return false
+        }
+      }
+      return false
+    }
+
+    // Prefer new per-step validations list; fall back to legacy single fields.
+    if (screeningStep === 'l1') return hasValidationsList(row?.l1_validations) || Boolean(row?.l1_validated_by)
+    if (screeningStep === 'l2') return hasValidationsList(row?.l2_validations) || Boolean(row?.l2_validated_by)
+    if (screeningStep === 'extract')
+      return hasValidationsList(row?.parameters_validations) || Boolean(row?.parameters_validated_by)
+    return false
+  }
+
+  const computeNeedsValidation = (citationId: number, row: any): boolean => {
+    // If validated, it no longer “needs validation”
+    if (isValidatedForStep(row)) return false
+
+    const runs = latestRunsByCitation[citationId] || []
+    if (!runs.length) {
+      // Fallback for older flow where we only have llm_* columns (no screening_agent_runs).
+      // If we have any llm result, we can still apply the low-confidence rule.
+      let hasAnyLlm = false
+      let hasLowConfidence = false
+
+      for (const q of questions || []) {
+        if (!q) continue
+        const llmCol = snakeCaseColumn(q, true)
+        const llmVal = row?.[llmCol]
+        if (!llmVal) continue
+        hasAnyLlm = true
+        let conf: number | null = null
+        try {
+          const obj = typeof llmVal === 'string' ? JSON.parse(llmVal) : llmVal
+          conf = Number((obj as any)?.confidence)
+        } catch {
+          conf = null
+        }
+
+        const ck = criterionKeyFromQuestion(q)
+        const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[ck]) : NaN
+        const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : threshold
+
+        if (!Number.isFinite(conf as any)) {
+          // Missing/invalid confidence is treated conservatively.
+          hasLowConfidence = true
+        } else if ((conf as number) < thr) {
+          hasLowConfidence = true
+        }
+      }
+
+      if (!hasAnyLlm) {
+        // Not screened yet => not in the human-review queue.
+        return false
+      }
+      return hasLowConfidence
+    }
+
+    // Group by criterion_key
+    const byKey: Record<string, LatestAgentRun[]> = {}
+    for (const r of runs) {
+      const key = String((r as any)?.criterion_key || '')
+      if (!key) continue
+      if (!byKey[key]) byKey[key] = []
+      byKey[key].push(r)
+    }
+
+    // Rule (aligned with backend):
+    // - Auto-excluded iff ANY criterion is confident exclude AND critical agrees.
+    // - Needs human review iff NOT auto-excluded AND (any low confidence OR any critical disagreement).
+    // - PLUS: any parse/guardrail issue should trigger needs review (conservative).
+
+    let hasConfidentExclude = false
+    let hasLowConfidence = false
+    let hasCriticalDisagree = false
+    let hasAnyGuardrailIssue = false
+
+    for (const key of Object.keys(byKey)) {
+      const items = byKey[key]
+      const screening = items.find((x) => String((x as any)?.stage) === 'screening')
+      const critical = items.find((x) => String((x as any)?.stage) === 'critical')
+
+      const scrG = (screening as any)?.guardrails
+      const critG = (critical as any)?.guardrails
+      if (hasGuardrailIssue(scrG) || hasGuardrailIssue(critG)) {
+        hasAnyGuardrailIssue = true
+      }
+
+      const conf = Number((screening as any)?.confidence)
+      const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[key]) : NaN
+      const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : threshold
+
+      if (Number.isFinite(conf) && conf < thr) hasLowConfidence = true
+
+      const ans = String((screening as any)?.answer || '')
+      const critAns = String((critical as any)?.answer || '').trim()
+      // Conservative: missing critical is treated as disagreement (needs review)
+      const critAgrees = !!critical && critAns !== '' && critAns === 'None of the above'
+
+      if (Number.isFinite(conf) && conf >= thr && ans.toLowerCase().includes('(exclude)') && critAgrees) {
+        hasConfidentExclude = true
+      }
+
+      const criticalAns = String((critical as any)?.answer || '')
+      // In our critical prompt contract, agreement is "None of the above".
+      if (!critical || criticalAns.trim() === '' || criticalAns.trim() !== 'None of the above') {
+        hasCriticalDisagree = true
+      }
+    }
+
+    if (hasConfidentExclude) return false
+    return hasLowConfidence || hasCriticalDisagree || hasAnyGuardrailIssue
+  }
+
+  const filteredCitationData = (serverFiltered ? citationData : citationData.filter((row: any) => {
+    const id = Number(row?.id)
+    if (!Number.isFinite(id)) return false
+    const validated = isValidatedForStep(row)
+    const needs = computeNeedsValidation(id, row)
+    const runs = latestRunsByCitation[id] || []
+    const notScreened = (!runs.length) && !questions.some((q) => {
+      const llmCol = snakeCaseColumn(q, true)
+      return Boolean(row?.[llmCol])
+    })
+    const unvalidated = !validated
+    if (filterMode === 'all') return true
+    if (filterMode === 'validated') return validated
+    if (filterMode === 'unvalidated') return unvalidated
+    if (filterMode === 'not_screened') return notScreened
+    if (filterMode === 'needs') return needs
+    return true
+  }))
+
+  // Emit list stats upward (so CitationListPage can render a floating metrics module)
+  useEffect(() => {
+    if (!onStatsChange) return
+    const total = citationData.length
+    let validated = 0
+    let needsValidation = 0
+    for (const row of citationData) {
+      const id = Number(row?.id)
+      if (!Number.isFinite(id)) continue
+      if (isValidatedForStep(row)) validated += 1
+      if (computeNeedsValidation(id, row)) needsValidation += 1
+    }
+    const unvalidated = Math.max(0, total - validated)
+    onStatsChange({ total, needsValidation, validated, unvalidated })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [citationData, threshold, screeningStep, latestRunsByCitation, thresholdByCriterionKey])
 
   // NOTE: Previously we fetched each citation via /citations/get.
   // This is now replaced by a single /citations/batch call per page.
@@ -144,6 +451,41 @@ export default function PagedList({
     }
     if (!srId) return
 
+    // Phase 2 wiring: list-level “Classify/AI” triggers orchestrated agentic run.
+    // (Backend reads SR criteria; no need to fan out per-question calls.)
+    if (screeningStep === 'l1') {
+      await fetch('/api/can-sr/screen/title-abstract/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(id),
+          temperature: 0.0,
+          max_tokens: 1200,
+          prompt_version: 'v1',
+        }),
+      })
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      return
+    }
+
+    if (screeningStep === 'l2') {
+      await fetch('/api/can-sr/screen/fulltext/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(id),
+          temperature: 0.0,
+          max_tokens: 2000,
+          prompt_version: 'v1',
+        }),
+      })
+      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      return
+    }
+
+    // Other steps keep legacy behavior.
     for (let i = 0; i < questions.length; i++) {
       const bodyPayload = {
         question: questions[i],
@@ -156,7 +498,7 @@ export default function PagedList({
         { method: 'POST', headers, body: JSON.stringify(bodyPayload) },
       )
     }
-    setLlmClassified((prev) => ({ ...prev, [id]: true }))
+    setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
   }
 
   const onChooseFile = (id: number) => {
@@ -196,16 +538,66 @@ export default function PagedList({
       { method: 'POST', headers, body: fd as any },
     )
 
-    setShowClassify((prev) => ({ ...prev, [id]: true }))
+    setShowClassify((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
   }
 
   return (
     <div className="flex flex-col items-center space-y-4">
+      {/* Controls moved to CitationListPage floating metrics module when provided.
+          Keep fallback local controls for other callers. */}
+      {((screeningStep === 'l1' || screeningStep === 'l2') &&
+        (typeof thresholdProp !== 'number' || !filterModeProp)) ? (
+        <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Threshold</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={threshold}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                const v = Number(e.target.value)
+                if (!Number.isFinite(v)) return
+                const nv = Math.max(0, Math.min(1, v))
+                setThresholdLocal(nv)
+                onThresholdChange?.(nv)
+              }}
+              className="w-24 rounded-md border border-gray-200 px-2 py-1 text-sm"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Filter</label>
+            <select
+              value={filterMode}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                const v = e.target.value as any
+                setFilterModeLocal(v)
+                onFilterModeChange?.(v)
+              }}
+              className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+            >
+              <option value="needs">Needs human review</option>
+              <option value="unvalidated">Unvalidated</option>
+              <option value="validated">Validated</option>
+              <option value="not_screened">Not screened yet</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+        </div>
+      ) : null}
+
       <ul className="w-full space-y-2">
-        {citationData.map((data) => (
+        {filteredCitationData.map((data: any) => (
           <li
             key={data.id}
-            className="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-4 py-2"
+            className={
+              'flex items-center justify-between rounded-md border px-4 py-2 ' +
+              ((screeningStep === 'l1' || screeningStep === 'l2') && computeNeedsValidation(Number(data.id), data)
+                ? 'border-amber-300 bg-amber-50'
+                : 'border-gray-200 bg-gray-50')
+            }
           >
             <div className="flex flex-col space-y-2 pr-4">
               <p className="text-xs text-gray-600">Citation #{data.id}</p>
@@ -219,7 +611,7 @@ export default function PagedList({
               <button
                 onClick={() =>
                   router.push(
-                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}`,
+                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}&filter=${encodeURIComponent(filterMode)}`,
                   )
                 }
                 className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
@@ -334,7 +726,7 @@ export default function PagedList({
           <label className="text-sm text-gray-700">{dict.common.jumpToPage}</label>
           <input
             value={jumpPageInput}
-            onChange={(e) => setJumpPageInput(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJumpPageInput(e.target.value)}
             className="w-20 rounded-md border border-gray-200 px-2 py-1 text-sm"
             placeholder={String(page)}
             inputMode="numeric"

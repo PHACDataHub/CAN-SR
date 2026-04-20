@@ -489,6 +489,7 @@ export default function CanSrL2ScreenPage() {
       <GCHeader />
 
       <SRHeader 
+        backLabel={dict.cansr.backToCitations}
         title={dict.screening.parameterExtraction}
         srName=""
         backHref={`/can-sr/extract?sr_id=${encodeURIComponent(srId || '')}`}

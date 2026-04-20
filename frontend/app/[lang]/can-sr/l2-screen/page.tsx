@@ -56,39 +56,30 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
     },
   })
 
-  for (let i = 0; i < (criteria?.questions || []).length; i++) {
-    const question = criteria.questions[i]
-    const options = criteria.possible_answers?.[i] || []
-    calls.push({
-      key: `l2_classify_${i}`,
-      label: `L2: ${question}`,
-      run: async () => {
-        const res = await fetch(
-          `/api/can-sr/screen?action=classify&sr_id=${encodeURIComponent(
-            srId,
-          )}&citation_id=${encodeURIComponent(String(citationId))}`,
-          {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              question,
-              options,
-              include_columns: ['title', 'abstract'],
-              screening_step: 'l2',
-              model,
-              temperature: 0.0,
-              max_tokens: 2000,
-            }),
-          },
-        )
-
-        if (!res.ok) {
-          const text = await res.text().catch(() => '')
-          throw new Error(text || `L2 classify failed (${res.status})`)
-        }
-      },
-    })
-  }
+  // Phase 2 wiring: run a single orchestrated fulltext screening+critical per citation.
+  // (The backend reads SR criteria, so we do not need to fan out per-question calls.)
+  calls.push({
+    key: `l2_agentic_run`,
+    label: `L2 agentic (screening + critical)`,
+    run: async () => {
+      const res = await fetch('/api/can-sr/screen/fulltext/run', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sr_id: srId,
+          citation_id: Number(citationId),
+          model,
+          temperature: 0.0,
+          max_tokens: 2000,
+          prompt_version: 'v1',
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || `L2 agentic run failed (${res.status})`)
+      }
+    },
+  })
 
   return calls
 }

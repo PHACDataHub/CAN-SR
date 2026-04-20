@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams, useRouter } from 'next/navigation'
+import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import PagedList from '@/components/can-sr/PagedList'
@@ -9,6 +9,14 @@ import { Bot, Check, Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { ModelSelector } from '@/components/chat'
 import { toast } from 'react-hot-toast'
+import ScreeningMetricsPanel, {
+  type ScreeningMetricsStats,
+  type ScreeningMetricsSummary,
+  type ScreeningCriterionMetrics,
+  type CalibrationCriterion,
+  type LiveConfidenceHistogramCriterion,
+} from '@/components/can-sr/ScreeningMetricsPanel'
+import ScreeningMetricsModal from '@/components/can-sr/ScreeningMetricsModal'
 import {
   Dialog,
   DialogContent,
@@ -63,6 +71,7 @@ export default function CitationsListPage({
   void buildCitationAiCalls
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { lang } = useParams<{ lang: string }>()
   const srId = searchParams?.get('sr_id')
   const dict = useDictionary()
 
@@ -73,6 +82,106 @@ export default function CitationsListPage({
   const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini')
   const [error, setError] = useState<string | null>(null)
   const [criteriaData, setCriteriaData] = useState<CriteriaData | null>()
+
+  // Phase 1 single-threshold is deprecated; kept for backward compatibility.
+  const [threshold, setThreshold] = useState<number>(0.9)
+  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('all')
+  const [filterHydrated, setFilterHydrated] = useState<boolean>(false)
+
+  const filterParam = searchParams?.get('filter')
+  const filterStorageKey = useMemo(() => {
+    if (!srId) return null
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return null
+    return `canSr:lastFilter:${srId}:${screeningStep}`
+  }, [srId, screeningStep])
+
+  const normalizeFilter = useCallback(
+    (v: any): 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all' | null => {
+      const s = String(v || '').toLowerCase().trim()
+      if (s === 'needs') return 'needs'
+      if (s === 'validated') return 'validated'
+      if (s === 'unvalidated') return 'unvalidated'
+      if (s === 'not_screened') return 'not_screened'
+      if (s === 'all') return 'all'
+      return null
+    },
+    [],
+  )
+
+  // Hydrate filter from URL (preferred) or from localStorage (fallback).
+  // IMPORTANT: do not depend on `filterMode` here, otherwise user changes can get
+  // overwritten by a stale URL param, and in some cases can lead to update loops.
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return
+
+    const fromUrl = normalizeFilter(filterParam)
+    if (fromUrl) {
+      setFilterMode((prev) => (prev === fromUrl ? prev : fromUrl))
+      setFilterHydrated(true)
+      return
+    }
+
+    // Only fall back to storage when URL doesn't specify a filter.
+    if (filterStorageKey) {
+      try {
+        const stored = window.localStorage.getItem(filterStorageKey)
+        const fromStore = normalizeFilter(stored)
+        if (fromStore) setFilterMode((prev) => (prev === fromStore ? prev : fromStore))
+      } catch {
+        // ignore
+      }
+    }
+
+    // Even if no stored value exists, we consider hydration complete.
+    setFilterHydrated(true)
+  }, [srId, screeningStep, filterParam, filterStorageKey, normalizeFilter])
+
+  // Persist last-used filter (keyed by SR + step). We intentionally *do not*
+  // mutate the URL here to avoid navigation loops that can cause repeated
+  // data fetching (e.g. agent-runs/latest).
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) return
+    if (!filterStorageKey) return
+    try {
+      window.localStorage.setItem(filterStorageKey, filterMode)
+    } catch {
+      // ignore
+    }
+  }, [srId, screeningStep, filterMode, filterStorageKey])
+  // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
+  const [_pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
+
+  // Phase 2 metrics (SR-wide)
+  const [srMetricsSummary, setSrMetricsSummary] = useState<ScreeningMetricsSummary | undefined>(undefined)
+  const [srCriterionMetrics, setSrCriterionMetrics] = useState<ScreeningCriterionMetrics[] | undefined>(undefined)
+  const [srCalibration, setSrCalibration] = useState<CalibrationCriterion[] | undefined>(undefined)
+  const [srLiveHistogram, setSrLiveHistogram] = useState<LiveConfidenceHistogramCriterion[] | undefined>(undefined)
+  const [_srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
+
+  // Backend warnings (e.g., legacy data needs run-all)
+  const [srWarnings, setSrWarnings] = useState<any[] | null>(null)
+
+  const legacyWarning = useMemo(() => {
+    const ws = Array.isArray(srWarnings) ? srWarnings : []
+    return (
+      ws.find((w) => String(w?.code || '').toUpperCase() === 'LEGACY_DATA_NEEDS_RUN_ALL') ||
+      null
+    )
+  }, [srWarnings])
+
+  // Silence eslint unused warnings for state that is intentionally retained for backwards-compatibility.
+  void _pageStats
+  void _srThresholds
+  const [metricsRefreshKey, setMetricsRefreshKey] = useState<number>(0)
+
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState<boolean>(false)
+
+  // Draft editing: user can adjust thresholds locally, then click Save.
+  const [draftThresholds, setDraftThresholds] = useState<Record<string, any> | null>(null)
+  const [thresholdsDirty, setThresholdsDirty] = useState<boolean>(false)
+  const [savingThresholds, setSavingThresholds] = useState<boolean>(false)
 
   // Run-all job tracking (persist across modal close / refresh)
   const [runAllForce, setRunAllForce] = useState<boolean>(false)
@@ -107,31 +216,60 @@ export default function CitationsListPage({
       throw new Error('Missing srId: Redirecting to /can-sr')
     }
 
+    // Avoid firing the initial list fetch with the default `all` filter.
+    // Wait until we have hydrated filterMode from URL/localStorage.
+    if ((screeningStep === 'l1' || screeningStep === 'l2') && !filterHydrated) {
+      return
+    }
+
     const loadCitations = async () => {
       setLoading(true)
       setError(null)
       try {
         const headers = getAuthHeaders()
-        let filterStep = ''
-        if (screeningStep === 'l2') {
-          filterStep = 'l1'
-        } else if (screeningStep === 'extract') {
-          filterStep = 'l2'
-        }
-        const res = await fetch(
-          `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterStep)}`,
-          { method: 'GET', headers },
-        )
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          const errMsg =
-            data?.error ||
-            data?.detail ||
-            `Failed to load citations (${res.status})`
-          setError(errMsg)
-          setCitationIds([])
+        // For list paging we use backend-computed filtered citation ids so filtering applies
+        // across ALL pages (fixes empty list when current page has no matches).
+        if (screeningStep === 'l1' || screeningStep === 'l2') {
+          const res = await fetch(
+            `/api/can-sr/screen/citation-ids?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+              screeningStep,
+            )}&filter=${encodeURIComponent(filterMode)}`,
+            { method: 'GET', headers },
+          )
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) {
+            const errMsg =
+              data?.error ||
+              data?.detail ||
+              `Failed to load citations (${res.status})`
+            setError(errMsg)
+            setCitationIds([])
+          } else {
+            setCitationIds(Array.isArray(data?.citation_ids) ? data.citation_ids : [])
+          }
         } else {
-          setCitationIds(data?.citation_ids || [])
+          // extract view still uses legacy list endpoint (server eligibility differs)
+          let filterStep = ''
+          if (screeningStep === 'extract') {
+            filterStep = 'l2'
+          }
+          const res = await fetch(
+            `/api/can-sr/citations/list?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(
+              filterStep,
+            )}`,
+            { method: 'GET', headers },
+          )
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) {
+            const errMsg =
+              data?.error ||
+              data?.detail ||
+              `Failed to load citations (${res.status})`
+            setError(errMsg)
+            setCitationIds([])
+          } else {
+            setCitationIds(data?.citation_ids || [])
+          }
         }
       } catch (err: any) {
         console.error('Failed to fetch citations', err)
@@ -166,7 +304,121 @@ export default function CitationsListPage({
 
     loadCriteria()
     loadCitations()
-  }, [srId, router, screeningStep])
+  }, [srId, router, screeningStep, filterMode, filterHydrated])
+
+  // Load SR thresholds + metrics (L1/L2 only)
+  useEffect(() => {
+    if (!srId) return
+    if (!(screeningStep === 'l1' || screeningStep === 'l2')) {
+      setSrMetricsSummary(undefined)
+      setSrCriterionMetrics(undefined)
+      setSrThresholds(null)
+      return
+    }
+
+    const load = async () => {
+      try {
+        const headers = getAuthHeaders()
+
+        // 1) thresholds
+        const tRes = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          { method: 'GET', headers },
+        )
+        const tJson = await tRes.json().catch(() => ({}))
+        const thresholds = (tRes.ok ? tJson?.screening_thresholds : null) || {}
+        setSrThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+        setDraftThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+        setThresholdsDirty(false)
+
+        // 2) metrics
+        const mRes = await fetch(
+          `/api/can-sr/screen/metrics?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}`,
+          { method: 'GET', headers },
+        )
+        const mJson = await mRes.json().catch(() => ({}))
+        if (mRes.ok) {
+          const stepBlock = mJson?.steps?.[screeningStep]
+          setSrMetricsSummary(stepBlock?.summary)
+          setSrCriterionMetrics(stepBlock?.criteria)
+          setSrWarnings(Array.isArray(mJson?.warnings) ? mJson.warnings : null)
+        } else {
+          setSrMetricsSummary(undefined)
+          setSrCriterionMetrics(undefined)
+          setSrWarnings(null)
+        }
+
+        // 3) calibration (validated set)
+        const cRes = await fetch(
+          `/api/can-sr/screen/calibration?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}`,
+          { method: 'GET', headers },
+        )
+        const cJson = await cRes.json().catch(() => ({}))
+        if (cRes.ok && Array.isArray(cJson?.criteria)) {
+          setSrCalibration(cJson.criteria as CalibrationCriterion[])
+        } else {
+          setSrCalibration(undefined)
+        }
+
+        // 4) live confidence histogram (unlabelled/agree/disagree)
+        const hRes = await fetch(
+          `/api/can-sr/screen/confidence-histogram?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
+            screeningStep,
+          )}&bins=20`,
+          { method: 'GET', headers },
+        )
+        const hJson = await hRes.json().catch(() => ({}))
+        if (hRes.ok && Array.isArray(hJson?.criteria)) {
+          setSrLiveHistogram(hJson.criteria as LiveConfidenceHistogramCriterion[])
+        } else {
+          setSrLiveHistogram(undefined)
+        }
+      } catch {
+        setSrMetricsSummary(undefined)
+        setSrCriterionMetrics(undefined)
+        setSrCalibration(undefined)
+        setSrLiveHistogram(undefined)
+        setSrThresholds(null)
+        setSrWarnings(null)
+      }
+    }
+    load()
+  }, [srId, screeningStep, metricsRefreshKey])
+
+  const persistThresholds = useCallback(
+    async (nextThresholds: Record<string, any>) => {
+      if (!srId) return
+      try {
+        setSavingThresholds(true)
+        const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
+        const res = await fetch(
+          `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
+          {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ screening_thresholds: nextThresholds }),
+          },
+        )
+        const j = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setSrThresholds(j?.screening_thresholds || nextThresholds)
+          setDraftThresholds(j?.screening_thresholds || nextThresholds)
+          setThresholdsDirty(false)
+          // Refresh metrics so counts reflect the new thresholds.
+          setMetricsRefreshKey((k) => k + 1)
+        }
+      } catch {
+        // ignore
+      } finally {
+        setSavingThresholds(false)
+      }
+    },
+    [srId],
+  )
 
   // Restore persisted run-all job id
   useEffect(() => {
@@ -323,7 +575,37 @@ export default function CitationsListPage({
         }
       />
 
-      <main className="mx-auto max-w-4xl px-6 py-10">
+      {/*
+        Layout: left floating/side metrics module + right list.
+        (A true fixed overlay can be added later; this keeps it responsive and simple.)
+      */}
+      <main className="mx-auto max-w-7xl px-6 py-10">
+        {legacyWarning ? (
+          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="font-medium">Legacy screening data detected</div>
+            <div className="mt-1 text-amber-800">
+              {String(legacyWarning?.message ||
+                'This SR has legacy llm_* outputs but no agentic runs. Please run Run-all to regenerate results.')}
+            </div>
+            <div className="mt-2 text-[12px] text-amber-800">
+              Tip: when legacy data is detected, Run-all will automatically force overwrite to generate real agent runs.
+            </div>
+          </div>
+        ) : null}
+
+        <ScreeningMetricsModal
+          open={metricsDrawerOpen}
+          onOpenChange={setMetricsDrawerOpen}
+          title={dict?.screening?.metricsTitle || 'Screening metrics'}
+          stepLabel={displayMap[screeningStep]}
+          summary={srMetricsSummary}
+          criterionMetrics={srCriterionMetrics}
+          calibration={srCalibration}
+          liveHistogram={srLiveHistogram}
+          srId={srId}
+          step={screeningStep}
+        />
+
         <Dialog open={runAllModalOpen} onOpenChange={() => setRunAllModalOpen(false)}>
           <DialogContent className="sm:max-w-[560px]">
             <DialogHeader>
@@ -362,116 +644,214 @@ export default function CitationsListPage({
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">
-                {dict.screening.citationsList}
-              </h3>
-              <p className="mt-1 text-sm text-gray-600">
-                {dict.screening.citationsListDesc}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                disabled={!canRunAllServerSide || hasActiveRunAll}
-                onClick={() => setRunAllModalOpen(true)}
-                className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
-                title={dict.screening.runAllAI}
-              >
-                <span className="inline-flex items-center gap-1">
-                  {dict.screening.runAllAI}
-                  <Wand2 className="h-4 w-4" />
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!srId || exporting}
-                onClick={async () => {
-                  if (!srId) return
-                  try {
-                    setExporting(true)
-                    const headers = getAuthHeaders()
-                    const res = await fetch(
-                      `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
-                      { method: 'GET', headers },
-                    )
-                    if (!res.ok) {
-                      const text = await res.text().catch(() => '')
-                      throw new Error(text || `Export failed (${res.status})`)
-                    }
-                    const blob = await res.blob()
-                    const url = window.URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = `citations_${srId}.csv`
-                    document.body.appendChild(a)
-                    a.click()
-                    a.remove()
-                    window.URL.revokeObjectURL(url)
-                  } catch (e: any) {
-                    console.error('Export failed', e)
-                    setError(e?.message || 'Export failed')
-                  } finally {
-                    setExporting(false)
-                  }
+        <div className="grid grid-cols-12 gap-6">
+          <aside className="col-span-12 md:col-span-5">
+            <div className="sticky top-6">
+              <ScreeningMetricsPanel
+                title={dict?.screening?.metricsTitle || 'Screening metrics'}
+                filterMode={filterMode}
+                onFilterModeChange={setFilterMode}
+                onOpenDetails={() => setMetricsDrawerOpen(true)}
+                stats={undefined}
+                summary={srMetricsSummary}
+                criterionMetrics={srCriterionMetrics}
+                calibration={srCalibration}
+                showFilter={false}
+                thresholdsDirty={thresholdsDirty}
+                savingThresholds={savingThresholds}
+                onSaveThresholds={() => {
+                  const next = draftThresholds && typeof draftThresholds === 'object' ? draftThresholds : {}
+                  void persistThresholds(next)
                 }}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
-              >
-                {exporting ? dict.common.downloading : dict.common.export}
-              </button>
+                onCriterionThresholdChange={(criterionKey, v) => {
+                  // Update draft per-step thresholds
+                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
+                  const stepKey = String(screeningStep)
+                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
+                    ? { ...(base as any)[stepKey] }
+                    : {}
+                  stepMap[criterionKey] = v
+                  ;(base as any)[stepKey] = stepMap
+                  setDraftThresholds(base)
+                  setThresholdsDirty(true)
+                }}
+                onCriterionThresholdCommit={(criterionKey, v) => {
+                  // Ensure draft is updated and then persist.
+                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
+                  const stepKey = String(screeningStep)
+                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
+                    ? { ...(base as any)[stepKey] }
+                    : {}
+                  stepMap[criterionKey] = v
+                  ;(base as any)[stepKey] = stepMap
+                  setDraftThresholds(base)
+                  setThresholdsDirty(true)
+                  void persistThresholds(base)
+                }}
+              />
+            </div>
+          </aside>
 
-              <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-                <div className="flex items-center space-x-2">
-                  <Bot className="h-5 w-5 text-green-600" />
-                  <span className="text-sm text-gray-700">
-                    {dict.screening.llmClassified}
-                  </span>
+          <div className="col-span-12 md:col-span-7">
+            <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {dict.screening.citationsList}
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    {dict.screening.citationsListDesc}
+                  </p>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <Check className="h-5 w-5 text-green-600" />
-                  <span className="text-sm text-gray-700">
-                    {dict.screening.humanVerified}
-                  </span>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={!canRunAllServerSide || hasActiveRunAll}
+                    onClick={() => setRunAllModalOpen(true)}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                    title={dict.screening.runAllAI}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {dict.screening.runAllAI}
+                      <Wand2 className="h-4 w-4" />
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!srId || exporting}
+                    onClick={async () => {
+                      if (!srId) return
+                      try {
+                        setExporting(true)
+                        const headers = getAuthHeaders()
+                        const res = await fetch(
+                          `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
+                          { method: 'GET', headers },
+                        )
+                        if (!res.ok) {
+                          const text = await res.text().catch(() => '')
+                          throw new Error(text || `Export failed (${res.status})`)
+                        }
+                        const blob = await res.blob()
+                        const url = window.URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `citations_${srId}.csv`
+                        document.body.appendChild(a)
+                        a.click()
+                        a.remove()
+                        window.URL.revokeObjectURL(url)
+                      } catch (e: any) {
+                        console.error('Export failed', e)
+                        setError(e?.message || 'Export failed')
+                      } finally {
+                        setExporting(false)
+                      }
+                    }}
+                    className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
+                  >
+                    {exporting ? dict.common.downloading : dict.common.export}
+                  </button>
+
+                  <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
+                    <div className="flex items-center space-x-2">
+                      <Bot className="h-5 w-5 text-green-600" />
+                      <span className="text-sm text-gray-700">
+                        {dict.screening.llmClassified}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Check className="h-5 w-5 text-green-600" />
+                      <span className="text-sm text-gray-700">
+                        {dict.screening.humanVerified}
+                      </span>
+                    </div>
+                  </div>
                 </div>
+              </div>
+
+              {/* Run-all status/controls are shown in the bottom-right floating panel. */}
+
+              <div className="mt-6">
+                {/* Filter bar moved above the list view */}
+                {(screeningStep === 'l1' || screeningStep === 'l2') ? (
+                  <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
+                    <label className="text-sm text-gray-700">Filter</label>
+                    <select
+                      value={filterMode}
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                        const next = e.target.value as any
+                        setFilterMode(next)
+                        // Keep URL in sync on *user intent* (safe, avoids effect-driven loops).
+                        try {
+                          const params = new URLSearchParams(searchParams?.toString() || '')
+                          params.set('sr_id', String(srId || ''))
+                          params.set('filter', String(next))
+                          router.replace(
+                            `/${encodeURIComponent(String(lang || 'en'))}/can-sr/${encodeURIComponent(pageview)}?${params.toString()}`,
+                          )
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                      className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+                    >
+                      <option value="all">All</option>
+                      <option value="needs">Needs human review</option>
+                      <option value="unvalidated">Unvalidated</option>
+                      <option value="validated">Validated</option>
+                      <option value="not_screened">Not screened yet</option>
+                    </select>
+                  </div>
+                ) : null}
+
+                {loading ? (
+                  <div className="text-sm text-gray-600">
+                    {dict.screening.loadingCitations}
+                  </div>
+                ) : error ? (
+                  <div className="text-sm text-red-600">{error}</div>
+                ) : citationIds && citationIds.length === 0 ? (
+                  <div className="text-sm text-gray-600">
+                    {dict.screening.noCitations}
+                  </div>
+                ) : (
+                  <div>
+                    <PagedList
+                      citationIds={citationIds || []}
+                      srId={srId || ''}
+                      questions={criteriaData?.questions || []}
+                      possible_answers={criteriaData?.possible_answers || []}
+                      include={criteriaData?.include || []}
+                      screeningStep={screeningStep || ''}
+                      pageview={pageview}
+                      threshold={threshold}
+                      thresholdByCriterionKey={
+                        (draftThresholds && typeof draftThresholds === 'object'
+                          ? (draftThresholds as any)[String(screeningStep)]
+                          : null) || undefined
+                      }
+                      filterMode={filterMode}
+                      serverFiltered={screeningStep === 'l1' || screeningStep === 'l2'}
+                      onThresholdChange={setThreshold}
+                      onFilterModeChange={setFilterMode}
+                      onStatsChange={(s) => {
+                        // keep state for now (used elsewhere), but do not show in metrics panel
+                        setPageStats({
+                          scopeLabel: 'this page',
+                          total: s.total,
+                          needsValidation: s.needsValidation,
+                          validated: s.validated,
+                          unvalidated: s.unvalidated,
+                        })
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-
-          {/* Run-all status/controls are shown in the bottom-right floating panel. */}
-
-          <div className="mt-6">
-            {loading ? (
-              <div className="text-sm text-gray-600">
-                {dict.screening.loadingCitations}
-              </div>
-            ) : error ? (
-              <div className="text-sm text-red-600">{error}</div>
-            ) : citationIds && citationIds.length === 0 ? (
-              <div className="text-sm text-gray-600">
-                {dict.screening.noCitations}
-              </div>
-            ) : (
-              <div>
-                <div className="mb-3 text-sm text-gray-700">
-                  {dict.screening.totalCitations}{' '}
-                  {citationIds ? citationIds.length : 0}
-                </div>
-
-                <PagedList
-                  citationIds={citationIds || []}
-                  srId={srId || ''}
-                  questions={criteriaData?.questions || []}
-                  possible_answers={criteriaData?.possible_answers || []}
-                  include={criteriaData?.include || []}
-                  screeningStep={screeningStep || ''}
-                  pageview={pageview}
-                />
-              </div>
-            )}
           </div>
         </div>
       </main>

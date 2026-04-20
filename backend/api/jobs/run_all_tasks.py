@@ -14,8 +14,16 @@ from ..citations import router as citations_router
 from ..services.azure_openai_client import azure_openai_client
 from ..services.storage import storage_service
 from ..extract.router import extract_fulltext_from_storage
-from ..screen.router import update_inclusion_decision
-from ..screen.prompts import PROMPT_JSON_TEMPLATE, PROMPT_JSON_TEMPLATE_FULLTEXT
+from ..screen.router import update_inclusion_decision, _build_guardrails
+from ..screen.prompts import (
+    PROMPT_JSON_TEMPLATE,
+    PROMPT_JSON_TEMPLATE_FULLTEXT,
+    PROMPT_XML_TEMPLATE_TA,
+    PROMPT_XML_TEMPLATE_TA_CRITICAL,
+    PROMPT_XML_TEMPLATE_FULLTEXT,
+    PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL,
+)
+from ..screen.agentic_utils import build_critical_options, parse_agent_xml, resolve_option
 from ..extract.prompts import PARAMETER_PROMPT_JSON
 from ..core.config import settings
 
@@ -159,34 +167,103 @@ async def _run_l1_for_citation(
         if not azure_openai_client.is_configured():
             raise RuntimeError("Azure OpenAI client not configured")
 
-        options_listed = "\n".join([f"{j}. {opt}" for j, opt in enumerate(opts)])
-        prompt = PROMPT_JSON_TEMPLATE.format(question=q, cit=citation_text, options=options_listed, xtra=xtra)
-        llm_response = await azure_openai_client.simple_chat(
-            user_message=prompt,
+        # --- Agentic (screening + critical) ---
+        # We persist normalized runs to screening_agent_runs so /screen/metrics can compute SR-wide progress.
+        # We ALSO persist llm_* JSONB columns for backwards compatibility with the existing UI.
+        options_listed = "\n".join([str(opt) for opt in opts])
+        criterion_key = snake_case(q, max_len=56)
+
+        screening_prompt = PROMPT_XML_TEMPLATE_TA.format(
+            question=q,
+            cit=citation_text,
+            options=options_listed,
+            xtra=xtra or "",
+        )
+        screening_raw = await azure_openai_client.simple_chat(
+            user_message=screening_prompt,
             system_prompt=None,
             model=model,
             max_tokens=2000,
             temperature=0.0,
         )
+        screening_parsed = parse_agent_xml(str(screening_raw))
+        screening_answer = resolve_option(screening_parsed.answer, opts)
 
-        import json
+        await run_in_threadpool(
+            cits_dp_service.insert_screening_agent_run,
+            {
+                "sr_id": sr.get("_id") or sr.get("id") or sr.get("sr_id") or "",
+                "table_name": table_name,
+                "citation_id": int(citation_id),
+                "pipeline": "title_abstract",
+                "criterion_key": criterion_key,
+                "stage": "screening",
+                "answer": screening_answer,
+                "confidence": screening_parsed.confidence,
+                "rationale": screening_parsed.rationale,
+                "raw_response": str(screening_raw),
+                "guardrails": _build_guardrails(screening_parsed, raw_text=str(screening_raw), stage="screening"),
+                "model": model,
+                "prompt_version": "run_all",
+                "temperature": 0.0,
+            },
+        )
 
-        parsed = json.loads(llm_response)
-        selected_value = str(parsed.get("selected", "")).strip()
-        resolved_selected = f"None of the above - {selected_value}"
-        for opt in opts:
-            if opt.lower() in selected_value.lower():
-                resolved_selected = opt
-                break
+        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
+        critical_listed = "\n".join([str(o) for o in critical_opts])
+        critical_prompt = PROMPT_XML_TEMPLATE_TA_CRITICAL.format(
+            question=q,
+            cit=citation_text,
+            screening_answer=screening_answer,
+            options=critical_listed,
+            xtra=xtra or "",
+            # run-all does not currently inject SR-scoped critical prompt additions (done in /screen/*/run)
+            critical_additions="(none)",
+        )
+        critical_raw = await azure_openai_client.simple_chat(
+            user_message=critical_prompt,
+            system_prompt=None,
+            model=model,
+            max_tokens=2000,
+            temperature=0.0,
+        )
+        critical_parsed = parse_agent_xml(str(critical_raw))
+        critical_answer = resolve_option(critical_parsed.answer, critical_opts)
+
+        await run_in_threadpool(
+            cits_dp_service.insert_screening_agent_run,
+            {
+                "sr_id": sr.get("_id") or sr.get("id") or sr.get("sr_id") or "",
+                "table_name": table_name,
+                "citation_id": int(citation_id),
+                "pipeline": "title_abstract",
+                "criterion_key": criterion_key,
+                "stage": "critical",
+                "answer": critical_answer,
+                "confidence": critical_parsed.confidence,
+                "rationale": critical_parsed.rationale,
+                "raw_response": str(critical_raw),
+                "guardrails": _build_guardrails(critical_parsed, raw_text=str(critical_raw), stage="critical"),
+                "model": model,
+                "prompt_version": "run_all",
+                "temperature": 0.0,
+            },
+        )
 
         classification_json = {
-            "selected": resolved_selected,
-            "explanation": parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or "",
-            "confidence": float(parsed.get("confidence") or 0.0) if str(parsed.get("confidence") or "").strip() else 0.0,
-            "evidence_sentences": parsed.get("evidence_sentences") or [],
-            "evidence_tables": parsed.get("evidence_tables") or [],
-            "evidence_figures": parsed.get("evidence_figures") or [],
-            "llm_raw": llm_response,
+            "selected": screening_answer,
+            "explanation": screening_parsed.rationale or "",
+            "confidence": screening_parsed.confidence if screening_parsed.confidence is not None else 0.0,
+            "evidence_sentences": [],
+            "evidence_tables": [],
+            "evidence_figures": [],
+            "llm_raw": str(screening_raw),
+            "critical": {
+                "selected": critical_answer,
+                "explanation": critical_parsed.rationale or "",
+                "confidence": critical_parsed.confidence,
+                "llm_raw": str(critical_raw),
+            },
         }
 
         await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)
@@ -273,15 +350,39 @@ async def _run_l2_for_citation(
     if not row:
         return (0, 0, 1)
 
+    # L2 fulltext screening applies BOTH L1 + L2 criteria.
     cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
+    l1 = cp.get("l1") if isinstance(cp, dict) else None
     l2 = cp.get("l2") if isinstance(cp, dict) else None
-    questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
-    possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
-    addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
-    questions = questions if isinstance(questions, list) else []
-    possible = possible if isinstance(possible, list) else []
-    addinfos = addinfos if isinstance(addinfos, list) else []
-    if not questions:
+
+    l1_questions = (l1 or {}).get("questions") if isinstance(l1, dict) else []
+    l2_questions = (l2 or {}).get("questions") if isinstance(l2, dict) else []
+    l1_possible = (l1 or {}).get("possible_answers") if isinstance(l1, dict) else []
+    l2_possible = (l2 or {}).get("possible_answers") if isinstance(l2, dict) else []
+    l1_addinfos = (l1 or {}).get("additional_infos") if isinstance(l1, dict) else []
+    l2_addinfos = (l2 or {}).get("additional_infos") if isinstance(l2, dict) else []
+
+    l1_questions = l1_questions if isinstance(l1_questions, list) else []
+    l2_questions = l2_questions if isinstance(l2_questions, list) else []
+    l1_possible = l1_possible if isinstance(l1_possible, list) else []
+    l2_possible = l2_possible if isinstance(l2_possible, list) else []
+    l1_addinfos = l1_addinfos if isinstance(l1_addinfos, list) else []
+    l2_addinfos = l2_addinfos if isinstance(l2_addinfos, list) else []
+
+    merged: List[tuple[str, str, int]] = []  # (question, source_step, idx)
+    seen_q: set[str] = set()
+    for idx, q in enumerate(l1_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged.append((q, "l1", idx))
+    for idx, q in enumerate(l2_questions):
+        if not isinstance(q, str) or not q.strip() or q in seen_q:
+            continue
+        seen_q.add(q)
+        merged.append((q, "l2", idx))
+
+    if not merged:
         return (0, 1, 0)
 
     include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or ["title", "abstract"]
@@ -342,31 +443,37 @@ async def _run_l2_for_citation(
                 continue
 
     any_ran = False
-    for i, q in enumerate(questions):
+    for q, source_step, idx in merged:
         # More responsive pause/cancel: check between questions
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise RunAllCanceled()
         await _wait_if_paused(job_id)
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
-        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+        if source_step == "l1":
+            opts = l1_possible[idx] if idx < len(l1_possible) and isinstance(l1_possible[idx], list) else []
+            xtra = l1_addinfos[idx] if idx < len(l1_addinfos) and isinstance(l1_addinfos[idx], str) else ""
+        else:
+            opts = l2_possible[idx] if idx < len(l2_possible) and isinstance(l2_possible[idx], list) else []
+            xtra = l2_addinfos[idx] if idx < len(l2_addinfos) and isinstance(l2_addinfos[idx], str) else ""
         col = snake_case_column(q)
         existing = row.get(col)
         if _should_skip_ai_output(existing, force=force):
             continue
 
-        options_listed = "\n".join([f"{j}. {opt}" for j, opt in enumerate(opts)])
-        prompt = PROMPT_JSON_TEMPLATE_FULLTEXT.format(
+        # --- Agentic (screening + critical) ---
+        options_listed = "\n".join([str(opt) for opt in opts])
+        criterion_key = snake_case(q, max_len=56)
+
+        screening_prompt = PROMPT_XML_TEMPLATE_FULLTEXT.format(
             question=q,
             options=options_listed,
-            xtra=xtra,
+            xtra=xtra or "",
             fulltext=fulltext,
             tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
             figures="\n".join(figures_lines) if figures_lines else "(none)",
         )
-
         if images:
-            llm_response = await azure_openai_client.multimodal_chat(
-                user_text=prompt,
+            screening_raw = await azure_openai_client.multimodal_chat(
+                user_text=screening_prompt,
                 images=images,
                 system_prompt=None,
                 model=model,
@@ -374,30 +481,102 @@ async def _run_l2_for_citation(
                 temperature=0.0,
             )
         else:
-            llm_response = await azure_openai_client.simple_chat(
-                user_message=prompt,
+            screening_raw = await azure_openai_client.simple_chat(
+                user_message=screening_prompt,
                 system_prompt=None,
                 model=model,
                 max_tokens=2000,
                 temperature=0.0,
             )
+        screening_parsed = parse_agent_xml(str(screening_raw))
+        screening_answer = resolve_option(screening_parsed.answer, opts)
 
-        parsed = json.loads(llm_response)
-        selected_value = str(parsed.get("selected", "")).strip()
-        resolved_selected = f"None of the above - {selected_value}"
-        for opt in opts:
-            if opt.lower() in selected_value.lower():
-                resolved_selected = opt
-                break
+        await run_in_threadpool(
+            cits_dp_service.insert_screening_agent_run,
+            {
+                "sr_id": sr.get("_id") or sr.get("id") or sr.get("sr_id") or "",
+                "table_name": table_name,
+                "citation_id": int(citation_id),
+                "pipeline": "fulltext",
+                "criterion_key": criterion_key,
+                "stage": "screening",
+                "answer": screening_answer,
+                "confidence": screening_parsed.confidence,
+                "rationale": screening_parsed.rationale,
+                "raw_response": str(screening_raw),
+                "guardrails": _build_guardrails(screening_parsed, raw_text=str(screening_raw), stage="screening"),
+                "model": model,
+                "prompt_version": "run_all",
+                "temperature": 0.0,
+            },
+        )
+
+        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
+        critical_listed = "\n".join([str(o) for o in critical_opts])
+        critical_prompt = PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL.format(
+            question=q,
+            screening_answer=screening_answer,
+            options=critical_listed,
+            xtra=xtra or "",
+            critical_additions="(none)",
+            fulltext=fulltext,
+            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
+            figures="\n".join(figures_lines) if figures_lines else "(none)",
+        )
+        if images:
+            critical_raw = await azure_openai_client.multimodal_chat(
+                user_text=critical_prompt,
+                images=images,
+                system_prompt=None,
+                model=model,
+                max_tokens=2000,
+                temperature=0.0,
+            )
+        else:
+            critical_raw = await azure_openai_client.simple_chat(
+                user_message=critical_prompt,
+                system_prompt=None,
+                model=model,
+                max_tokens=2000,
+                temperature=0.0,
+            )
+        critical_parsed = parse_agent_xml(str(critical_raw))
+        critical_answer = resolve_option(critical_parsed.answer, critical_opts)
+
+        await run_in_threadpool(
+            cits_dp_service.insert_screening_agent_run,
+            {
+                "sr_id": sr.get("_id") or sr.get("id") or sr.get("sr_id") or "",
+                "table_name": table_name,
+                "citation_id": int(citation_id),
+                "pipeline": "fulltext",
+                "criterion_key": criterion_key,
+                "stage": "critical",
+                "answer": critical_answer,
+                "confidence": critical_parsed.confidence,
+                "rationale": critical_parsed.rationale,
+                "raw_response": str(critical_raw),
+                "guardrails": _build_guardrails(critical_parsed, raw_text=str(critical_raw), stage="critical"),
+                "model": model,
+                "prompt_version": "run_all",
+                "temperature": 0.0,
+            },
+        )
 
         classification_json = {
-            "selected": resolved_selected,
-            "explanation": parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or "",
-            "confidence": float(parsed.get("confidence") or 0.0) if str(parsed.get("confidence") or "").strip() else 0.0,
-            "evidence_sentences": parsed.get("evidence_sentences") or [],
-            "evidence_tables": parsed.get("evidence_tables") or [],
-            "evidence_figures": parsed.get("evidence_figures") or [],
-            "llm_raw": llm_response,
+            "selected": screening_answer,
+            "explanation": screening_parsed.rationale or "",
+            "confidence": screening_parsed.confidence if screening_parsed.confidence is not None else 0.0,
+            "evidence_sentences": [],
+            "evidence_tables": [],
+            "evidence_figures": [],
+            "llm_raw": str(screening_raw),
+            "critical": {
+                "selected": critical_answer,
+                "explanation": critical_parsed.rationale or "",
+                "confidence": critical_parsed.confidence,
+                "llm_raw": str(critical_raw),
+            },
         }
 
         await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)

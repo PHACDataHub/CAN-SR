@@ -47,6 +47,9 @@ services:
   # POSTGRESQL - Database (Citations & Systematic Reviews)
   # =============================================================================
   pgdb-service:
+    # IMPORTANT: pin to a major version.
+    # Using `postgres` (latest) can auto-upgrade across major versions (e.g., 16 -> 18)
+    # and break existing on-disk data without a pg_upgrade/backup-restore.
     image: postgres
     container_name: pgdb-service
     restart: unless-stopped
@@ -57,7 +60,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./volumes/postgres:/var/lib/postgresql/data
+      - ./volumes/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d postgres -h localhost"]
       interval: 30s
@@ -68,3 +71,6 @@ services:
 networks:
   default:
     driver: bridge
+
+volumes:
+  backend_pgdata:
