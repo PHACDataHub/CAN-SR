@@ -579,9 +579,9 @@ class CitsDPService:
         - Uses latest *screening* run per citation for the given criterion.
         - Uses the citations table's per-criterion JSONB human column (human_{criterion_key}).
           Agreement is a string match on `selected` vs `answer` after trimming.
-        - IMPORTANT: "labelled" is defined as **validated for the step**.
-          If a citation is *not validated*, it is treated as unlabelled even if
-          a human_* column exists (CAN-SR may auto-fill human_* from llm_*).
+        - IMPORTANT: "labelled" means a human answer exists in human_{criterion_key}.selected.
+          This includes both validated citations AND unvalidated citations with human review.
+          Validation status (checkbox) only affects progress tracking, not agreement metrics.
         """
 
         self._require_psycopg2()
@@ -678,10 +678,7 @@ class CitsDPService:
                           WHEN l.confidence > 1 THEN 1.0
                           ELSE l.confidence
                         END AS confidence,
-                        CASE
-                          WHEN ({validated_expr}) THEN {human_sel_expr}
-                          ELSE NULL
-                        END AS human_selected
+                        {human_sel_expr} AS human_selected
                     FROM latest l
                     JOIN "{table_name}" c ON c.id = l.citation_id
                 ),
