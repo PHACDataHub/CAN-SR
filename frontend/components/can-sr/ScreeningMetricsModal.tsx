@@ -631,6 +631,10 @@ export default function ScreeningMetricsModal({
               {(criterionMetrics || []).map((m) => {
                 const accPct =
                   typeof m.accuracy === 'number' ? m.accuracy * 100 : null
+                const accAllPct =
+                  typeof (m as any).accuracy_all === 'number'
+                    ? (m as any).accuracy_all * 100
+                    : null
                 const accCritPct =
                   typeof (m as any).accuracy_critical_agent === 'number'
                     ? (m as any).accuracy_critical_agent * 100
@@ -682,11 +686,17 @@ export default function ScreeningMetricsModal({
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-[11px] text-gray-500">
-                          Accuracy
+                        {/* <div className="text-[11px] text-gray-500">
+                          Accuracy (validated)
                         </div>
                         <div className="text-sm font-semibold text-gray-900">
                           {accPct === null ? '—' : `${accPct.toFixed(0)}%`}
+                        </div> */}
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          Accuracy
+                        </div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {accAllPct === null ? '—' : `${accAllPct.toFixed(0)}%`}
                         </div>
                         <div className="mt-1 text-[11px] text-gray-500">
                           Critical Agent Agreement

@@ -1876,6 +1876,9 @@ async def get_screening_metrics(
             # Validated-set agreement counts (AI screening vs canonical human label).
             "human_agree_count": 0,
             "human_total_count": 0,
+            # All-with-human-answers agreement counts (not just validated).
+            "human_agree_count_all": 0,
+            "human_total_count_all": 0,
 
             # Fallback proxy when human labels are not available:
             # count how often critical agrees with screening.
@@ -1937,13 +1940,18 @@ async def get_screening_metrics(
                     conf_f = None
                 ans = scr.get("answer")
 
-                # If citation is validated and a canonical human label exists, compute agreement.
-                if validated:
-                    hcol = human_cols.get(ck) or f"human_{ck}"
-                    human_sel = _parse_selected_from_human_payload(row.get(hcol))
-                    if human_sel is not None:
+                # Compute agreement for ALL citations with human answers (not just validated)
+                hcol = human_cols.get(ck) or f"human_{ck}"
+                human_sel = _parse_selected_from_human_payload(row.get(hcol))
+                if human_sel is not None:
+                    a["human_total_count_all"] += 1
+                    # Agreement definition: exact string match after stripping.
+                    if str(human_sel).strip() == str(ans or "").strip():
+                        a["human_agree_count_all"] += 1
+                    
+                    # Also count for validated set if this citation is validated
+                    if validated:
                         a["human_total_count"] += 1
-                        # Agreement definition: exact string match after stripping.
                         if str(human_sel).strip() == str(ans or "").strip():
                             a["human_agree_count"] += 1
 
@@ -2026,6 +2034,7 @@ async def get_screening_metrics(
         # Accuracy is human-vs-AI agreement on the validated set (when canonical human labels exist).
         # Do NOT fall back to critical agreement here (misleading).
         accuracy: Optional[float] = None
+        accuracy_all: Optional[float] = None
         accuracy_critical_agent: Optional[float] = None
         try:
             h_total = int(a.get("human_total_count") or 0)
@@ -2034,6 +2043,15 @@ async def get_screening_metrics(
                 accuracy = (h_agree / h_total)
         except Exception:
             accuracy = None
+
+        # Accuracy for all citations with human answers (not just validated)
+        try:
+            h_total_all = int(a.get("human_total_count_all") or 0)
+            h_agree_all = int(a.get("human_agree_count_all") or 0)
+            if h_total_all > 0:
+                accuracy_all = (h_agree_all / h_total_all)
+        except Exception:
+            accuracy_all = None
 
         # Separate metric: agreement between screening agent and critical agent.
         try:
@@ -2051,6 +2069,8 @@ async def get_screening_metrics(
         }
         if accuracy is not None:
             row["accuracy"] = accuracy
+        if accuracy_all is not None:
+            row["accuracy_all"] = accuracy_all
         if accuracy_critical_agent is not None:
             row["accuracy_critical_agent"] = accuracy_critical_agent
         crit_out.append(row)

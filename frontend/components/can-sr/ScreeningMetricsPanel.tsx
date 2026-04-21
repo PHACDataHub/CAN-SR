@@ -31,6 +31,7 @@ export type ScreeningCriterionMetrics = {
   confident_exclude_count: number
   needs_human_review_count: number
   accuracy?: number | null
+  accuracy_all?: number | null
   accuracy_critical_agent?: number | null
 }
 
@@ -260,7 +261,14 @@ export default function ScreeningMetricsPanel({
               <div className="text-[11px] text-gray-600">
                 Workload Reduction:{' '}
                 <span className="font-medium">
-                  {total > 0 ? `${Math.round((1-(queueTotal / total)) * 100)}%` : '—'}
+                  {(() => {
+                    // Only calculate workload reduction for citations that have been screened
+                    const screened = total - notScreened
+                    if (screened === 0 || total === 0) return '—'
+                    // Workload reduction = % of screened citations that don't need human review
+                    const reduction = Math.round((1 - (queueTotal / screened)) * 100)
+                    return `${Math.max(0, Math.min(100, reduction))}%`
+                  })()}
                 </span>
               </div>
             </div>
