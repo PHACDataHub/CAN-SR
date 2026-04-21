@@ -78,9 +78,18 @@ function markerList(markers?: ThresholdMarkers) {
   return { markerPositions, cur, rec }
 }
 
+function toLogScale(v: number): number {
+  // Map [0,1] to log scale: use log10(1 + 99*v) to map 0->0, 1->2
+  // Then normalize back to [0,1]: result / 2
+  const epsilon = 0.001
+  const val = Math.max(epsilon, Math.min(1, v))
+  return Math.log10(1 + 99 * val) / 2
+}
+
 function renderStackedHistogramSvg(
   bins: HistogramBin[],
   markers?: ThresholdMarkers,
+  useLogScale = false,
 ) {
   const safeBins = Array.isArray(bins) ? bins : []
   const totals = safeBins.map(
@@ -95,10 +104,13 @@ function renderStackedHistogramSvg(
   const topPad = 2
   const chartH = 44
 
+  // Transform function for x-axis
+  const transformX = (v: number) => (useLogScale ? toLogScale(v) : v) * 100
+
   return (
     <div className="mt-2">
       <div className="text-[11px] text-gray-500">
-        Confidence distribution (live)
+        Confidence distribution (live) {useLogScale ? '· log scale' : ''}
       </div>
       <div className="mt-1">
         <svg
@@ -111,8 +123,8 @@ function renderStackedHistogramSvg(
           {safeBins.map((b, i) => {
             const start = clamp01(Number(b.bin_start))
             const end = clamp01(Number(b.bin_end))
-            const x0 = start * 100
-            const x1 = end * 100
+            const x0 = transformX(start)
+            const x1 = transformX(end)
             const w = Math.max(0, x1 - x0)
 
             const unlabelled = b.unlabelled || 0
@@ -171,7 +183,8 @@ function renderStackedHistogramSvg(
 
           {/* marker lines */}
           {markerPositions.map((m) => {
-            const x = (m.xPct / 100) * viewW
+            const markerVal = m.xPct / 100
+            const x = transformX(markerVal)
             return (
               <g key={m.kind}>
                 <title>{m.label}</title>
@@ -254,6 +267,7 @@ function renderDisagreementShareChart(
     unlabelled?: number
   }[],
   markers?: ThresholdMarkers,
+  useLogScale = false,
 ) {
   const safeBins = Array.isArray(bins) ? bins : []
   const { markerPositions } = markerList(markers)
@@ -263,6 +277,9 @@ function renderDisagreementShareChart(
   const viewH = 38
   const topPad = 2
   const chartH = 30
+
+  // Transform function for x-axis
+  const transformX = (v: number) => (useLogScale ? toLogScale(v) : v) * viewW
 
   const points: string[] = []
   for (const b of safeBins) {
@@ -274,7 +291,7 @@ function renderDisagreementShareChart(
     const labelled = agree + disagree
     if (labelled <= 0) continue
     const share = disagree / labelled
-    const x = (mid * viewW).toFixed(4)
+    const x = transformX(mid).toFixed(4)
     const y = (topPad + (1 - clamp01(share)) * chartH).toFixed(4)
     points.push(`${x},${y}`)
   }
@@ -283,7 +300,7 @@ function renderDisagreementShareChart(
     <div className="mt-3">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[11px] text-gray-500">
-          Disagreement share by confidence bin
+          Disagreement share by confidence bin {useLogScale ? '· log scale' : ''}
         </div>
         <div className="text-[10px] text-gray-400">0–100%</div>
       </div>
@@ -313,7 +330,8 @@ function renderDisagreementShareChart(
           />
           {/* marker lines */}
           {markerPositions.map((m) => {
-            const x = (m.xPct / 100) * viewW
+            const markerVal = m.xPct / 100
+            const x = transformX(markerVal)
             return m.kind === 'current' ? (
               <line
                 key={m.kind}
@@ -367,9 +385,10 @@ function renderLiveConfidenceHistogram(
     disagree: number
   }[],
   markers?: { current?: number | null; recommended?: number | null },
+  useLogScale = false,
 ) {
   const bins = Array.isArray(hist) ? (hist as HistogramBin[]) : []
-  return renderStackedHistogramSvg(bins, markers)
+  return renderStackedHistogramSvg(bins, markers, useLogScale)
 }
 
 function renderConfidenceHistogram(
@@ -449,6 +468,8 @@ export default function ScreeningMetricsModal({
   srId,
   step,
 }: Props) {
+  const [useLogScale, setUseLogScale] = React.useState(false)
+
   const calibByKey = React.useMemo(() => {
     const m = new Map<string, CalibrationCriterion>()
     for (const c of calibration || []) m.set(c.criterion_key, c)
@@ -567,7 +588,18 @@ export default function ScreeningMetricsModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[920px]">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle className="flex items-center justify-between gap-3">
+            <span>{title}</span>
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-normal text-gray-600">
+              <input
+                type="checkbox"
+                checked={useLogScale}
+                onChange={(e) => setUseLogScale(e.target.checked)}
+                className="h-3 w-3 rounded border-gray-300"
+              />
+              Log scale
+            </label>
+          </DialogTitle>
           <div className="text-xs text-gray-600">
             {stepLabel ? `${stepLabel} · ` : ''}Operational + reporting view
             (validated-set calibration)
@@ -761,23 +793,35 @@ export default function ScreeningMetricsModal({
                     </div>
 
                     {Array.isArray(live?.histogram) && live!.histogram.length
-                      ? renderDisagreementShareChart(live!.histogram, {
-                          current: m.threshold,
-                          recommended: rec,
-                        })
-                      : hist.length
-                        ? renderDisagreementShareChart(hist as any, {
+                      ? renderDisagreementShareChart(
+                          live!.histogram,
+                          {
                             current: m.threshold,
                             recommended: rec,
-                          })
+                          },
+                          useLogScale,
+                        )
+                      : hist.length
+                        ? renderDisagreementShareChart(
+                            hist as any,
+                            {
+                              current: m.threshold,
+                              recommended: rec,
+                            },
+                            useLogScale,
+                          )
                         : null}
 
                     {/* Live (unlabelled/agree/disagree) distribution with threshold markers */}
                     {Array.isArray(live?.histogram) && live!.histogram.length
-                      ? renderLiveConfidenceHistogram(live!.histogram, {
-                          current: m.threshold,
-                          recommended: rec,
-                        })
+                      ? renderLiveConfidenceHistogram(
+                          live!.histogram,
+                          {
+                            current: m.threshold,
+                            recommended: rec,
+                          },
+                          useLogScale,
+                        )
                       : null}
 
                     {/* Keep validated-set histogram as a fallback when live is unavailable */}

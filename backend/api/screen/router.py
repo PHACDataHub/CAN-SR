@@ -2156,14 +2156,15 @@ def _build_guardrails(parsed: Any, *, raw_text: str, stage: str) -> Dict[str, An
 async def get_screening_calibration(
     sr_id: str,
     step: str = "l1",
-    thresholds: str = "0.5,0.6,0.7,0.8,0.85,0.9,0.95",
+    thresholds: str = "0.5,0.525,0.55,0.575,0.6,0.625,0.65,0.675,0.7,0.725,0.75,0.775,0.8,0.825,0.85,0.875,0.9,0.925,0.95,0.975",
     bins: int = 10,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ):
-    """Compute calibration curves on the validated set.
+    """Compute calibration curves using all citations with human answers.
 
     Contract (Phase 2A):
-    - Uses validated citations for the step (`${step}_validations` or legacy `${step}_validated_by`).
+    - Uses ALL citations with human answers (regardless of validation status).
+    - Validation checkbox only affects progress tracking, not calibration metrics.
     - For each criterion:
         - AI label: latest screening run's answer + confidence
         - Human label: `human_{criterion_key}.selected`
@@ -2289,15 +2290,14 @@ async def get_screening_calibration(
                 pass
         return bool(row.get(legacy_validated_by))
 
-    # Build validated examples per criterion: (confidence, agree_bool)
+    # Build examples per criterion from ALL citations with human answers: (confidence, agree_bool)
     examples: Dict[str, List[Tuple[float, bool]]] = {c["criterion_key"]: [] for c in criteria}
     for row in rows or []:
         try:
             cid = int(row.get("id"))
         except Exception:
             continue
-        if not _is_validated_row(row):
-            continue
+        # IMPORTANT: Include ALL citations with human answers, not just validated ones
         scr_map = screening_by_cit.get(cid) or {}
         for c in criteria:
             ck = c["criterion_key"]
@@ -2320,7 +2320,7 @@ async def get_screening_calibration(
         ck = c["criterion_key"]
         label = c["label"]
         ex = examples.get(ck) or []
-        validated_n = len(ex)
+        validated_n = len(ex)  # Note: "validated_n" is kept for API compatibility but now means "with human answer"
 
         # Histogram bins
         hist: List[CalibrationHistogramBin] = []
