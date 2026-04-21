@@ -463,26 +463,7 @@ def _populate_human_answers_from_csv(
                 # Best-effort; continue with other rows
                 pass
     
-    # Update validation metadata
-    try:
-        now_iso = datetime.utcnow().isoformat() + "Z"
-        for row_idx, citation_id in row_id_map.items():
-            cits_dp_service.update_text_column(
-                citation_id=citation_id,
-                col="l1_validated_by",
-                text_value="csv_upload",
-                table_name=table_name,
-            )
-            cits_dp_service.update_text_column(
-                citation_id=citation_id,
-                col="l1_validated_at",
-                text_value=now_iso,
-                table_name=table_name,
-            )
-    except Exception:
-        # Best-effort; continue
-        pass
-    
+     
     # Backfill human decision columns
     try:
         criteria_parsed = sr.get("criteria_parsed") or {}
