@@ -44,6 +44,12 @@ jobs:
       AZURE_OPENAI_MODE: key
       AZURE_DOC_INT_MODE: key
       PYTHONUNBUFFERED: 1
+      AZURE_DOC_INT_ENDPOINT: fake
+      ENTREZ_EMAIL: fake
+      ENTREZ_API_KEY: fake
+      AZURE_STORAGE_CONNECTION_STRING: fake
+      SCOPUS_API_URL: fake
+
 
     steps:
       - name: Check out repository
