@@ -519,3 +519,16 @@ The importer currently supports these common include names:
 
 If you put **rispy keys directly** in `include:` (e.g. `doi`, `authors`), the
 importer will also attempt to copy them through as-is.
+
+
+
+## Running tests
+
+From the backend/ directory,
+1. `pip install -r requirements_dev.txt` 
+2. `pytest`
+
+To calculate coverage,
+1. `coverage run -m pytest`
+2. `coverage html`
+3. Open `./htmlcov/index.html` in a browser to view the report and browse around line by line
