@@ -2,7 +2,7 @@ import asyncio
 
 
 def test_smoke():
-    assert True
+    assert False
 
 
 
