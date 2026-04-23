@@ -87,45 +87,31 @@ jobs:
             --markdown-report diff-cover.md \
             --html-report diff-cover.html
 
+      - name: Build diff coverage comment body
+        if: github.event.pull_request.base.sha != ''
+        run: |
+          {
+            echo "<!-- can-sr-diff-coverage -->"
+            echo "## Diff coverage"
+            if [ -f diff-cover.md ]; then
+              cat diff-cover.md
+            else
+              echo "_Diff coverage report could not be generated for this run._"
+            fi
+            echo
+            echo "Coverage XML and HTML reports are attached to this workflow run as artifacts."
+          } > diff-coverage-comment.md
+
       - name: Publish diff coverage comment
         if: github.event.pull_request.base.sha != ''
-        uses: actions/github-script@v7
+        continue-on-error: true
+        uses: edumserrano/find-create-or-update-comment@v2
         with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const marker = '<!-- can-sr-diff-coverage -->';
-            const reportPath = path.resolve('backend/diff-cover.md');
-            const report = fs.existsSync(reportPath)
-              ? fs.readFileSync(reportPath, 'utf8')
-              : '_Diff coverage report could not be generated for this run._';
-            const body = `${marker}\n## Diff coverage\n${report}\n\nCoverage XML and HTML reports are attached to this workflow run as artifacts.`;
-
-            const { owner, repo } = context.repo;
-            const number = context.payload.pull_request.number;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: number,
-              per_page: 100,
-            });
-
-            const existing = comments.find((comment) => comment.body && comment.body.startsWith(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: number,
-                body,
-              });
-            }
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: '<!-- can-sr-diff-coverage -->'
+          comment-author: 'github-actions[bot]'
+          body-path: backend/diff-coverage-comment.md
+          edit-mode: replace
 
       - name: Upload coverage artifacts
         if: always()
