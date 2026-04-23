@@ -78,24 +78,17 @@ jobs:
           python -m coverage xml -o coverage.xml
           python -m coverage report
 
-      - name: Fetch PR base branch
-        if: github.event.pull_request.base.ref != ''
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          git fetch origin "${BASE_REF}" --depth=1
-
       - name: Generate diff coverage
-        if: github.event.pull_request.base.ref != ''
+        if: github.event.pull_request.base.sha != ''
         continue-on-error: true
         run: |
           diff-cover coverage.xml \
-            --compare-branch=origin/${{ github.event.pull_request.base.ref }} \
+            --compare-branch=${{ github.event.pull_request.base.sha }} \
             --markdown-report diff-cover.md \
             --html-report diff-cover.html
 
       - name: Publish diff coverage comment
-        if: github.event.pull_request.base.ref != ''
+        if: github.event.pull_request.base.sha != ''
         uses: actions/github-script@v7
         with:
           script: |
