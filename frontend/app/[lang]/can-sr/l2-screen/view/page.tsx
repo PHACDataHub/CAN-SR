@@ -659,8 +659,29 @@ export default function CanSrL2ScreenViewPage() {
         }),
       })
       await res.json().catch(() => ({}))
-      // Refresh citation row (llm_* columns updated) + agent runs
-      await fetchCitationById(String(citationId))
+
+      // Targeted update: fetch only the llm_* column for this criterion and update
+      // aiPanels directly — avoids re-rendering the PDF viewer (no setCitation call).
+      try {
+        const llmColName = `llm_${ck}`
+        const citRes = await fetch(
+          `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(String(citationId))}`,
+          { method: 'GET', headers: getAuthHeaders() },
+        )
+        const citData = await citRes.json().catch(() => ({}))
+        if (citRes.ok && citData) {
+          const llmRaw = citData[llmColName]
+          let llmParsed = llmRaw
+          if (typeof llmRaw === 'string') {
+            try { llmParsed = JSON.parse(llmRaw) } catch { llmParsed = llmRaw }
+          }
+          if (llmParsed && typeof llmParsed === 'object') {
+            setAiPanels((prev) => ({ ...prev, [questionIndex]: llmParsed }))
+          }
+        }
+      } catch { /* best-effort */ }
+
+      // Refresh agent runs (no PDF state changes)
       await loadRuns()
       setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'done' }))
     } catch (err) {
@@ -815,54 +836,6 @@ export default function CanSrL2ScreenViewPage() {
             <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
               <div>
                 <h4 className="text-xl font-semibold text-gray-900 text-center">{dict.screening.screeningQuestions}</h4>
-              </div>
-
-              <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
-                <label className="flex items-center gap-2 text-sm text-gray-800">
-                  <input
-                    type="checkbox"
-                    checked={l2Checked}
-                    disabled={validating}
-                    onChange={async (e) => {
-                      if (!srId || !citationId) return
-                      setValidating(true)
-                      try {
-                        const headers = {
-                          'Content-Type': 'application/json',
-                          ...getAuthHeaders(),
-                        }
-                        await fetch('/api/can-sr/screen/validate', {
-                          method: 'POST',
-                          headers,
-                          body: JSON.stringify({
-                            sr_id: srId,
-                            citation_id: Number(citationId),
-                            step: 'l2',
-                            checked: Boolean(e.target.checked),
-                          }),
-                        })
-                        await fetchCitationById(String(citationId))
-                      } finally {
-                        setValidating(false)
-                      }
-                    }}
-                  />
-                  <span>
-                    Validated by <span className="font-medium">{String(userEmail || '—')}</span>
-                  </span>
-                </label>
-
-                {l2ValidationsSorted.length ? (
-                  <div className="mt-2 space-y-1">
-                    {l2ValidationsSorted.map((v, idx) => (
-                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
-                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-gray-600">Not validated</div>
-                )}
               </div>
 
               {/* Run All AI button */}
@@ -1167,6 +1140,55 @@ export default function CanSrL2ScreenViewPage() {
                 </div>
               </div>
               )}
+              {/* Validation checkbox — at the bottom, matching L1 screen layout */}
+              <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 p-3">
+                <label className="flex items-center gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    checked={l2Checked}
+                    disabled={validating}
+                    onChange={async (e) => {
+                      if (!srId || !citationId) return
+                      setValidating(true)
+                      try {
+                        const headers = {
+                          'Content-Type': 'application/json',
+                          ...getAuthHeaders(),
+                        }
+                        await fetch('/api/can-sr/screen/validate', {
+                          method: 'POST',
+                          headers,
+                          body: JSON.stringify({
+                            sr_id: srId,
+                            citation_id: Number(citationId),
+                            step: 'l2',
+                            checked: Boolean(e.target.checked),
+                          }),
+                        })
+                        await fetchCitationById(String(citationId))
+                      } finally {
+                        setValidating(false)
+                      }
+                    }}
+                  />
+                  <span>
+                    Validated by <span className="font-medium">{String(userEmail || '—')}</span>
+                  </span>
+                </label>
+
+                {l2ValidationsSorted.length ? (
+                  <div className="mt-2 space-y-1">
+                    {l2ValidationsSorted.map((v, idx) => (
+                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
+                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-gray-600">Not validated</div>
+                )}
+              </div>
+
               <div className="flex items-center justify-between mt-4">
                 <button
                   onClick={async () => {

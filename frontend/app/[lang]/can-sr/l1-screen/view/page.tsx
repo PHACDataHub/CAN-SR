@@ -542,8 +542,29 @@ export default function CanSrL1ScreenPage() {
         }),
       })
       await res.json().catch(() => ({}))
-      // Refresh citation row (llm_* columns updated) + agent runs
-      await fetchCitationById(String(citationId))
+
+      // Targeted update: fetch only the llm_* column for this criterion and update
+      // aiPanels directly — no full page re-render.
+      try {
+        const llmColName = `llm_${ck}`
+        const citRes = await fetch(
+          `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(String(citationId))}`,
+          { method: 'GET', headers: getAuthHeaders() },
+        )
+        const citData = await citRes.json().catch(() => ({}))
+        if (citRes.ok && citData) {
+          const llmRaw = citData[llmColName]
+          let llmParsed = llmRaw
+          if (typeof llmRaw === 'string') {
+            try { llmParsed = JSON.parse(llmRaw) } catch { llmParsed = llmRaw }
+          }
+          if (llmParsed && typeof llmParsed === 'object') {
+            setAiPanels((prev) => ({ ...prev, [questionIndex]: llmParsed }))
+          }
+        }
+      } catch { /* best-effort */ }
+
+      // Refresh agent runs
       try {
         const r2 = await fetch(
           `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(String(citationId))}`,
