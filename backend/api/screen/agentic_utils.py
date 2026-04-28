@@ -9,8 +9,8 @@ for title/abstract and fulltext pipelines.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 
 @dataclass
@@ -21,6 +21,10 @@ class ParsedAgentXML:
     parse_ok: bool
     missing_answer: bool
     missing_confidence: bool
+    # Evidence fields (only populated for fulltext screening prompts)
+    evidence_sentences: List[int] = field(default_factory=list)
+    evidence_tables: List[int] = field(default_factory=list)
+    evidence_figures: List[int] = field(default_factory=list)
 
 
 _TAG_RE_CACHE: dict[str, re.Pattern[str]] = {}
@@ -32,13 +36,37 @@ def _tag_re(tag: str) -> re.Pattern[str]:
     return _TAG_RE_CACHE[tag]
 
 
+def _parse_int_list(text: str) -> List[int]:
+    """Parse a comma-separated string of integers (e.g. '2,5,11') into a list."""
+    out: List[int] = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except Exception:
+            continue
+    # stable unique
+    seen: set = set()
+    uniq: List[int] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
 def parse_agent_xml(text: str) -> ParsedAgentXML:
-    """Parse <answer>, <confidence>, <rationale> tags from model output."""
+    """Parse <answer>, <confidence>, <rationale> (and optional evidence) tags from model output."""
 
     raw = (text or "").strip()
     ans_m = _tag_re("answer").search(raw)
     conf_m = _tag_re("confidence").search(raw)
     rat_m = _tag_re("rationale").search(raw)
+    ev_sent_m = _tag_re("evidence_sentences").search(raw)
+    ev_tbl_m = _tag_re("evidence_tables").search(raw)
+    ev_fig_m = _tag_re("evidence_figures").search(raw)
 
     answer = (ans_m.group(1).strip() if ans_m else "")
     rationale = (rat_m.group(1).strip() if rat_m else "")
@@ -51,6 +79,10 @@ def parse_agent_xml(text: str) -> ParsedAgentXML:
             conf_val = 0.0
     conf_val = max(0.0, min(1.0, conf_val))
 
+    evidence_sentences = _parse_int_list(ev_sent_m.group(1) if ev_sent_m else "")
+    evidence_tables = _parse_int_list(ev_tbl_m.group(1) if ev_tbl_m else "")
+    evidence_figures = _parse_int_list(ev_fig_m.group(1) if ev_fig_m else "")
+
     missing_answer = not bool(ans_m and answer.strip())
     missing_confidence = not bool(conf_m)
     parse_ok = (not missing_answer) and (not missing_confidence)
@@ -61,6 +93,9 @@ def parse_agent_xml(text: str) -> ParsedAgentXML:
         parse_ok=parse_ok,
         missing_answer=missing_answer,
         missing_confidence=missing_confidence,
+        evidence_sentences=evidence_sentences,
+        evidence_tables=evidence_tables,
+        evidence_figures=evidence_figures,
     )
 
 

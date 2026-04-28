@@ -83,6 +83,10 @@ Notes:
 # CAN-SR historically used JSON output for screening. The agentic plan expects
 # XML-tag parsing (<answer>, <confidence>, <rationale>) so we can reuse a stable
 # parsing contract across screening + critical steps.
+#
+# For fulltext (L2) screening, we additionally request evidence_sentences,
+# evidence_tables, and evidence_figures so the UI can display clickable chips
+# that scroll the PDF viewer to the relevant location.
 
 PROMPT_XML_TEMPLATE_TA = """
 You are a highly critical, helpful scientific evaluator completing an academic review.
@@ -175,10 +179,17 @@ Return ONLY the following XML tags (no Markdown, no extra prose):
 <answer>...</answer>
 <confidence>...</confidence>
 <rationale>...</rationale>
+<evidence_sentences>...</evidence_sentences>
+<evidence_tables>...</evidence_tables>
+<evidence_figures>...</evidence_figures>
 
-Confidence requirements:
-- confidence is a float between 0 and 1
-- be conservative; do not overestimate confidence
+Field requirements:
+- answer: the exact option string you selected (must match one of the options above)
+- confidence: a float between 0 and 1; be conservative; do not overestimate confidence
+- rationale: a concise explanation (1-4 sentences) of why you selected that option
+- evidence_sentences: comma-separated sentence indices used as evidence (e.g. "2,5,11") or empty if none
+- evidence_tables: comma-separated table numbers used (e.g. "1,3") or empty if none
+- evidence_figures: comma-separated figure numbers used (e.g. "2") or empty if none
 """
 
 

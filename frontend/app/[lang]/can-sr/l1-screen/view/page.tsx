@@ -155,8 +155,11 @@ export default function CanSrL1ScreenPage() {
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
-  // AI classify status (single pipeline run covers all criteria at once)
-  const [classifyStatus, setClassifyStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  // Per-criterion AI status (keyed by question index)
+  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'running' | 'done' | 'error'>>({})
+  // Run-all progress
+  const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
+  const [runningAll, setRunningAll] = useState(false)
 
   const l1Validations = useMemo(() => parseValidations((citation as any)?.l1_validations), [citation])
   const l1Checked = useMemo(() => {
@@ -516,20 +519,15 @@ export default function CanSrL1ScreenPage() {
     setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
   }
 
-  // Handler: call backend classify endpoint for a single question
-  async function classifyQuestion(_questionIndex: number) {
-    void _questionIndex
+  // Run agentic screening for a single criterion (per-question AI button)
+  async function classifyQuestion(questionIndex: number) {
     if (!srId || !citationId || !criteriaData) return
-    setClassifyStatus('running')
+    const q = criteriaData.questions[questionIndex]
+    if (!q) return
+    const ck = criterionKeyFromQuestion(q)
+    setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'running' }))
     try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders(),
-      }
-
-      // Phase 1->2 wiring: reuse the existing per-question "AI" button, but call the
-      // agentic orchestrator endpoint which runs BOTH screening + critical and persists
-      // them to screening_agent_runs.
+      const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
       const res = await fetch('/api/can-sr/screen/title-abstract/run', {
         method: 'POST',
         headers,
@@ -540,33 +538,40 @@ export default function CanSrL1ScreenPage() {
           temperature: 0.0,
           max_tokens: 1200,
           prompt_version: 'v1',
+          criterion_key: ck,
         }),
       })
       await res.json().catch(() => ({}))
-
-      // Refresh latest runs + citation row so the UI shows critical + validations immediately.
+      // Refresh citation row (llm_* columns updated) + agent runs
       await fetchCitationById(String(citationId))
-
       try {
         const r2 = await fetch(
-          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
-            srId,
-          )}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(
-            String(citationId),
-          )}`,
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=${encodeURIComponent('title_abstract')}&citation_ids=${encodeURIComponent(String(citationId))}`,
           { method: 'GET', headers: getAuthHeaders() },
         )
         const j2 = await r2.json().catch(() => ({}))
-        if (r2.ok && Array.isArray(j2?.runs)) {
-          setAgentRuns(j2.runs as LatestAgentRun[])
-        }
-      } catch {
-        // ignore
-      }
-      setClassifyStatus('done')
+        if (r2.ok && Array.isArray(j2?.runs)) setAgentRuns(j2.runs as LatestAgentRun[])
+      } catch { /* ignore */ }
+      setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'done' }))
     } catch (err) {
       console.error('Classify API error', err)
-      setClassifyStatus('error')
+      setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'error' }))
+    }
+  }
+
+  // Run all criteria sequentially (Run All AI button)
+  async function runAllAI() {
+    if (!srId || !citationId || !criteriaData || runningAll) return
+    const total = criteriaData.questions.length
+    setRunningAll(true)
+    setRunAllProgress({ done: 0, total })
+    try {
+      for (let i = 0; i < criteriaData.questions.length; i++) {
+        await classifyQuestion(i)
+        setRunAllProgress({ done: i + 1, total })
+      }
+    } finally {
+      setRunningAll(false)
     }
   }
 
@@ -652,29 +657,30 @@ export default function CanSrL1ScreenPage() {
           {/* Selection sidebar (right) */}
           <aside className="col-span-12 md:col-span-5">
             <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h4 className="text-md font-semibold text-gray-900">
-                {dict.screening.selection}
-              </h4>
+              {/* Header: title + Run All AI button */}
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-md font-semibold text-gray-900">
+                  {dict.screening.selection}
+                </h4>
+                <button
+                  onClick={runAllAI}
+                  disabled={runningAll || !criteriaData || criteriaData.questions.length === 0}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {runningAll ? (
+                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  ) : (
+                    <Wand2 className="h-3 w-3" />
+                  )}
+                  {runAllProgress
+                    ? `${runAllProgress.done}/${runAllProgress.total}`
+                    : 'Run All AI'}
+                </button>
+              </div>
               <p className="text-sm text-gray-600">{dict.screening.selectionDesc}</p>
-
-              {/* AI classify status banner */}
-              {classifyStatus === 'running' ? (
-                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                  <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                  Running AI screening…
-                </div>
-              ) : classifyStatus === 'done' ? (
-                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                  ✓ AI screening complete
-                </div>
-              ) : classifyStatus === 'error' ? (
-                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                  AI screening failed — check console for details
-                </div>
-              ) : null}
 
               {loadingCriteria ? (
                 <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
@@ -758,11 +764,11 @@ export default function CanSrL1ScreenPage() {
                           <div className="ml-3 flex flex-col items-end space-y-2">
                             <button
                               onClick={() => classifyQuestion(idx)}
-                              disabled={classifyStatus === 'running'}
+                              disabled={criterionStatus[idx] === 'running' || runningAll}
                               className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <span className="inline-flex items-center gap-1">
-                                {classifyStatus === 'running' ? (
+                                {criterionStatus[idx] === 'running' ? (
                                   <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
@@ -774,7 +780,13 @@ export default function CanSrL1ScreenPage() {
                               </span>
                             </button>
 
-                            {saveStatus[idx] === 'saving' ? (
+                            {criterionStatus[idx] === 'running' ? (
+                              <span className="text-[10px] text-blue-600">Running…</span>
+                            ) : criterionStatus[idx] === 'done' ? (
+                              <span className="text-[10px] text-emerald-600">Done</span>
+                            ) : criterionStatus[idx] === 'error' ? (
+                              <span className="text-[10px] text-red-600">Error</span>
+                            ) : saveStatus[idx] === 'saving' ? (
                               <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
                             ) : saveStatus[idx] === 'saved' ? (
                               <span className="text-[10px] text-emerald-600">{dict.common.done}</span>

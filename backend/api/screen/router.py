@@ -493,6 +493,7 @@ class TitleAbstractRunRequest(BaseModel):
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     max_tokens: int = Field(1200, ge=64, le=4000)
     prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
+    criterion_key: Optional[str] = Field(None, description="If set, only run this criterion (skip others). Used for per-criterion AI button.")
 
 
 class ValidateStepRequest(BaseModel):
@@ -657,6 +658,7 @@ class FulltextRunRequest(BaseModel):
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     max_tokens: int = Field(2000, ge=64, le=4000)
     prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
+    criterion_key: Optional[str] = Field(None, description="If set, only run this criterion (skip others). Used for per-criterion AI button.")
 
     
 # _update_sync moved to backend.api.core.postgres.update_jsonb_column
@@ -1059,6 +1061,9 @@ async def run_title_abstract_agentic(
     results: List[Dict[str, Any]] = []
     user_email = str(current_user.get("email") or current_user.get("id") or "")
 
+    # Normalize per-criterion filter (if provided, only run that criterion)
+    filter_criterion_key = str(payload.criterion_key or "").strip() or None
+
     for i, q in enumerate(questions):
         if not isinstance(q, str) or not q.strip():
             continue
@@ -1080,6 +1085,10 @@ async def run_title_abstract_agentic(
 
         options_listed = "\n".join(opts)
         criterion_key = snake_case(q, max_len=56)
+
+        # Per-criterion filter: skip if a specific criterion_key was requested
+        if filter_criterion_key and criterion_key != filter_criterion_key:
+            continue
 
         # 1) screening
         screening_prompt = PROMPT_XML_TEMPLATE_TA.format(
@@ -1176,6 +1185,29 @@ async def run_title_abstract_agentic(
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
+
+        # Write-back to llm_* column so the UI can display the result in aiPanels
+        # (same shape as the legacy /classify endpoint, minus evidence fields for TA)
+        try:
+            llm_col = snake_case_column(q)
+            llm_payload = {
+                "selected": screening_answer,
+                "confidence": screening_parsed.confidence,
+                "explanation": screening_parsed.rationale or "",
+                "evidence_sentences": [],
+                "evidence_tables": [],
+                "evidence_figures": [],
+                "source": "agentic",
+            }
+            await run_in_threadpool(
+                cits_dp_service.update_jsonb_column,
+                citation_id,
+                llm_col,
+                llm_payload,
+                table_name,
+            )
+        except Exception:
+            pass  # best-effort; do not block response
 
         results.append(
             {
@@ -1494,6 +1526,9 @@ async def run_fulltext_agentic(
 
     results: List[Dict[str, Any]] = []
 
+    # Normalize per-criterion filter (if provided, only run that criterion)
+    filter_criterion_key = str(payload.criterion_key or "").strip() or None
+
     for q, source_step, idx in merged_questions:
         if not isinstance(q, str) or not q.strip():
             continue
@@ -1513,6 +1548,10 @@ async def run_fulltext_agentic(
 
         criterion_key = snake_case(q, max_len=56)
         options_listed = "\n".join(opts)
+
+        # Per-criterion filter: skip if a specific criterion_key was requested
+        if filter_criterion_key and criterion_key != filter_criterion_key:
+            continue
 
         # 1) screening
         screening_prompt = PROMPT_XML_TEMPLATE_FULLTEXT.format(
@@ -1617,6 +1656,29 @@ async def run_fulltext_agentic(
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
 
+        # Write-back to llm_* column so the UI can display the result in aiPanels
+        # (fulltext: includes evidence fields parsed from the XML response)
+        try:
+            llm_col = snake_case_column(q)
+            llm_payload = {
+                "selected": screening_answer,
+                "confidence": screening_parsed.confidence,
+                "explanation": screening_parsed.rationale or "",
+                "evidence_sentences": screening_parsed.evidence_sentences or [],
+                "evidence_tables": screening_parsed.evidence_tables or [],
+                "evidence_figures": screening_parsed.evidence_figures or [],
+                "source": "agentic",
+            }
+            await run_in_threadpool(
+                cits_dp_service.update_jsonb_column,
+                citation_id,
+                llm_col,
+                llm_payload,
+                table_name,
+            )
+        except Exception:
+            pass  # best-effort; do not block response
+
         results.append(
             {
                 "question": q,
@@ -1627,6 +1689,9 @@ async def run_fulltext_agentic(
                     "confidence": screening_parsed.confidence,
                     "rationale": screening_parsed.rationale,
                     "parse_ok": screening_parsed.parse_ok,
+                    "evidence_sentences": screening_parsed.evidence_sentences,
+                    "evidence_tables": screening_parsed.evidence_tables,
+                    "evidence_figures": screening_parsed.evidence_figures,
                 },
                 "critical": {
                     "run_id": critical_run_id,

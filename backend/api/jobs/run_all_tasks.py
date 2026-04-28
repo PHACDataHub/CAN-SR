@@ -254,9 +254,10 @@ async def _run_l1_for_citation(
             "selected": screening_answer,
             "explanation": screening_parsed.rationale or "",
             "confidence": screening_parsed.confidence if screening_parsed.confidence is not None else 0.0,
-            "evidence_sentences": [],
-            "evidence_tables": [],
-            "evidence_figures": [],
+            # Evidence fields parsed from the XML response (fulltext prompt returns these)
+            "evidence_sentences": screening_parsed.evidence_sentences or [],
+            "evidence_tables": screening_parsed.evidence_tables or [],
+            "evidence_figures": screening_parsed.evidence_figures or [],
             "llm_raw": str(screening_raw),
             "critical": {
                 "selected": critical_answer,
@@ -567,9 +568,10 @@ async def _run_l2_for_citation(
             "selected": screening_answer,
             "explanation": screening_parsed.rationale or "",
             "confidence": screening_parsed.confidence if screening_parsed.confidence is not None else 0.0,
-            "evidence_sentences": [],
-            "evidence_tables": [],
-            "evidence_figures": [],
+            # Evidence fields parsed from the XML response (fulltext prompt returns these)
+            "evidence_sentences": screening_parsed.evidence_sentences or [],
+            "evidence_tables": screening_parsed.evidence_tables or [],
+            "evidence_figures": screening_parsed.evidence_figures or [],
             "llm_raw": str(screening_raw),
             "critical": {
                 "selected": critical_answer,
