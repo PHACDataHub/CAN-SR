@@ -1081,12 +1081,13 @@ class CitsDPService:
 
             # Flatten known json shapes
             def _flatten_keys_for(col: str) -> List[str]:
-                # Screening
-                if col.startswith("llm_") or col.startswith("human_"):
+                # Params — check BEFORE generic llm_/human_ to avoid prefix collision
+                # (llm_param_* starts with llm_; human_param_* starts with human_)
+                if col.startswith("llm_param_") or col.startswith("human_param_"):
                     return [
-                        f"{col}__selected",
+                        f"{col}__found",
+                        f"{col}__value",
                         f"{col}__explanation",
-                        f"{col}__confidence",
                         f"{col}__evidence_sentences",
                         f"{col}__evidence_tables",
                         f"{col}__evidence_figures",
@@ -1095,12 +1096,12 @@ class CitsDPService:
                         f"{col}__timestamp",
                         f"{col}__reviewer",
                     ]
-                # Params
-                if col.startswith("llm_param_") or col.startswith("human_param_"):
+                # Screening
+                if col.startswith("llm_") or col.startswith("human_"):
                     return [
-                        f"{col}__found",
-                        f"{col}__value",
+                        f"{col}__selected",
                         f"{col}__explanation",
+                        f"{col}__confidence",
                         f"{col}__evidence_sentences",
                         f"{col}__evidence_tables",
                         f"{col}__evidence_figures",
