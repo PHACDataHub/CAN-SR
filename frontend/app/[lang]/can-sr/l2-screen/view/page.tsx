@@ -153,6 +153,9 @@ export default function CanSrL2ScreenViewPage() {
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
+  // AI classify status (single pipeline run covers all criteria at once)
+  const [classifyStatus, setClassifyStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+
   const l2Validations = useMemo(() => parseValidations((citation as any)?.l2_validations), [citation])
   const l2Checked = useMemo(() => {
     const me = String(userEmail || '')
@@ -634,13 +637,14 @@ export default function CanSrL2ScreenViewPage() {
   async function classifyQuestion(_questionIndex: number) {
     void _questionIndex
     if (!srId || !citationId || !criteriaData) return
+    setClassifyStatus('running')
     try {
       const headers = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       }
 
-      // Phase 2 wiring: reuse existing per-question “AI” button, but call the
+      // Phase 2 wiring: reuse existing per-question "AI" button, but call the
       // agentic orchestrator endpoint which runs BOTH screening + critical and persists
       // them to screening_agent_runs.
       const res = await fetch('/api/can-sr/screen/fulltext/run', {
@@ -660,8 +664,10 @@ export default function CanSrL2ScreenViewPage() {
       // Refresh latest runs + citation row so the UI shows critical results immediately.
       await fetchCitationById(String(citationId))
       await loadRuns()
+      setClassifyStatus('done')
     } catch (err) {
       console.error('Classify API error', err)
+      setClassifyStatus('error')
     }
   }
 
@@ -845,6 +851,25 @@ export default function CanSrL2ScreenViewPage() {
                 )}
               </div>
 
+              {/* AI classify status banner */}
+              {classifyStatus === 'running' ? (
+                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  Running AI screening…
+                </div>
+              ) : classifyStatus === 'done' ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  ✓ AI screening complete
+                </div>
+              ) : classifyStatus === 'error' ? (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  AI screening failed — check console for details
+                </div>
+              ) : null}
+
               {loadingCriteria ? (
                 <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
@@ -941,10 +966,19 @@ export default function CanSrL2ScreenViewPage() {
                           <div className="ml-3 flex flex-col items-end space-y-2">
                               <button
                                 onClick={() => classifyQuestion(idx)}
-                                className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                                disabled={classifyStatus === 'running'}
+                                className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <span className="inline-flex items-center gap-1">
-                                  AI <Wand2 className="h-3 w-3" />
+                                  {classifyStatus === 'running' ? (
+                                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                    </svg>
+                                  ) : (
+                                    <Wand2 className="h-3 w-3" />
+                                  )}
+                                  AI
                                 </span>
                               </button>
 
