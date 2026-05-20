@@ -164,7 +164,7 @@ export default function CanSrSetupPage() {
     }
   }
 
-  const saveYaml = async () => {
+  const saveYaml = async (forceUpdate = false) => {
     if (!srId) {
       setYamlSaveMessage('Missing review id')
       return
@@ -175,6 +175,9 @@ export default function CanSrSetupPage() {
       // Send as form-data so backend receives criteria_file/criteria_yaml properly
       const fd = new FormData()
       fd.append('criteria_yaml', yamlText || '')
+      if (forceUpdate) {
+        fd.append('force', 'true')
+      }
 
       const headers = getAuthHeaders()
       // Do NOT set Content-Type so browser adds multipart/form-data boundary
@@ -185,6 +188,18 @@ export default function CanSrSetupPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
+        // If 409 conflict (screening data exists), ask for confirmation
+        if (res.status === 409) {
+          const confirmMsg = (data?.detail || 'This SR already has screening data. Updating criteria may invalidate existing results.') + '\n\nAre you sure you want to proceed?'
+          if (window.confirm(confirmMsg)) {
+            // Retry with force=true
+            setYamlSaving(false)
+            return saveYaml(true)
+          } else {
+            setYamlSaveMessage('Update canceled')
+            return
+          }
+        }
         setYamlSaveMessage((data && (data.error || data.detail)) || `Save failed (${res.status})`)
       } else {
         setYamlSaveMessage('Saved successfully')
@@ -369,7 +384,7 @@ export default function CanSrSetupPage() {
                 </button>
 
                 <button
-                  onClick={saveYaml}
+                  onClick={() => saveYaml()}
                   disabled={yamlSaving}
                   className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                 >

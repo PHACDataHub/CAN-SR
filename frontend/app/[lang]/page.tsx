@@ -12,17 +12,33 @@ export default function HomePage() {
   const { lang } = useParams<{ lang: string }>();
 
   useEffect(() => {
-    // Check if user is logged in
-    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true'
-
-    if (isLoggedIn) {
-      // If logged in, redirect to portal
-      router.push(`/${lang}/can-sr`)
-    } else {
-      // If not logged in, redirect to login
+    const token = localStorage.getItem('access_token')
+    if (!token) {
       router.push(`/${lang}/login`)
+      return
     }
-  }, [router])
+
+    const tokenType = localStorage.getItem('token_type') || 'Bearer'
+    fetch('/api/auth/me', {
+      headers: { Authorization: `${tokenType} ${token}` },
+    })
+      .then((res) => {
+        if (res.ok) {
+          router.push(`/${lang}/can-sr`)
+        } else {
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('token_type')
+          localStorage.removeItem('isLoggedIn')
+          router.push(`/${lang}/login`)
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('token_type')
+        localStorage.removeItem('isLoggedIn')
+        router.push(`/${lang}/login`)
+      })
+  }, [router, lang])
 
   // This is just a placeholder while the redirect happens
   return (

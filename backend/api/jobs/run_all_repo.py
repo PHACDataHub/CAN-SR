@@ -590,6 +590,61 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
+    def fail_stale_jobs(self, timeout_minutes: int = 30) -> int:
+        """Mark running/paused jobs as failed if they haven't been updated recently.
+
+        This prevents jobs that got stuck (e.g., worker crash) from blocking new jobs
+        forever due to the partial unique index.
+
+        Returns count of jobs marked as failed.
+        """
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE run_all_jobs
+                SET status = 'failed',
+                    finished_at = COALESCE(finished_at, now()),
+                    error = COALESCE(error, 'Marked as failed by stale job reaper (no progress for ' || %s || ' minutes)')
+                WHERE status IN ('running', 'paused', 'queued')
+                  AND COALESCE(started_at, created_at) < (now() - make_interval(mins := %s))
+                """,
+                (str(timeout_minutes), int(timeout_minutes)),
+            )
+            count = cur.rowcount
+            conn.commit()
+            return count
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def purge_old_jobs(self, days: int = 7) -> int:
+        """Delete terminal jobs (done/canceled/failed/finished) older than N days.
+
+        Associated chunks and errors are removed via ON DELETE CASCADE.
+        Returns count of deleted jobs.
+        """
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM run_all_jobs
+                WHERE status IN ('done', 'canceled', 'failed', 'finished')
+                  AND COALESCE(finished_at, created_at) < (now() - make_interval(days := %s))
+                """,
+                (int(days),),
+            )
+            count = cur.rowcount
+            conn.commit()
+            return count
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
     def add_error(self, job_id: str, *, citation_id: Optional[int], stage: str, error: str) -> None:
         conn = None
         try:

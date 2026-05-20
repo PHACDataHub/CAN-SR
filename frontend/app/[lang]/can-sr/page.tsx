@@ -144,6 +144,9 @@ export default function CanSrIndexPage() {
         setUser(data.user)
       } catch (error) {
         console.error('Error fetching user data:', error)
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('token_type')
+        localStorage.removeItem('isLoggedIn')
         router.push(`/${lang}/login`)
       } finally {
         setIsUserLoading(false)

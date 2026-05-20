@@ -28,14 +28,32 @@ export default function LoginPage() {
   const nextLang = lang === 'en' ? 'fr' : 'en'
   const nextLangPath = currentPathname.replace(`/${lang}`, `/${nextLang}`)
 
-  // Check if user is already logged in
+  // Check if user is already logged in (validate token before redirecting)
   useEffect(() => {
     const token = localStorage.getItem('access_token')
     if (token) {
-      console.log('Login page: Token found, redirecting to CAN-SR')
-      router.push(`/${lang}/can-sr`)
+      const tokenType = localStorage.getItem('token_type') || 'Bearer'
+      fetch('/api/auth/me', {
+        headers: { Authorization: `${tokenType} ${token}` },
+      })
+        .then((res) => {
+          if (res.ok) {
+            router.push(`/${lang}/can-sr`)
+          } else {
+            // Token is invalid/expired — clear stale auth state
+            localStorage.removeItem('access_token')
+            localStorage.removeItem('token_type')
+            localStorage.removeItem('isLoggedIn')
+          }
+        })
+        .catch(() => {
+          // Backend unavailable — clear stale auth state to prevent loop
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('token_type')
+          localStorage.removeItem('isLoggedIn')
+        })
     }
-  }, [router])
+  }, [router, lang])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()

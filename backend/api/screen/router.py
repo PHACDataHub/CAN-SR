@@ -2875,9 +2875,14 @@ async def update_inclusion_decision(
         fresh = await run_in_threadpool(_get_row_fresh)
 
         def _compute_human_decision(step: str) -> str:
-            """Compute derived human decisions used for filtering.
+            """Compute derived decisions used for filtering (pass to next stage).
 
-            Rules:
+            Priority rules:
+            1. Human-set values have highest priority (include/exclude)
+            2. If no human answer exists, fall back to AI/LLM answer
+            3. If neither human nor AI answer exists, don't pass (undecided)
+
+            Scope:
             - human_l1_decision is derived ONLY from L1 questions.
             - human_l2_decision represents "passed to L2/extract" and must consider
               BOTH L1 + L2 criteria questions.
@@ -2901,17 +2906,49 @@ async def update_inclusion_decision(
             for q in qs:
                 core = snake_case(q, max_len=56) if snake_case else ""
                 hcol = f"human_{core}" if core else "human_col"
+                llm_col = f"llm_{core}" if core else "llm_col"
+
+                # Priority 1: Check human answer
                 hval = fresh.get(hcol)
-                if hval is None:
-                    return "undecided"
-                try:
-                    hobj = json.loads(hval) if isinstance(hval, str) else hval
-                    selected = (hobj or {}).get("selected")
-                except Exception:
+                selected = None
+                if hval is not None:
+                    try:
+                        hobj = json.loads(hval) if isinstance(hval, str) else hval
+                        selected = (hobj or {}).get("selected")
+                    except Exception:
+                        selected = None
+
+                # Treat empty/whitespace as unanswered
+                if selected is not None and isinstance(selected, str) and selected.strip() == "":
                     selected = None
-                # Treat empty/whitespace as unanswered (UI shows "-- select --")
-                if selected is None or (isinstance(selected, str) and selected.strip() == ""):
+
+                # Priority 2: Fall back to AI/LLM answer if no human answer
+                if selected is None:
+                    llm_val = fresh.get(llm_col)
+                    if llm_val is not None:
+                        try:
+                            llm_obj = json.loads(llm_val) if isinstance(llm_val, str) else llm_val
+                            selected = (llm_obj or {}).get("selected")
+                        except Exception:
+                            selected = None
+                    # Check critical answer override if available
+                    if selected is not None and isinstance(llm_val, (dict, str)):
+                        try:
+                            obj = json.loads(llm_val) if isinstance(llm_val, str) else llm_val
+                            critical = (obj or {}).get("critical")
+                            if isinstance(critical, dict) and critical.get("selected"):
+                                selected = critical["selected"]
+                        except Exception:
+                            pass
+
+                # Treat empty/whitespace as unanswered
+                if selected is not None and isinstance(selected, str) and selected.strip() == "":
+                    selected = None
+
+                # Priority 3: Neither exists -> undecided
+                if selected is None:
                     return "undecided"
+
                 if "exclude" in str(selected).lower():
                     return "exclude"
 

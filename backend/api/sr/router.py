@@ -342,6 +342,7 @@ async def update_systematic_review_criteria(
     sr_id: str,
     criteria_file: Optional[UploadFile] = File(None),
     criteria_yaml: Optional[str] = Form(None),
+    force: Optional[str] = Form(None),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ):
     """
@@ -350,6 +351,10 @@ async def update_systematic_review_criteria(
     Accepts either a YAML file upload (criteria_file) or a raw YAML string (criteria_yaml).
     The caller must already be a member of the systematic review (or the owner).
     The parsed criteria (dict) and the raw YAML are both saved to the SR document.
+
+    If the SR already has a screening table (citations have been uploaded), the update
+    is blocked unless force=true is provided. This prevents accidental invalidation of
+    existing screening data.
     """
 
     try:
@@ -358,6 +363,15 @@ async def update_systematic_review_criteria(
         raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+
+    # Guard: block criteria update if screening data already exists (unless force=true)
+    existing_table = (sr.get("screening_db") or {}).get("table_name")
+    force_flag = str(force).lower().strip() in ("true", "1", "yes") if force else False
+    if existing_table and not force_flag:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This SR already has screening data. Updating criteria may invalidate existing screening results. Pass force=true to confirm.",
+        )
 
     # Load YAML criteria
     criteria_str: Optional[str] = None

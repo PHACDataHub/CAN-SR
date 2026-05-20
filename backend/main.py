@@ -94,6 +94,27 @@ async def startup_event():
                 # For production, run a separate worker service.
                 print("👷 Starting embedded Procrastinate worker...", flush=True)
                 asyncio.create_task(run_worker_once(queues=["default"]))
+
+            # Start stale job reaper background task
+            async def _stale_job_reaper():
+                """Periodic cleanup of stuck/old run-all jobs."""
+                import asyncio as _asyncio
+                while True:
+                    await _asyncio.sleep(300)  # every 5 minutes
+                    try:
+                        from fastapi.concurrency import run_in_threadpool as _ritp
+                        stale = await _ritp(run_all_repo.fail_stale_jobs, 30)
+                        if stale:
+                            print(f"🧹 Stale job reaper: marked {stale} stuck jobs as failed", flush=True)
+                        purged = await _ritp(run_all_repo.purge_old_jobs, 7)
+                        if purged:
+                            print(f"🧹 Stale job reaper: purged {purged} old terminal jobs", flush=True)
+                    except Exception as reaper_err:
+                        print(f"⚠️ Stale job reaper error: {reaper_err}", flush=True)
+
+            asyncio.create_task(_stale_job_reaper())
+            print("🧹 Stale job reaper started (runs every 5 min)", flush=True)
+
     except Exception as e:
         print(f"⚠️ Background jobs not started: {e}", flush=True)
     print("🎯 CAN-SR Backend ready!", flush=True)
