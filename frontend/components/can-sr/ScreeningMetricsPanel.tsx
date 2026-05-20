@@ -38,6 +38,7 @@ export type ScreeningCriterionMetrics = {
   recall?: number | null
   npv?: number | null
   confusion_matrix?: { tp: number; fp: number; fn: number; tn: number } | null
+  queue_confusion_matrix?: { tp: number; fp: number; fn: number; tn: number } | null
   human_total_count_all?: number | null
 }
 

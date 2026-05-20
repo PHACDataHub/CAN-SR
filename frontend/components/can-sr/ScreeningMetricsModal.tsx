@@ -350,20 +350,60 @@ export default function ScreeningMetricsModal({
     return vals.reduce((a, b) => a + b, 0) / vals.length
   }, [criterionMetrics])
 
-  // Post-validation system accuracy: assumes all human-reviewed queue items are corrected
-  // System acc = (auto_resolved * ai_accuracy + queue) / screened
-  const postValidationAccuracy = React.useMemo(() => {
-    if (!criterionMetrics?.length) return null
-    const perCrit = criterionMetrics
-      .filter((m) => typeof m.accuracy_all === 'number' && m.has_run_count > 0)
-      .map((m) => {
-        const autoResolved = m.has_run_count - m.needs_human_review_count
-        const sysCorrect = autoResolved * (m.accuracy_all as number) + m.needs_human_review_count
-        return sysCorrect / m.has_run_count
-      })
-    if (!perCrit.length) return null
-    return perCrit.reduce((a, b) => a + b, 0) / perCrit.length
+  // Compute corrected metrics per criterion using queue_confusion_matrix
+  // After validation: queue FP → corrected to TN, queue FN → corrected to TP
+  type CorrectedMetrics = {
+    accuracy: number | null
+    f1: number | null
+    precision: number | null
+    recall: number | null
+    npv: number | null
+    cm: { tp: number; fp: number; fn: number; tn: number } | null
+  }
+
+  const correctedByKey = React.useMemo(() => {
+    const m = new Map<string, CorrectedMetrics>()
+    if (!criterionMetrics?.length) return m
+    for (const c of criterionMetrics) {
+      const cm = c.confusion_matrix
+      const qcm = c.queue_confusion_matrix
+      if (!cm) continue
+      // If no queue CM data, we can't compute corrected metrics
+      if (!qcm) continue
+      // Corrected: queue FP are fixed (become TN), queue FN are fixed (become TP)
+      const tp = cm.tp + qcm.fn  // FN in queue get corrected → now TP
+      const tn = cm.tn + qcm.fp  // FP in queue get corrected → now TN
+      const fp = cm.fp - qcm.fp  // remove queue FPs
+      const fn = cm.fn - qcm.fn  // remove queue FNs
+      const total = tp + fp + fn + tn
+      const accuracy = total > 0 ? (tp + tn) / total : null
+      const f1_denom = 2 * tp + fp + fn
+      const f1 = f1_denom > 0 ? (2 * tp) / f1_denom : null
+      const precision = (tp + fp) > 0 ? tp / (tp + fp) : null
+      const recall = (tp + fn) > 0 ? tp / (tp + fn) : null
+      const npv = (tn + fn) > 0 ? tn / (tn + fn) : null
+      m.set(c.criterion_key, { accuracy, f1, precision, recall, npv, cm: { tp, fp, fn, tn } })
+    }
+    return m
   }, [criterionMetrics])
+
+  // Wilson score confidence interval (95%)
+  function wilsonCI(p: number, n: number): [number, number] {
+    if (n <= 0) return [0, 0]
+    const z = 1.96
+    const denom = 1 + z * z / n
+    const centre = (p + z * z / (2 * n)) / denom
+    const margin = (z / denom) * Math.sqrt((p * (1 - p)) / n + z * z / (4 * n * n))
+    return [Math.max(0, centre - margin), Math.min(1, centre + margin)]
+  }
+
+  // Aggregate post-validation accuracy
+  const postValidationAccuracy = React.useMemo(() => {
+    if (!correctedByKey.size) return null
+    const vals = Array.from(correctedByKey.values()).filter((v) => v.accuracy !== null).map((v) => v.accuracy as number)
+    if (!vals.length) return null
+    return vals.reduce((a, b) => a + b, 0) / vals.length
+  }, [correctedByKey])
 
   const accuracyDelta = avgAccuracy !== null && postValidationAccuracy !== null
     ? Math.round((postValidationAccuracy - avgAccuracy) * 100)
@@ -525,81 +565,134 @@ export default function ScreeningMetricsModal({
                     </div>
 
                     {/* Key metrics grid */}
-                    <div className="mt-3 grid grid-cols-5 gap-2">
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
-                        <div className="text-[10px] text-gray-500">Accuracy</div>
-                        <div className="mt-0.5 text-sm font-semibold text-gray-900">
-                          {accAllPct === null ? '—' : `${accAllPct.toFixed(0)}%`}
-                          {(() => {
-                            if (accAllPct === null || m.has_run_count <= 0) return null
-                            const autoRes = m.has_run_count - m.needs_human_review_count
-                            const sysAcc = ((autoRes * (m.accuracy_all as number) + m.needs_human_review_count) / m.has_run_count) * 100
-                            const delta = Math.round(sysAcc - accAllPct)
-                            if (delta <= 0) return null
-                            return <span className="ml-0.5 text-[10px] text-emerald-600 font-medium cursor-help" title="Projected accuracy after human validation corrects all flagged citations">+{delta}%</span>
-                          })()}
+                    {(() => {
+                      const corr = correctedByKey.get(m.criterion_key)
+                      const corrAccPct = corr?.accuracy !== null && corr?.accuracy !== undefined ? corr.accuracy * 100 : null
+                      const corrF1Pct = corr?.f1 !== null && corr?.f1 !== undefined ? corr.f1 * 100 : null
+                      const corrRecallPct = corr?.recall !== null && corr?.recall !== undefined ? corr.recall * 100 : null
+                      const corrPrecPct = corr?.precision !== null && corr?.precision !== undefined ? corr.precision * 100 : null
+                      const corrNpvPct = corr?.npv !== null && corr?.npv !== undefined ? corr.npv * 100 : null
+
+                      const accDelta = accAllPct !== null && corrAccPct !== null ? Math.round(corrAccPct - accAllPct) : null
+                      const f1Delta = f1Pct !== null && corrF1Pct !== null ? Math.round(corrF1Pct - f1Pct) : null
+                      const recallDelta = recallPct !== null && corrRecallPct !== null ? Math.round(corrRecallPct - recallPct) : null
+                      const precDelta = precPct !== null && corrPrecPct !== null ? Math.round(corrPrecPct - precPct) : null
+                      const npvDelta = npvPct !== null && corrNpvPct !== null ? Math.round(corrNpvPct - npvPct) : null
+
+                      const DeltaBadge = ({ delta, title: t }: { delta: number | null; title: string }) => {
+                        if (delta === null || delta === 0) return null
+                        const color = delta > 0 ? 'text-emerald-600' : 'text-rose-500'
+                        const sign = delta > 0 ? '+' : ''
+                        return <span className={`ml-0.5 text-[10px] font-medium cursor-help ${color}`} title={t}>{sign}{delta}%</span>
+                      }
+
+                      // Wilson CI helper for display
+                      const CIRange = ({ value, n }: { value: number | null; n: number }) => {
+                        if (value === null || n < 5) return null
+                        const [lo, hi] = wilsonCI(value / 100, n)
+                        return <div className="text-[9px] text-gray-400 mt-0.5">({Math.round(lo * 100)}–{Math.round(hi * 100)}%)</div>
+                      }
+
+                      return (
+                        <div className="mt-3 grid grid-cols-5 gap-2">
+                          <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
+                            <div className="text-[10px] text-gray-500">Accuracy</div>
+                            <div className="mt-0.5 text-sm font-semibold text-gray-900">
+                              {accAllPct === null ? '—' : `${accAllPct.toFixed(0)}%`}
+                              <DeltaBadge delta={accDelta} title="Projected accuracy after human validation corrects all flagged citations" />
+                            </div>
+                            <CIRange value={accAllPct} n={sampleN} />
+                          </div>
+                          <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
+                            <div className="text-[10px] text-gray-500">F1 Score</div>
+                            <div className="mt-0.5 text-sm font-semibold text-gray-900">
+                              {f1Pct === null ? '—' : `${f1Pct.toFixed(0)}%`}
+                              <DeltaBadge delta={f1Delta} title="Projected F1 after human validation corrects all flagged citations" />
+                            </div>
+                            <CIRange value={f1Pct} n={sampleN} />
+                          </div>
+                          <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
+                            <div className="text-[10px] text-gray-500">Recall</div>
+                            <div className="mt-0.5 text-sm font-semibold text-gray-900">
+                              {recallPct === null ? '—' : `${recallPct.toFixed(0)}%`}
+                              <DeltaBadge delta={recallDelta} title="Projected recall after human validation corrects all flagged citations" />
+                            </div>
+                            <CIRange value={recallPct} n={sampleN} />
+                          </div>
+                          <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
+                            <div className="text-[10px] text-gray-500">Precision</div>
+                            <div className="mt-0.5 text-sm font-semibold text-gray-900">
+                              {precPct === null ? '—' : `${precPct.toFixed(0)}%`}
+                              <DeltaBadge delta={precDelta} title="Projected precision after human validation corrects all flagged citations" />
+                            </div>
+                            <CIRange value={precPct} n={sampleN} />
+                          </div>
+                          <div className="rounded border border-indigo-100 bg-indigo-50/50 p-2 text-center" title="Of papers AI excluded, what % were truly irrelevant?">
+                            <div className="text-[10px] text-indigo-600">NPV</div>
+                            <div className="mt-0.5 text-sm font-semibold text-indigo-900">
+                              {npvPct === null ? '—' : `${npvPct.toFixed(0)}%`}
+                              <DeltaBadge delta={npvDelta} title="Projected NPV after human validation corrects all flagged citations" />
+                            </div>
+                            <CIRange value={npvPct} n={sampleN} />
+                          </div>
                         </div>
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
-                        <div className="text-[10px] text-gray-500">F1 Score</div>
-                        <div className="mt-0.5 text-sm font-semibold text-gray-900">
-                          {f1Pct === null ? '—' : `${f1Pct.toFixed(0)}%`}
-                        </div>
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
-                        <div className="text-[10px] text-gray-500">Recall</div>
-                        <div className="mt-0.5 text-sm font-semibold text-gray-900">
-                          {recallPct === null ? '—' : `${recallPct.toFixed(0)}%`}
-                        </div>
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
-                        <div className="text-[10px] text-gray-500">Precision</div>
-                        <div className="mt-0.5 text-sm font-semibold text-gray-900">
-                          {precPct === null ? '—' : `${precPct.toFixed(0)}%`}
-                        </div>
-                      </div>
-                      <div className="rounded border border-indigo-100 bg-indigo-50/50 p-2 text-center" title="Of papers AI excluded, what % were truly irrelevant?">
-                        <div className="text-[10px] text-indigo-600">NPV</div>
-                        <div className="mt-0.5 text-sm font-semibold text-indigo-900">
-                          {npvPct === null ? '—' : `${npvPct.toFixed(0)}%`}
-                        </div>
-                      </div>
-                    </div>
+                      )
+                    })()}
 
                     {/* Confusion matrix mini */}
-                    {m.confusion_matrix ? (
-                      <div className="mt-3 flex items-start gap-4">
-                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                          <div className="mb-1 text-[10px] font-medium text-gray-600">Confusion Matrix</div>
-                          <table className="text-[10px]">
-                            <thead>
-                              <tr>
-                                <th className="px-1"></th>
-                                <th className="px-2 text-gray-500">Human: Include</th>
-                                <th className="px-2 text-gray-500">Human: Exclude</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr>
-                                <td className="px-1 text-gray-500">AI: Include</td>
-                                <td className="px-2 text-center font-medium text-emerald-700">{m.confusion_matrix.tp}</td>
-                                <td className="px-2 text-center font-medium text-rose-600">{m.confusion_matrix.fp}</td>
-                              </tr>
-                              <tr>
-                                <td className="px-1 text-gray-500">AI: Exclude</td>
-                                <td className="px-2 text-center font-medium text-rose-600">{m.confusion_matrix.fn}</td>
-                                <td className="px-2 text-center font-medium text-emerald-700">{m.confusion_matrix.tn}</td>
-                              </tr>
-                            </tbody>
-                          </table>
+                    {m.confusion_matrix ? (() => {
+                      const qcm = m.queue_confusion_matrix
+                      // Show +/- for each cell based on queue corrections
+                      const CmDelta = ({ val, className: cls }: { val: number | undefined; className?: string }) => {
+                        if (!val) return null
+                        return <span className={`ml-0.5 text-[9px] ${cls || 'text-gray-400'}`}>{val > 0 ? `-${val}` : `+${Math.abs(val)}`}</span>
+                      }
+                      return (
+                        <div className="mt-3 flex items-start gap-4">
+                          <div className="rounded border border-gray-100 bg-gray-50 p-2">
+                            <div className="mb-1 text-[10px] font-medium text-gray-600">Confusion Matrix {qcm ? <span className="text-[9px] text-gray-400 cursor-help" title="Green +/- shows projected change after human validation corrects flagged citations">(+/- after validation)</span> : null}</div>
+                            <table className="text-[10px]">
+                              <thead>
+                                <tr>
+                                  <th className="px-1"></th>
+                                  <th className="px-2 text-gray-500">Human: Include</th>
+                                  <th className="px-2 text-gray-500">Human: Exclude</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr>
+                                  <td className="px-1 text-gray-500">AI: Include</td>
+                                  <td className="px-2 text-center font-medium text-emerald-700">
+                                    {m.confusion_matrix.tp}
+                                    {qcm && qcm.fn > 0 ? <span className="ml-0.5 text-[9px] text-emerald-500">+{qcm.fn}</span> : null}
+                                  </td>
+                                  <td className="px-2 text-center font-medium text-rose-600">
+                                    {m.confusion_matrix.fp}
+                                    {qcm && qcm.fp > 0 ? <span className="ml-0.5 text-[9px] text-emerald-500">-{qcm.fp}</span> : null}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-1 text-gray-500">AI: Exclude</td>
+                                  <td className="px-2 text-center font-medium text-rose-600">
+                                    {m.confusion_matrix.fn}
+                                    {qcm && qcm.fn > 0 ? <span className="ml-0.5 text-[9px] text-emerald-500">-{qcm.fn}</span> : null}
+                                  </td>
+                                  <td className="px-2 text-center font-medium text-emerald-700">
+                                    {m.confusion_matrix.tn}
+                                    {qcm && qcm.fp > 0 ? <span className="ml-0.5 text-[9px] text-emerald-500">+{qcm.fp}</span> : null}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="flex-1 space-y-1 text-[11px] text-gray-600">
+                            {accCritPct !== null ? <div>Critical Agent Agreement: <span className="font-medium">{accCritPct.toFixed(0)}%</span></div> : null}
+                            <div>Sample size: <span className="font-medium">n={sampleN}</span></div>
+                            {cal ? <div>Validated (with human answer): {cal.validated_n}</div> : null}
+                          </div>
                         </div>
-                        <div className="flex-1 space-y-1 text-[11px] text-gray-600">
-                          {accCritPct !== null ? <div>Critical Agent Agreement: <span className="font-medium">{accCritPct.toFixed(0)}%</span></div> : null}
-                          <div>Sample size: <span className="font-medium">n={sampleN}</span></div>
-                          {cal ? <div>Validated (with human answer): {cal.validated_n}</div> : null}
-                        </div>
-                      </div>
-                    ) : null}
+                      )
+                    })() : null}
 
                     {/* Histograms */}
                     {Array.isArray(live?.histogram) && live!.histogram.length

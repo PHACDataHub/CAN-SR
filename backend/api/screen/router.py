@@ -1952,6 +1952,12 @@ async def get_screening_metrics(
             "cm_fp": 0,
             "cm_fn": 0,
             "cm_tn": 0,
+            # Queue-specific confusion matrix: only for citations where this criterion
+            # triggered human review. Used to compute post-validation corrected metrics.
+            "queue_cm_tp": 0,
+            "queue_cm_fp": 0,
+            "queue_cm_fn": 0,
+            "queue_cm_tn": 0,
 
             # Fallback proxy when human labels are not available:
             # count how often critical agrees with screening.
@@ -2041,6 +2047,12 @@ async def get_screening_metrics(
                     else:
                         a["cm_tn"] += 1
 
+                    # Track queue-specific CM (will be populated after triggered_this_criterion is finalized)
+                    # Store (ai_is_include, human_is_include) for deferred queue CM update
+                    # We use a sentinel to mark that this citation+criterion has a CM contribution
+                    if not hasattr(a, "_pending_cm"):
+                        pass  # handled below after triggered_this_criterion
+
                 if conf_f is not None and conf_f < thr:
                     a["low_confidence_count"] += 1
                     has_low_confidence = True
@@ -2100,6 +2112,18 @@ async def get_screening_metrics(
 
             if triggered_this_criterion:
                 a["needs_human_review_count"] += 1
+                # Queue-specific confusion matrix: only count if this citation has a human label
+                if scr and human_sel is not None:
+                    ai_is_inc = not _is_exclude_answer(scr.get("answer"))
+                    human_is_inc = not _is_exclude_answer(human_sel)
+                    if ai_is_inc and human_is_inc:
+                        a["queue_cm_tp"] += 1
+                    elif ai_is_inc and not human_is_inc:
+                        a["queue_cm_fp"] += 1
+                    elif not ai_is_inc and human_is_inc:
+                        a["queue_cm_fn"] += 1
+                    else:
+                        a["queue_cm_tn"] += 1
 
         if has_confident_exclude:
             auto_excluded += 1
@@ -2179,6 +2203,15 @@ async def get_screening_metrics(
             row["npv"] = (cm_tn / (cm_tn + cm_fn)) if (cm_tn + cm_fn) > 0 else None
             # Include raw confusion matrix for frontend
             row["confusion_matrix"] = {"tp": cm_tp, "fp": cm_fp, "fn": cm_fn, "tn": cm_tn}
+
+        # Queue-specific confusion matrix (citations that triggered human review for this criterion)
+        q_tp = int(a.get("queue_cm_tp") or 0)
+        q_fp = int(a.get("queue_cm_fp") or 0)
+        q_fn = int(a.get("queue_cm_fn") or 0)
+        q_tn = int(a.get("queue_cm_tn") or 0)
+        q_total = q_tp + q_fp + q_fn + q_tn
+        if q_total > 0:
+            row["queue_confusion_matrix"] = {"tp": q_tp, "fp": q_fp, "fn": q_fn, "tn": q_tn}
 
         crit_out.append(row)
 
