@@ -648,7 +648,7 @@ export default function ScreeningMetricsModal({
                         return <span className={`ml-0.5 text-[9px] ${cls || 'text-gray-400'}`}>{val > 0 ? `-${val}` : `+${Math.abs(val)}`}</span>
                       }
                       return (
-                        <div className="mt-3 flex items-start gap-4">
+                        <div className="mt-3 flex items-center gap-4">
                           <div className="rounded border border-gray-100 bg-gray-50 p-2">
                             <div className="mb-1 text-[10px] font-medium text-gray-600">Confusion Matrix {qcm ? <span className="text-[9px] text-gray-400 cursor-help" title="Green +/- shows projected change after human validation corrects flagged citations">(+/- after validation)</span> : null}</div>
                             <table className="text-[10px]">
@@ -726,7 +726,7 @@ export default function ScreeningMetricsModal({
                 <div className="mt-1 text-[10px] text-gray-500">of screened citations auto-resolved</div>
                 {postValidationAccuracy !== null && avgAccuracy !== null && accuracyDelta !== null && accuracyDelta > 0 ? (
                   <div className="mt-1.5 text-[10px] text-emerald-600 font-medium cursor-help" title="Effective system accuracy after human validation corrects all flagged citations">
-                    System accuracy: {Math.round(postValidationAccuracy * 100)}% <span className="text-emerald-500">(+{accuracyDelta}%)</span>
+                    Post-validation accuracy: {Math.round(postValidationAccuracy * 100)}%
                   </div>
                 ) : null}
               </div>

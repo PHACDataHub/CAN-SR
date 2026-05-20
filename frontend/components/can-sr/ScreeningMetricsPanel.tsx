@@ -412,6 +412,8 @@ export default function ScreeningMetricsPanel({
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
                           <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
                             <div>Accuracy: {acc === null ? '—' : `${acc}%`}</div>
+                            <div>F1: {typeof c.f1_score === 'number' ? `${Math.round(c.f1_score * 100)}%` : '—'}</div>
+                            <div>Precision: {typeof c.precision === 'number' ? `${Math.round(c.precision * 100)}%` : '—'} · Recall: {typeof c.recall === 'number' ? `${Math.round(c.recall * 100)}%` : '—'}</div>
                             {accCrit === null ? null : (
                               <div>Critical Agent Agreement: {accCrit}%</div>
                             )}
