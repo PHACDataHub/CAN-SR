@@ -218,17 +218,35 @@ export default function ScreeningMetricsPanel({
           ) : null}
         </div>
 
-        {/* Headline metrics: F1 + Workload Reduction */}
+        {/* Headline metrics */}
         {criterionMetrics?.length ? (() => {
+          const accVals = criterionMetrics.filter((c) => typeof c.accuracy_all === 'number').map((c) => c.accuracy_all as number)
+          const avgAcc = accVals.length ? Math.round((accVals.reduce((a, b) => a + b, 0) / accVals.length) * 100) : null
           const f1Vals = criterionMetrics.filter((c) => typeof c.f1_score === 'number').map((c) => c.f1_score as number)
           const avgF1 = f1Vals.length ? Math.round((f1Vals.reduce((a, b) => a + b, 0) / f1Vals.length) * 100) : null
+          const precVals = criterionMetrics.filter((c) => typeof c.precision === 'number').map((c) => c.precision as number)
+          const avgPrec = precVals.length ? Math.round((precVals.reduce((a, b) => a + b, 0) / precVals.length) * 100) : null
+          const recVals = criterionMetrics.filter((c) => typeof c.recall === 'number').map((c) => c.recall as number)
+          const avgRec = recVals.length ? Math.round((recVals.reduce((a, b) => a + b, 0) / recVals.length) * 100) : null
           const screened = total - notScreened
           const wr = screened > 0 ? Math.round((1 - queueTotal / screened) * 100) : null
           return (
-            <div className="mt-2 flex items-center gap-3">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-1">
+                <span className="text-[10px] text-emerald-600">Acc</span>
+                <span className="text-xs font-semibold text-emerald-900">{avgAcc === null ? '—' : `${avgAcc}%`}</span>
+              </div>
               <div className="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1">
                 <span className="text-[10px] text-indigo-600">F1</span>
                 <span className="text-xs font-semibold text-indigo-900">{avgF1 === null ? '—' : `${avgF1}%`}</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-md bg-sky-50 px-2 py-1">
+                <span className="text-[10px] text-sky-600">Prec</span>
+                <span className="text-xs font-semibold text-sky-900">{avgPrec === null ? '—' : `${avgPrec}%`}</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-md bg-violet-50 px-2 py-1">
+                <span className="text-[10px] text-violet-600">Recall</span>
+                <span className="text-xs font-semibold text-violet-900">{avgRec === null ? '—' : `${avgRec}%`}</span>
               </div>
               <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1">
                 <span className="text-[10px] text-amber-600">Workload ↓</span>
@@ -411,14 +429,24 @@ export default function ScreeningMetricsPanel({
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
                           <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
-                            <div>Accuracy: {acc === null ? '—' : `${acc}%`}</div>
-                            <div>F1: {typeof c.f1_score === 'number' ? `${Math.round(c.f1_score * 100)}%` : '—'}</div>
-                            <div>Precision: {typeof c.precision === 'number' ? `${Math.round(c.precision * 100)}%` : '—'} · Recall: {typeof c.recall === 'number' ? `${Math.round(c.recall * 100)}%` : '—'}</div>
-                            {accCrit === null ? null : (
-                              <div>Critical Agent Agreement: {accCrit}%</div>
-                            )}
-                            {cal ? <div>Validated: {cal.validated_n}</div> : null}
                             {rec === null ? null : <div>Recommended thr: {rec}</div>}
+                            {typeof c.npv === 'number' ? (() => {
+                              const npvPct = Math.round(c.npv * 100)
+                              // Compute corrected NPV delta if queue_confusion_matrix available
+                              const cm = c.confusion_matrix
+                              const qcm = c.queue_confusion_matrix
+                              let npvDelta: number | null = null
+                              if (cm && qcm) {
+                                const corrTn = cm.tn + qcm.fp
+                                const corrFn = cm.fn - qcm.fn
+                                const corrNpv = (corrTn + corrFn) > 0 ? corrTn / (corrTn + corrFn) : null
+                                if (corrNpv !== null) npvDelta = Math.round(corrNpv * 100) - npvPct
+                              }
+                              return (
+                                <div>NPV: {npvPct}%{npvDelta !== null && npvDelta > 0 ? <span className="ml-1 text-emerald-600 font-medium">+{npvDelta}%</span> : null}</div>
+                              )
+                            })() : null}
+                            {wr !== null ? <div>Workload ↓: {wr}%</div> : null}
                           </div>
                         </div>
 
