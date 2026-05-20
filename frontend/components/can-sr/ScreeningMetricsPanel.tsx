@@ -33,6 +33,12 @@ export type ScreeningCriterionMetrics = {
   accuracy?: number | null
   accuracy_all?: number | null
   accuracy_critical_agent?: number | null
+  f1_score?: number | null
+  precision?: number | null
+  recall?: number | null
+  npv?: number | null
+  confusion_matrix?: { tp: number; fp: number; fn: number; tn: number } | null
+  human_total_count_all?: number | null
 }
 
 export type CalibrationPoint = {
@@ -210,9 +216,30 @@ export default function ScreeningMetricsPanel({
             </button>
           ) : null}
         </div>
-        <p className="mt-1 text-xs text-gray-600">
-          Threshold + validation workload controls. (Accuracy/curves will be powered by Phase 2 metrics.)
-        </p>
+
+        {/* Headline metrics: F1 + Workload Reduction */}
+        {criterionMetrics?.length ? (() => {
+          const f1Vals = criterionMetrics.filter((c) => typeof c.f1_score === 'number').map((c) => c.f1_score as number)
+          const avgF1 = f1Vals.length ? Math.round((f1Vals.reduce((a, b) => a + b, 0) / f1Vals.length) * 100) : null
+          const screened = total - notScreened
+          const wr = screened > 0 ? Math.round((1 - queueTotal / screened) * 100) : null
+          return (
+            <div className="mt-2 flex items-center gap-3">
+              <div className="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1">
+                <span className="text-[10px] text-indigo-600">F1</span>
+                <span className="text-xs font-semibold text-indigo-900">{avgF1 === null ? '—' : `${avgF1}%`}</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1">
+                <span className="text-[10px] text-amber-600">Workload ↓</span>
+                <span className="text-xs font-semibold text-amber-900">{wr === null ? '—' : `${Math.max(0, wr)}%`}</span>
+              </div>
+            </div>
+          )
+        })() : (
+          <p className="mt-1 text-xs text-gray-600">
+            Threshold + validation workload controls.
+          </p>
+        )}
       </div>
 
       <div className="space-y-3">

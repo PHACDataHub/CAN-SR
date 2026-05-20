@@ -1944,6 +1944,14 @@ async def get_screening_metrics(
             # All-with-human-answers agreement counts (not just validated).
             "human_agree_count_all": 0,
             "human_total_count_all": 0,
+            # Confusion matrix counters (all with human answers).
+            # Positive = include, Negative = exclude.
+            # TP = AI include & human include, FP = AI include & human exclude,
+            # FN = AI exclude & human include, TN = AI exclude & human exclude.
+            "cm_tp": 0,
+            "cm_fp": 0,
+            "cm_fn": 0,
+            "cm_tn": 0,
 
             # Fallback proxy when human labels are not available:
             # count how often critical agrees with screening.
@@ -2019,6 +2027,19 @@ async def get_screening_metrics(
                         a["human_total_count"] += 1
                         if str(human_sel).strip() == str(ans or "").strip():
                             a["human_agree_count"] += 1
+
+                    # Confusion matrix: Positive=include, Negative=exclude
+                    # AI predicts "include" if answer does NOT contain (exclude)
+                    ai_is_include = not _is_exclude_answer(ans)
+                    human_is_include = not _is_exclude_answer(human_sel)
+                    if ai_is_include and human_is_include:
+                        a["cm_tp"] += 1
+                    elif ai_is_include and not human_is_include:
+                        a["cm_fp"] += 1
+                    elif not ai_is_include and human_is_include:
+                        a["cm_fn"] += 1
+                    else:
+                        a["cm_tn"] += 1
 
                 if conf_f is not None and conf_f < thr:
                     a["low_confidence_count"] += 1
@@ -2138,6 +2159,27 @@ async def get_screening_metrics(
             row["accuracy_all"] = accuracy_all
         if accuracy_critical_agent is not None:
             row["accuracy_critical_agent"] = accuracy_critical_agent
+
+        # Compute F1 and NPV from confusion matrix
+        cm_tp = int(a.get("cm_tp") or 0)
+        cm_fp = int(a.get("cm_fp") or 0)
+        cm_fn = int(a.get("cm_fn") or 0)
+        cm_tn = int(a.get("cm_tn") or 0)
+        cm_total = cm_tp + cm_fp + cm_fn + cm_tn
+
+        if cm_total > 0:
+            # F1 = 2*TP / (2*TP + FP + FN)
+            f1_denom = 2 * cm_tp + cm_fp + cm_fn
+            row["f1_score"] = (2 * cm_tp / f1_denom) if f1_denom > 0 else None
+            # Precision = TP / (TP + FP)
+            row["precision"] = (cm_tp / (cm_tp + cm_fp)) if (cm_tp + cm_fp) > 0 else None
+            # Recall (sensitivity) = TP / (TP + FN)
+            row["recall"] = (cm_tp / (cm_tp + cm_fn)) if (cm_tp + cm_fn) > 0 else None
+            # NPV = TN / (TN + FN) — "of papers AI excluded, what % were truly irrelevant"
+            row["npv"] = (cm_tn / (cm_tn + cm_fn)) if (cm_tn + cm_fn) > 0 else None
+            # Include raw confusion matrix for frontend
+            row["confusion_matrix"] = {"tp": cm_tp, "fp": cm_fp, "fn": cm_fn, "tn": cm_tn}
+
         crit_out.append(row)
 
     return ScreeningMetricsResponse(
