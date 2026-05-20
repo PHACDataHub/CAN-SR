@@ -350,6 +350,25 @@ export default function ScreeningMetricsModal({
     return vals.reduce((a, b) => a + b, 0) / vals.length
   }, [criterionMetrics])
 
+  // Post-validation system accuracy: assumes all human-reviewed queue items are corrected
+  // System acc = (auto_resolved * ai_accuracy + queue) / screened
+  const postValidationAccuracy = React.useMemo(() => {
+    if (!criterionMetrics?.length) return null
+    const perCrit = criterionMetrics
+      .filter((m) => typeof m.accuracy_all === 'number' && m.has_run_count > 0)
+      .map((m) => {
+        const autoResolved = m.has_run_count - m.needs_human_review_count
+        const sysCorrect = autoResolved * (m.accuracy_all as number) + m.needs_human_review_count
+        return sysCorrect / m.has_run_count
+      })
+    if (!perCrit.length) return null
+    return perCrit.reduce((a, b) => a + b, 0) / perCrit.length
+  }, [criterionMetrics])
+
+  const accuracyDelta = avgAccuracy !== null && postValidationAccuracy !== null
+    ? Math.round((postValidationAccuracy - avgAccuracy) * 100)
+    : null
+
   const avgF1 = React.useMemo(() => {
     if (!criterionMetrics?.length) return null
     const vals = criterionMetrics.filter((m) => typeof m.f1_score === 'number').map((m) => m.f1_score as number)
@@ -462,7 +481,7 @@ export default function ScreeningMetricsModal({
             <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-4">
               <p className="text-sm text-gray-800">
                 {avgAccuracy !== null ? (
-                  <>The AI agrees with human reviewers <span className="font-semibold">{Math.round(avgAccuracy * 100)}%</span> of the time</>
+                  <>The AI agrees with human reviewers <span className="font-semibold">{Math.round(avgAccuracy * 100)}%</span>{accuracyDelta !== null && accuracyDelta > 0 ? <span className="ml-1 text-emerald-600 font-medium cursor-help" title="Projected system accuracy after human validation corrects all flagged citations">(+{accuracyDelta}%)</span> : null} of the time</>
                 ) : null}
                 {avgF1 !== null ? (
                   <>{avgAccuracy !== null ? ' ' : ''}(F1 score: <span className="font-semibold">{Math.round(avgF1 * 100)}%</span>)</>
@@ -511,6 +530,14 @@ export default function ScreeningMetricsModal({
                         <div className="text-[10px] text-gray-500">Accuracy</div>
                         <div className="mt-0.5 text-sm font-semibold text-gray-900">
                           {accAllPct === null ? '—' : `${accAllPct.toFixed(0)}%`}
+                          {(() => {
+                            if (accAllPct === null || m.has_run_count <= 0) return null
+                            const autoRes = m.has_run_count - m.needs_human_review_count
+                            const sysAcc = ((autoRes * (m.accuracy_all as number) + m.needs_human_review_count) / m.has_run_count) * 100
+                            const delta = Math.round(sysAcc - accAllPct)
+                            if (delta <= 0) return null
+                            return <span className="ml-0.5 text-[10px] text-emerald-600 font-medium cursor-help" title="Projected accuracy after human validation corrects all flagged citations">+{delta}%</span>
+                          })()}
                         </div>
                       </div>
                       <div className="rounded border border-gray-100 bg-gray-50 p-2 text-center">
@@ -604,6 +631,11 @@ export default function ScreeningMetricsModal({
                   {workloadReduction === null ? '—' : `${Math.round(Math.max(0, workloadReduction))}%`}
                 </div>
                 <div className="mt-1 text-[10px] text-gray-500">of screened citations auto-resolved</div>
+                {postValidationAccuracy !== null && avgAccuracy !== null && accuracyDelta !== null && accuracyDelta > 0 ? (
+                  <div className="mt-1.5 text-[10px] text-emerald-600 font-medium cursor-help" title="Effective system accuracy after human validation corrects all flagged citations">
+                    System accuracy: {Math.round(postValidationAccuracy * 100)}% <span className="text-emerald-500">(+{accuracyDelta}%)</span>
+                  </div>
+                ) : null}
               </div>
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                 <div className="text-[11px] text-gray-500">Human Review Queue</div>
