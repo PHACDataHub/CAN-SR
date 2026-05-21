@@ -630,10 +630,14 @@ export default function ScreeningMetricsModal({
                           <div className="rounded border border-indigo-100 bg-indigo-50/50 p-2 text-center" title="Of papers AI excluded, what % were truly irrelevant?">
                             <div className="text-[10px] text-indigo-600">NPV</div>
                             <div className="mt-0.5 text-sm font-semibold text-indigo-900">
-                              {npvPct === null ? '—' : `${npvPct.toFixed(0)}%`}
+                              {(() => {
+                                // Default NPV to 100% if CM exists but fn === 0
+                                const displayNpv = npvPct !== null ? npvPct : (m.confusion_matrix && m.confusion_matrix.fn === 0 ? 100 : null)
+                                return displayNpv === null ? '—' : `${displayNpv.toFixed(0)}%`
+                              })()}
                               <DeltaBadge delta={npvDelta} title="Projected NPV after human validation corrects all flagged citations" />
                             </div>
-                            <CIRange value={npvPct} n={sampleN} />
+                            <CIRange value={npvPct ?? (m.confusion_matrix && m.confusion_matrix.fn === 0 ? 100 : null)} n={sampleN} />
                           </div>
                         </div>
                       )
@@ -699,9 +703,26 @@ export default function ScreeningMetricsModal({
                       ? renderDisagreementShareChart(live!.histogram, { current: m.threshold, recommended: rec }, useLogScale)
                       : null}
 
-                    {Array.isArray(live?.histogram) && live!.histogram.length
-                      ? renderLiveConfidenceHistogram(live!.histogram, { current: m.threshold, recommended: rec }, useLogScale)
-                      : null}
+                    {Array.isArray(live?.histogram) && live!.histogram.length ? (
+                      <>
+                        {/* WR @ rec and WR @ critical inline metrics */}
+                        {(() => {
+                          const calC = calibByKey.get(m.criterion_key)
+                          const recC = calC && typeof calC.recommended_threshold === 'number' ? calC.recommended_threshold : null
+                          const curveC = Array.isArray(calC?.curve) ? calC!.curve : []
+                          const recPt = recC === null ? null : curveC.find((p) => Math.abs(p.threshold - recC) < 1e-9) || null
+                          const wrRec = recPt && typeof recPt.workload_reduction === 'number' ? Math.round(recPt.workload_reduction * 100) : null
+                          const wrCritical = m.has_run_count > 0 ? Math.round((1 - m.critical_disagreement_count / m.has_run_count) * 100) : null
+                          return (wrRec !== null || wrCritical !== null) ? (
+                            <div className="mt-1 flex items-center gap-3 text-[10px] text-gray-500">
+                              {wrRec !== null ? <span>↓ @ rec: <span className="font-medium text-gray-700">{wrRec}%</span></span> : null}
+                              {wrCritical !== null ? <span>↓ @ critical: <span className="font-medium text-gray-700">{Math.max(0, wrCritical)}%</span></span> : null}
+                            </div>
+                          ) : null
+                        })()}
+                        {renderLiveConfidenceHistogram(live!.histogram, { current: m.threshold, recommended: rec }, useLogScale)}
+                      </>
+                    ) : null}
                   </div>
                 )
               })}
@@ -719,11 +740,11 @@ export default function ScreeningMetricsModal({
             {/* Summary cards */}
             <div className="grid grid-cols-4 gap-3">
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <div className="text-[11px] text-gray-500">Workload Reduction</div>
+                <div className="text-[11px] text-gray-500">Workload ↓</div>
                 <div className="mt-1 text-lg font-semibold text-gray-900">
                   {workloadReduction === null ? '—' : `${Math.round(Math.max(0, workloadReduction))}%`}
                 </div>
-                <div className="mt-1 text-[10px] text-gray-500">of screened citations auto-resolved</div>
+                <div className="mt-1 text-[10px] text-gray-500">of screened auto-resolved (threshold + critical)</div>
                 {postValidationAccuracy !== null && avgAccuracy !== null && accuracyDelta !== null && accuracyDelta > 0 ? (
                   <div className="mt-1.5 text-[10px] text-emerald-600 font-medium cursor-help" title="Effective system accuracy after human validation corrects all flagged citations">
                     Post-validation accuracy: {Math.round(postValidationAccuracy * 100)}%

@@ -429,24 +429,31 @@ export default function ScreeningMetricsPanel({
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
                           <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
-                            {rec === null ? null : <div>Recommended thr: {rec}</div>}
-                            {typeof c.npv === 'number' ? (() => {
-                              const npvPct = Math.round(c.npv * 100)
-                              // Compute corrected NPV delta if queue_confusion_matrix available
+                            {rec !== null ? <div>Recommended thr: {rec}</div> : null}
+                            {(() => {
+                              // NPV: default to 100% if confusion matrix exists but fn === 0
                               const cm = c.confusion_matrix
+                              const rawNpv = typeof c.npv === 'number' ? c.npv : null
+                              const npvPct = rawNpv !== null ? Math.round(rawNpv * 100) : (cm && cm.fn === 0 ? 100 : null)
+                              // Corrected NPV delta
                               const qcm = c.queue_confusion_matrix
                               let npvDelta: number | null = null
-                              if (cm && qcm) {
+                              if (npvPct !== null && cm && qcm) {
                                 const corrTn = cm.tn + qcm.fp
                                 const corrFn = cm.fn - qcm.fn
-                                const corrNpv = (corrTn + corrFn) > 0 ? corrTn / (corrTn + corrFn) : null
-                                if (corrNpv !== null) npvDelta = Math.round(corrNpv * 100) - npvPct
+                                const corrNpv = (corrTn + corrFn) > 0 ? corrTn / (corrTn + corrFn) : 1
+                                npvDelta = Math.round(corrNpv * 100) - npvPct
                               }
-                              return (
+                              return npvPct !== null ? (
                                 <div>NPV: {npvPct}%{npvDelta !== null && npvDelta > 0 ? <span className="ml-1 text-emerald-600 font-medium">+{npvDelta}%</span> : null}</div>
-                              )
-                            })() : null}
-                            {wr !== null ? <div>Workload ↓: {wr}%</div> : null}
+                              ) : null
+                            })()}
+                            {(() => {
+                              // Workload ↓ general = 1 - (needs_human_review_count / has_run_count)
+                              if (c.has_run_count <= 0) return null
+                              const wrGen = Math.round((1 - c.needs_human_review_count / c.has_run_count) * 100)
+                              return <div>Workload ↓: {Math.max(0, wrGen)}%</div>
+                            })()}
                           </div>
                         </div>
 
