@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import StackingCard from '@/components/can-sr/stacking-card'
@@ -13,6 +13,17 @@ type SRItem = {
   name?: string
   title?: string
   description?: string
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  const tokenType = getTokenType()
+
+  if (!token) {
+    return {}
+  }
+
+  return { Authorization: `${tokenType} ${token}` }
 }
 
 /**
@@ -44,11 +55,14 @@ export default function CanSrIndexPage() {
   // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>()
 
-  async function fetchReviews() {
+  const fetchReviews = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/can-sr/reviews/list', { method: 'GET', headers: getAuthHeaders() })
+      const res = await fetch('/api/can-sr/reviews/list', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      })
       if (!res.ok) {
         throw new Error(`Failed to fetch (${res.status})`)
       }
@@ -62,11 +76,11 @@ export default function CanSrIndexPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [dict.errors.unableToLoadReviews])
 
   useEffect(() => {
     fetchReviews()
-  }, [])
+  }, [fetchReviews])
 
   async function handleCreate(e?: React.FormEvent) {
     if (e) e.preventDefault()
@@ -108,18 +122,6 @@ export default function CanSrIndexPage() {
     } finally {
       setCreating(false)
     }
-  }
-
-  // Get auth headers
-  const getAuthHeaders = (): Record<string, string> => {
-    const token = getAuthToken()
-    const tokenType = getTokenType()
-
-    if (!token) {
-      return {}
-    }
-
-    return { Authorization: `${tokenType} ${token}` }
   }
 
   // Fetch current user and ensure logged in
@@ -195,7 +197,7 @@ export default function CanSrIndexPage() {
           <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
         ) : reviews.length === 0 ? (
           <div className="space-y-4">
-            
+
             <div className="rounded-md border border-gray-200 bg-white p-6 text-sm text-gray-700">
               {dict.cansr.noReviews}
             </div>

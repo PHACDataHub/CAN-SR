@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
@@ -71,6 +71,22 @@ export default function CanSrSetupPage() {
     fetchSr()
   }, [srId])
 
+  const getLastSavedYaml = useCallback(async () => {
+    if (!srId) return SAMPLE_YAML
+
+    const res = await authenticatedFetch(
+      `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+    )
+    const data = await res.json().catch(() => ({}))
+    const criteria_yaml = data.criteria_yaml
+
+    if (!criteria_yaml) {
+      return SAMPLE_YAML
+    }
+
+    return criteria_yaml
+  }, [srId])
+
   useEffect(() => {
     if (!srId) {
       router.replace('/can-sr')
@@ -88,7 +104,7 @@ export default function CanSrSetupPage() {
     }
 
     loadLastSavedYaml()
-  }, [srId, router])
+  }, [getLastSavedYaml, router, srId])
 
   // read selected file
   const handleFileSelected = async (f: File | null) => {
@@ -215,21 +231,6 @@ export default function CanSrSetupPage() {
     }
   }
 
-  const getLastSavedYaml = async () => {
-    if (!srId) return SAMPLE_YAML
-
-    const res = await authenticatedFetch(
-      `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
-    )
-    const data = await res.json().catch(() => ({}))
-    const criteria_yaml = data.criteria_yaml
-    if(!criteria_yaml) {
-      return SAMPLE_YAML
-    } else {
-      return criteria_yaml
-    }
-  }
-
   const reloadLastSave = async () => {
     setYamlLoading(true)
     try {
@@ -244,7 +245,7 @@ export default function CanSrSetupPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
-      <SRHeader 
+      <SRHeader
         title={dict.setup.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={

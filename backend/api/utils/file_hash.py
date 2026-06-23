@@ -1,10 +1,12 @@
 """
 File hash utilities for duplicate detection
 """
+from __future__ import annotations
 
 import hashlib
-from typing import Dict, Any
 import logging
+from typing import Any
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,8 @@ def calculate_file_signature(filename: str, file_size: int, file_hash: str) -> s
 
 
 def create_file_metadata(
-    filename: str, file_content: bytes, additional_metadata: Dict[str, Any] = None
-) -> Dict[str, Any]:
+    filename: str, file_content: bytes, additional_metadata: dict[str, Any] = None,
+) -> dict[str, Any]:
     """
     Create comprehensive file metadata including hash for duplicate detection
 
@@ -62,10 +64,10 @@ def create_file_metadata(
         file_size = len(file_content)
 
         metadata = {
-            "filename": filename,
-            "file_size": file_size,
-            "file_hash": file_hash,
-            "signature": calculate_file_signature(filename, file_size, file_hash),
+            'filename': filename,
+            'file_size': file_size,
+            'file_hash': file_hash,
+            'signature': calculate_file_signature(filename, file_size, file_hash),
         }
 
         if additional_metadata:
@@ -111,8 +113,8 @@ def is_duplicate_by_hash(new_file_hash: str, existing_hashes: list) -> tuple[boo
 
 
 def get_duplicate_info(
-    file_metadata: Dict[str, Any], existing_files: list
-) -> Dict[str, Any]:
+    file_metadata: dict[str, Any], existing_files: list,
+) -> dict[str, Any]:
     """
     Get detailed information about potential duplicates
 
@@ -123,28 +125,28 @@ def get_duplicate_info(
     Returns:
         Dict containing duplicate detection results
     """
-    new_hash = file_metadata.get("file_hash")
+    new_hash = file_metadata.get('file_hash')
     if not new_hash:
-        return {"is_duplicate": False, "duplicate_files": []}
+        return {'is_duplicate': False, 'duplicate_files': []}
 
     duplicate_files = []
 
     for existing_file in existing_files:
-        existing_hash = existing_file.get("file_hash")
+        existing_hash = existing_file.get('file_hash')
         if existing_hash and compare_file_hashes(new_hash, existing_hash):
             duplicate_files.append(
                 {
-                    "document_id": existing_file.get("document_id"),
-                    "filename": existing_file.get("filename"),
-                    "file_size": existing_file.get("file_size"),
-                    "upload_date": existing_file.get("upload_date"),
-                    "file_hash": existing_hash,
-                }
+                    'document_id': existing_file.get('document_id'),
+                    'filename': existing_file.get('filename'),
+                    'file_size': existing_file.get('file_size'),
+                    'upload_date': existing_file.get('upload_date'),
+                    'file_hash': existing_hash,
+                },
             )
 
     return {
-        "is_duplicate": len(duplicate_files) > 0,
-        "duplicate_count": len(duplicate_files),
-        "duplicate_files": duplicate_files,
-        "new_file_hash": new_hash,
+        'is_duplicate': len(duplicate_files) > 0,
+        'duplicate_count': len(duplicate_files),
+        'duplicate_files': duplicate_files,
+        'new_file_hash': new_hash,
     }

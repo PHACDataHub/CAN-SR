@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
@@ -272,7 +272,7 @@ export default function CanSrL2ScreenViewPage() {
   }, [])
 
   // Load citation row (and ensure fulltext is extracted if missing)
-  async function fetchCitationById(id: string) {
+  const fetchCitationById = useCallback(async (id: string) => {
     if (!srId || !id) return
     setLoadingCitation(true)
     try {
@@ -347,13 +347,13 @@ export default function CanSrL2ScreenViewPage() {
     } finally {
       setLoadingCitation(false)
     }
-  }
+  }, [srId])
 
   useEffect(() => {
     if (!srId || !citationId) return
     // fetch for current citation on mount / when params change
     fetchCitationById(citationId)
-  }, [srId, citationId])
+  }, [citationId, fetchCitationById, srId])
 
   // Re-usable loader so we can refresh after triggering an agentic run.
   async function loadRuns() {

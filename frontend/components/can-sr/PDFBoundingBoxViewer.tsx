@@ -347,7 +347,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       })
       renderTasksRef.current = {}
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDocument, totalPages, scale])
 
   // Note: doc-intelligence overlay rendering was removed.

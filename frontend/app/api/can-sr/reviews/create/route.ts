@@ -6,8 +6,8 @@ import { BACKEND_URL } from '@/lib/config'
  *
  * Routes handled:
  * - POST    /api/can-sr/reviews/create                              -> create SR (multipart or JSON)
- * - GET     /api/can-sr/reviews/create?sr_id=                       -> get single SR by id 
- * - GET     /api/can-sr/reviews/create?sr_id=...?criteria_parsed=1  -> get single SR criteria by id 
+ * - GET     /api/can-sr/reviews/create?sr_id=                       -> get single SR by id
+ * - GET     /api/can-sr/reviews/create?sr_id=...?criteria_parsed=1  -> get single SR criteria by id
  *
  * Notes:
  * - For file uploads, send multipart/form-data to this route; it will forward FormData to backend.
@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
         { status: 401 },
       )
     }
-    
+
     const params = request.nextUrl.searchParams
     const srId = params.get('sr_id')
     const criteriaParsed = params.get('criteria_parsed')

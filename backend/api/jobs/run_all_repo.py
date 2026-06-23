@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
+from typing import Dict
+from typing import Optional
 
 from ..services.postgres_auth import postgres_server
 
@@ -50,7 +52,7 @@ class RunAllRepo:
                     started_at TIMESTAMP WITH TIME ZONE,
                     finished_at TIMESTAMP WITH TIME ZONE
                 )
-                """
+                """,
             )
 
             # Migration safety: older deployments may have allowed multiple active
@@ -76,7 +78,7 @@ class RunAllRepo:
                 FROM ranked r
                 WHERE j.id = r.id
                   AND r.rn > 1
-                """
+                """,
             )
 
             # Enforce: only one active run-all job per SR at a time.
@@ -87,7 +89,7 @@ class RunAllRepo:
                 CREATE UNIQUE INDEX IF NOT EXISTS run_all_jobs_one_active_per_sr
                 ON run_all_jobs (sr_id)
                 WHERE status IN ('queued', 'running', 'paused')
-                """
+                """,
             )
             # Store only failures as requested
             cur.execute(
@@ -100,7 +102,7 @@ class RunAllRepo:
                     error TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
                 )
-                """
+                """,
             )
 
             # Chunk scheduling table (fairness): store chunk definitions and status.
@@ -120,14 +122,14 @@ class RunAllRepo:
                     finished_at TIMESTAMP WITH TIME ZONE,
                     UNIQUE(job_id, chunk_index)
                 )
-                """
+                """,
             )
 
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS run_all_job_chunks_lookup
                 ON run_all_job_chunks (job_id, status, chunk_index)
-                """
+                """,
             )
             conn.commit()
         except Exception:
@@ -163,7 +165,7 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def get_chunk(self, chunk_id: int) -> Optional[Dict[str, Any]]:
+    def get_chunk(self, chunk_id: int) -> dict[str, Any] | None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -181,19 +183,21 @@ class RunAllRepo:
                 return None
             cols = [d[0] for d in cur.description]
             out = {cols[i]: row[i] for i in range(len(cols))}
-            if isinstance(out.get("citation_ids"), str):
+            if isinstance(out.get('citation_ids'), str):
                 try:
-                    out["citation_ids"] = json.loads(out["citation_ids"])  # type: ignore
+                    out['citation_ids'] = json.loads(
+                        out['citation_ids'],
+                    )  # type: ignore
                 except Exception:
                     pass
             # normalize
-            out["job_id"] = str(out.get("job_id"))
+            out['job_id'] = str(out.get('job_id'))
             return out
         except Exception:
             _safe_rollback(conn)
             raise
 
-    def claim_next_todo_chunk(self, job_id: str, *, prefetch: int = 2) -> Optional[int]:
+    def claim_next_todo_chunk(self, job_id: str, *, prefetch: int = 2) -> int | None:
         """Atomically claim the next todo chunk for a job.
 
         Fairness/throughput tradeoff is controlled by `prefetch`:
@@ -211,7 +215,11 @@ class RunAllRepo:
             # Serialize claims per job to avoid races where multiple workers
             # simultaneously observe the same doing-count and over-claim.
             # (Row-level locking on the parent job is cheap and safe.)
-            cur.execute("SELECT 1 FROM run_all_jobs WHERE id = %s FOR UPDATE", (job_id,))
+            cur.execute(
+                'SELECT 1 FROM run_all_jobs WHERE id = %s FOR UPDATE', (
+                    job_id,
+                ),
+            )
 
             # Enforce prefetch limit: claim a todo chunk only if currently
             # doing_count < pf.
@@ -289,7 +297,7 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def get_active_job_for_sr(self, sr_id: str) -> Optional[Dict[str, Any]]:
+    def get_active_job_for_sr(self, sr_id: str) -> dict[str, Any] | None:
         """Return the active job (queued/running/paused) for an SR if it exists."""
         conn = None
         try:
@@ -330,7 +338,7 @@ class RunAllRepo:
                 SELECT COUNT(1)
                 FROM run_all_jobs
                 WHERE status IN ('queued', 'running', 'paused')
-                """
+                """,
             )
             row = cur.fetchone()
             return int(row[0] or 0) if row else 0
@@ -338,7 +346,7 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def list_active_jobs_for_srs(self, sr_ids: list[str]) -> list[Dict[str, Any]]:
+    def list_active_jobs_for_srs(self, sr_ids: list[str]) -> list[dict[str, Any]]:
         """List jobs to show in the UI floating panel.
 
         We include running states + "sticky terminal" states:
@@ -369,21 +377,21 @@ class RunAllRepo:
             )
             rows = cur.fetchall() or []
             cols = [d[0] for d in cur.description]
-            out: list[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for row in rows:
                 job = {cols[i]: row[i] for i in range(len(cols))}
                 # parse meta
-                if isinstance(job.get("meta"), str):
+                if isinstance(job.get('meta'), str):
                     try:
-                        job["meta"] = json.loads(job["meta"])  # type: ignore
+                        job['meta'] = json.loads(job['meta'])  # type: ignore
                     except Exception:
                         pass
-                for k in ("created_at", "started_at", "finished_at"):
+                for k in ('created_at', 'started_at', 'finished_at'):
                     v = job.get(k)
                     if isinstance(v, datetime):
                         job[k] = v.isoformat()
-                if job.get("id") is not None:
-                    job["job_id"] = str(job.pop("id"))
+                if job.get('id') is not None:
+                    job['job_id'] = str(job.pop('id'))
                 out.append(job)
             return out
         except Exception:
@@ -397,21 +405,23 @@ class RunAllRepo:
         cooperate.
         """
         if paused:
-            self.set_status(job_id, "paused")
+            self.set_status(job_id, 'paused')
         else:
             # Resume to running (do not touch started_at)
-            self.set_status(job_id, "running")
+            self.set_status(job_id, 'running')
 
     def is_paused(self, job_id: str) -> bool:
         conn = None
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            cur.execute("SELECT status FROM run_all_jobs WHERE id = %s", (job_id,))
+            cur.execute(
+                'SELECT status FROM run_all_jobs WHERE id = %s', (job_id,),
+            )
             row = cur.fetchone()
             if not row:
                 return False
-            return str(row[0]).lower() == "paused"
+            return str(row[0]).lower() == 'paused'
         except Exception:
             _safe_rollback(conn)
             raise
@@ -422,8 +432,8 @@ class RunAllRepo:
         sr_id: str,
         step: str,
         created_by: str,
-        model: Optional[str],
-        meta: Dict[str, Any],
+        model: str | None,
+        meta: dict[str, Any],
         total: int,
     ) -> str:
         conn = None
@@ -442,7 +452,7 @@ class RunAllRepo:
                     step,
                     created_by,
                     model,
-                    "queued",
+                    'queued',
                     int(total),
                     json.dumps(meta or {}),
                 ),
@@ -453,7 +463,7 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -473,31 +483,31 @@ class RunAllRepo:
             cols = [d[0] for d in cur.description]
             out = {cols[i]: row[i] for i in range(len(cols))}
             # parse meta
-            if isinstance(out.get("meta"), str):
+            if isinstance(out.get('meta'), str):
                 try:
-                    out["meta"] = json.loads(out["meta"])  # type: ignore
+                    out['meta'] = json.loads(out['meta'])  # type: ignore
                 except Exception:
                     pass
             # datetimes to iso
-            for k in ("created_at", "started_at", "finished_at"):
+            for k in ('created_at', 'started_at', 'finished_at'):
                 v = out.get(k)
                 if isinstance(v, datetime):
                     out[k] = v.isoformat()
             # uuid to str
-            if out.get("id") is not None:
-                out["job_id"] = str(out.pop("id"))
+            if out.get('id') is not None:
+                out['job_id'] = str(out.pop('id'))
             return out
         except Exception:
             _safe_rollback(conn)
             raise
 
-    def set_status(self, job_id: str, status: str, *, error: Optional[str] = None) -> None:
+    def set_status(self, job_id: str, status: str, *, error: str | None = None) -> None:
         conn = None
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
             now = datetime.utcnow().isoformat()
-            if status == "running":
+            if status == 'running':
                 cur.execute(
                     """
                     UPDATE run_all_jobs
@@ -506,7 +516,7 @@ class RunAllRepo:
                     """,
                     (status, now, error, job_id),
                 )
-            elif status in ("done", "finished", "failed", "canceled"):
+            elif status in ('done', 'finished', 'failed', 'canceled'):
                 cur.execute(
                     """
                     UPDATE run_all_jobs
@@ -517,7 +527,7 @@ class RunAllRepo:
                 )
             else:
                 cur.execute(
-                    "UPDATE run_all_jobs SET status = %s, error = %s WHERE id = %s",
+                    'UPDATE run_all_jobs SET status = %s, error = %s WHERE id = %s',
                     (status, error, job_id),
                 )
             conn.commit()
@@ -531,7 +541,7 @@ class RunAllRepo:
             conn = postgres_server.conn
             cur = conn.cursor()
             cur.execute(
-                "UPDATE run_all_jobs SET phase = %s WHERE id = %s",
+                'UPDATE run_all_jobs SET phase = %s WHERE id = %s',
                 (phase, job_id),
             )
             conn.commit()
@@ -545,7 +555,7 @@ class RunAllRepo:
             conn = postgres_server.conn
             cur = conn.cursor()
             cur.execute(
-                "UPDATE run_all_jobs SET total = %s WHERE id = %s",
+                'UPDATE run_all_jobs SET total = %s WHERE id = %s',
                 (int(total), job_id),
             )
             conn.commit()
@@ -574,18 +584,20 @@ class RunAllRepo:
             raise
 
     def mark_canceled(self, job_id: str) -> None:
-        self.set_status(job_id, "canceled")
+        self.set_status(job_id, 'canceled')
 
     def is_canceled(self, job_id: str) -> bool:
         conn = None
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            cur.execute("SELECT status FROM run_all_jobs WHERE id = %s", (job_id,))
+            cur.execute(
+                'SELECT status FROM run_all_jobs WHERE id = %s', (job_id,),
+            )
             row = cur.fetchone()
             if not row:
                 return False
-            return str(row[0]).lower() == "canceled"
+            return str(row[0]).lower() == 'canceled'
         except Exception:
             _safe_rollback(conn)
             raise
@@ -645,7 +657,7 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
-    def add_error(self, job_id: str, *, citation_id: Optional[int], stage: str, error: str) -> None:
+    def add_error(self, job_id: str, *, citation_id: int | None, stage: str, error: str) -> None:
         conn = None
         try:
             conn = postgres_server.conn
@@ -655,7 +667,10 @@ class RunAllRepo:
                 INSERT INTO run_all_job_errors (job_id, citation_id, stage, error)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (job_id, int(citation_id) if citation_id is not None else None, stage, error[:8000]),
+                (
+                    job_id, int(citation_id)
+                    if citation_id is not None else None, stage, error[:8000],
+                ),
             )
             conn.commit()
         except Exception:

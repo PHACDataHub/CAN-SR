@@ -1,5 +1,6 @@
+from __future__ import annotations
 PROMPT_JSON_TEMPLATE = """
-You are a highly critical, helpful scientific evaluator completing an academic review. Your job is to screen a citation and decide whether to 
+You are a highly critical, helpful scientific evaluator completing an academic review. Your job is to screen a citation and decide whether to
 include or exclude it according to a single question and a fixed set of options.
 
 Answer the question "{question}" for the following citation:
@@ -20,8 +21,8 @@ Respond with a JSON object containing these keys:
 
 JSON object format:
 {{
-  "selected": "Include", 
-  "explanation": "The study meets the inclusion criteria because ...", 
+  "selected": "Include",
+  "explanation": "The study meets the inclusion criteria because ...",
   "confidence": 0.72
 }}
 

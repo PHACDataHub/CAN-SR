@@ -19,8 +19,8 @@ criteria:
         - Answer this option if this is a case report or case series, which are a detailed description of the clinical and epidemiological characteristics of one or more human cases of disease.
         - Do not answer this option if this is a summary of many individual studies.
       "No - systematic review meta-analysis or rapid review" : |
-        Select this option if this is an evidence synthesis such as systematic review, meta-analysis, rapid review and scoping review that summarize the evidence on outcomes of interest. 
-        All evidence syntheses employ systematic and explicit methods to identify, select, and critically appraise relevant evidence to answer a clearly defined research question. 
+        Select this option if this is an evidence synthesis such as systematic review, meta-analysis, rapid review and scoping review that summarize the evidence on outcomes of interest.
+        All evidence syntheses employ systematic and explicit methods to identify, select, and critically appraise relevant evidence to answer a clearly defined research question.
         Meta-analysis is a statistical technique that combines the quantitative results of individual studies to provide a precise summary effect estimate, and should be preceded by an evidence synthesis.
         If this is any other type of review that does not describe explicit methods for the identification, selection and appraisal of the studies summarized do not select this option and select No- non primary (exclude).
         Apply the following additional rules in order of most important to least:
@@ -29,8 +29,8 @@ criteria:
         - Do not select this option if the citation only indicates an evidence synthesis was used to inform the guideline, recommendation, report or other decision analysis, these are No- non primary (exclude).
         - Do not select this option if the review does not have reproducible methods, and is only described as a "review", "brief review", "systematic analysis", "narrative review", "review of the current situation", "synthesizing evidence", these are No- non primary (exclude).
       "No - non primary (exclude)" : |
-        Non-primary: includes letters to the editor, commentaries, opinion pieces, news articles, that DO not contain primary data and are usually a summary or commentary of others primary research. 
-        Also includes narrative literature reviews or other summaries of several primary research studies. 
+        Non-primary: includes letters to the editor, commentaries, opinion pieces, news articles, that DO not contain primary data and are usually a summary or commentary of others primary research.
+        Also includes narrative literature reviews or other summaries of several primary research studies.
         Apply the following additional rules in order of most important to least:
         - Answer this option if this is a full conference proceedings that represents the citation for all the studies presented at a conference or meeting.
         - Answer this option if this is a conference abstract that represents non-primary research.
@@ -39,7 +39,7 @@ criteria:
         - Answer this option if it only describes a program or process without reporting on the results or an evaluation of the program or process.
         - Answer this option if the paper only describes recommendations or goals from a consultation or meeting.
       "Yes - conference proceeding/abstract/poster (exclude)": |
-        Use this answer for conference proceedings of single studies, conference posters, or conference abstracts. 
+        Use this answer for conference proceedings of single studies, conference posters, or conference abstracts.
         Apply the following additional rules in order of most important to least:
         - Do not answer this option if this is a full conference proceedings that represents the citation for all the studies presented at a conference or meeting, these are No- non primary (exclude).
     "Is this article on the human population?":
@@ -47,7 +47,7 @@ criteria:
         Answer with this option if the study is on the human population.  If a review summarizes studies on humans, we answer with this option
         Apply the following additional rules in order of most important to least:
         - Answer with this option if the study doesn't explicitly state it's about humans, but is about human disease or viruses that cause human disease and indicates clinical spectrum, epidemiology, transmission, outbreak, spread. The abstract also should not explicitly state all the results are from animals or in vitro.
-        - Answer with this option if this is a molecular epidemiology study defined as studies that look at the association between genetics and epidemiological risk factors.  
+        - Answer with this option if this is a molecular epidemiology study defined as studies that look at the association between genetics and epidemiological risk factors.
       "No (exclude)" : |
         Answer with this option if this is an in vitro study, only on the characteristics of the pathogen, only on animals, or there are no human samples.
         Apply the following additional rules in order of most important to least:
@@ -74,25 +74,25 @@ criteria:
 l2_criteria:
   "Does this study and case report or case series have more than 10 cases?":
     "Yes" : |
-      This case report or case series covers more than 10 cases 
-    "No (exclude)" : | 
+      This case report or case series covers more than 10 cases
+    "No (exclude)" : |
       This case report or case series covers less than 10 cases
 parameters:
   "What Epidemiological Parameters are reported in this study?":
     "Attack Rate": |
-      Attack rate is the proportion of an at-risk population that contracts the disease during a specified time interval. It is often reported as a percentage or as rate e.g. 52 people per 10,000 people. 
+      Attack rate is the proportion of an at-risk population that contracts the disease during a specified time interval. It is often reported as a percentage or as rate e.g. 52 people per 10,000 people.
     "Secondary Attack Rate": |
-      Secondary attack rate is the probability that an infection occurs among susceptible people who were likely exposed to an infectious case in a defined setting (e.g., household and school setting). Typically we know both the number of new cases post exposure event and the  denominator of the number of people considered to be exposed/ attended the setting. 
+      Secondary attack rate is the probability that an infection occurs among susceptible people who were likely exposed to an infectious case in a defined setting (e.g., household and school setting). Typically we know both the number of new cases post exposure event and the  denominator of the number of people considered to be exposed/ attended the setting.
     "Doubling Time": |
-      Doubling time is the amount of time it takes for a cumulative number of infections to double. 
+      Doubling time is the amount of time it takes for a cumulative number of infections to double.
     "Halving Time": |
-      Halving time is the amount of time it takes for a cumulative number of infections to halve. 
+      Halving time is the amount of time it takes for a cumulative number of infections to halve.
     "Growth Rate (r)": |
-      Growth rate (r) for a disease this is an expression of how the number of new infections is changing day by day.  
+      Growth rate (r) for a disease this is an expression of how the number of new infections is changing day by day.
     "Reproduction number (Basic R0)": |
-      Reproduction number (Basic R0) is the average number of secondary cases generated by a typical infected person (case) in a population where all individuals are susceptible to infection, before widespread immunity develops and before any attempt at immunization has been made.  
+      Reproduction number (Basic R0) is the average number of secondary cases generated by a typical infected person (case) in a population where all individuals are susceptible to infection, before widespread immunity develops and before any attempt at immunization has been made.
     "Reproduction number (Effective, Re or Rt)": |
-      Reproduction number (Effective, Re or Rt) is the average number of secondary infections produced by an infected person (case) in a population where there is a mix of susceptible and non-susceptible people.  Re is typically contextualized by the specific geographic and time period the measure represents. 
+      Reproduction number (Effective, Re or Rt) is the average number of secondary infections produced by an infected person (case) in a population where there is a mix of susceptible and non-susceptible people.  Re is typically contextualized by the specific geographic and time period the measure represents.
     "Overdispersion": |
       Overdispersion in epidemiology this is an estimate of the dispersion in the number of secondary cases generated from each case. We get over dispersion when the variance is larger than the mean number of cases – which provides an indication of super-spreading events (infected individual transmits to an unusually large number of secondary cases) - and is usually presented as a dispersion parameter k.
   "What relative contributions are reported in this study?":
@@ -108,30 +108,30 @@ parameters:
     "Incubation period": |
       The time interval between exposure to pathogen and symptom onset in an individual. It is like latent period, but measures time to symptom onset instead of onset of infectiousness.  In the context of vectorborne diseases the time from exposure (e.g., bite from mosquito) to symptom onset is referred to as the intrinsic incubation period .
     "Latent period": |
-      The time interval between exposure to pathogen and infectiousness in an individual. It may also be referred to as the latency period or the pre-infectious period. Care should be taken to make sure the reported parameter is latency period, which is difficult to measure, and not incubation period. 
+      The time interval between exposure to pathogen and infectiousness in an individual. It may also be referred to as the latency period or the pre-infectious period. Care should be taken to make sure the reported parameter is latency period, which is difficult to measure, and not incubation period.
     "Asymptomatic period": |
-      Time from onset of infectiousness to symptom onset. 
+      Time from onset of infectiousness to symptom onset.
     "Infectious period": |
       The time interval during which the host is infectious (i.e., can transmit the pathogen). It directly follows the latent period. It may also be referred to as the infective period, the contagious period, the transmission period or the communicability period.
     "Generation time": |
-      The time interval between  the infection onset in the infector and the infection onset of the infected . It is difficult to measure and is often  replaced by the serial interval. 
+      The time interval between  the infection onset in the infector and the infection onset of the infected . It is difficult to measure and is often  replaced by the serial interval.
     "Serial interval": |
-      Time interval between infector symptom onset and infected symptom onset. It is frequently used in reproduction number estimation, as a substitute for the generation time. 
+      Time interval between infector symptom onset and infected symptom onset. It is frequently used in reproduction number estimation, as a substitute for the generation time.
     "Case identification delay": |
       The average time from soliciting a test/ getting tested to the results being returned for the test.
     "Other human delay": |
-      Time to/from any of the following: exposure, infection, infectiousness, symptom onset/fever, admission to care/hospitalization, admission to critical care/ICU, death, discharge from care/hospital, discharge from critical care/ICU, recovery/non-infectious, symptom resolution/recovery, diagnosis/test result, test taken,  treatment, or other. 
+      Time to/from any of the following: exposure, infection, infectiousness, symptom onset/fever, admission to care/hospitalization, admission to critical care/ICU, death, discharge from care/hospital, discharge from critical care/ICU, recovery/non-infectious, symptom resolution/recovery, diagnosis/test result, test taken,  treatment, or other.
   "What severity parameters are reported in this study?":
     "Case fatality rate (CFR)": |
-      The proportion of cases who end up dying of the disease (select the correct denominator --> overall population CFR or hospitalized CFR). 
+      The proportion of cases who end up dying of the disease (select the correct denominator --> overall population CFR or hospitalized CFR).
     "Infection fatality rate (IFR)": |
-      The proportion of all infections (typically it is difficult to know what proportion of infections are not counted as cases i.e., under-reporting) who end up dying of the disease. 
+      The proportion of all infections (typically it is difficult to know what proportion of infections are not counted as cases i.e., under-reporting) who end up dying of the disease.
     "Proportion of cases that are hospitalized": |
-      Proportion of infected cases that require inpatient care (i.e., acute and critical care).  
+      Proportion of infected cases that require inpatient care (i.e., acute and critical care).
     "Proportion of hospitalizations that require critical care": |
-      Proportion of hospitalized patients that ended up in critical care (i.e., ICU). 
+      Proportion of hospitalized patients that ended up in critical care (i.e., ICU).
     "Proportion of symptomatic infections": |
-      Proportion of individuals who had symptoms of the disease. Inverse of asymptomatic infection. 
+      Proportion of individuals who had symptoms of the disease. Inverse of asymptomatic infection.
   "Does the study report the following additional parameters?":
     "Fecal Shedding Distribution": |
       The Viral RNA concentration as a function of time since onset of infection. Sometimes called “temporal dynamics” or “kinetics”.

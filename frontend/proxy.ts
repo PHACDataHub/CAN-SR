@@ -4,7 +4,7 @@ import Negotiator from "negotiator";
 
 const locales = ["en", "fr"];
 const defaultLocale = "en"
- 
+
 function getLocale(request: NextRequest) {
   // Get Accept-Language header
   const headers = { "accept-language": request.headers.get("accept-language") ?? "" };
@@ -14,16 +14,16 @@ function getLocale(request: NextRequest) {
   // Match to en or fr
   return match(requestedLocales, locales, defaultLocale);
 }
- 
+
 export function proxy(request: NextRequest) {
   // Check if there is any supported locale in the pathname
   const { pathname } = request.nextUrl;
   const pathnameHasLocale = locales.some(
     (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
   );
- 
+
   if (pathnameHasLocale) return;
- 
+
   // Redirect if there is no locale
   const locale = getLocale(request);
   request.nextUrl.pathname = `/${locale}${pathname}`;
@@ -31,7 +31,7 @@ export function proxy(request: NextRequest) {
   // The new URL is now /en/login
   return NextResponse.redirect(request.nextUrl);
 }
- 
+
 export const config = {
   matcher: [
     /*

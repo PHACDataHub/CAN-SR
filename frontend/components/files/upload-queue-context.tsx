@@ -3,9 +3,10 @@
 import React, {
   createContext,
   useContext,
-  useState,
-  useEffect,
   useCallback,
+  useEffect,
+  useRef,
+  useState,
 } from 'react'
 import { toast } from 'react-hot-toast'
 import { getAuthToken } from '@/lib/auth'
@@ -52,6 +53,14 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [queuedFiles, setQueuedFiles] = useState<QueuedFile[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
+  const queuedFilesRef = useRef<QueuedFile[]>([])
+  const checkProcessingStatusRef = useRef<
+    ((documentId: string, fileId: string) => Promise<void>) | null
+  >(null)
+
+  useEffect(() => {
+    queuedFilesRef.current = queuedFiles
+  }, [queuedFiles])
 
   // Calculate stats
   const totalFiles = queuedFiles.length
@@ -194,7 +203,7 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
         )
 
         // Start checking processing status
-        checkProcessingStatus(result.document_id, queuedFile.id)
+        void checkProcessingStatusRef.current?.(result.document_id, queuedFile.id)
       } catch (error) {
         console.error('Upload error:', error)
         const errorMessage =
@@ -256,9 +265,8 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
           })
         }
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [queuedFiles],
+    [],
   )
 
   const checkProcessingStatus = useCallback(
@@ -320,7 +328,7 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
 
             // Show completion notification only when completed
             if (document.processing_status === 'completed') {
-              const queuedFile = queuedFiles.find((f) => f.id === fileId)
+              const queuedFile = queuedFilesRef.current.find((f) => f.id === fileId)
               if (queuedFile) {
                 toast.success(
                   `${queuedFile.filename} processed successfully!`,
@@ -338,7 +346,7 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
               document.processing_status === 'failed' ||
               document.processing_status === 'error'
             ) {
-              const queuedFile = queuedFiles.find((f) => f.id === fileId)
+              const queuedFile = queuedFilesRef.current.find((f) => f.id === fileId)
               if (queuedFile) {
                 toast.error(`${queuedFile.filename} processing failed`, {
                   duration: 5000,
@@ -375,6 +383,10 @@ export const UploadQueueProvider: React.FC<{ children: React.ReactNode }> = ({
     },
     [],
   )
+
+  useEffect(() => {
+    checkProcessingStatusRef.current = checkProcessingStatus
+  }, [checkProcessingStatus])
 
   const startProcessing = useCallback(async () => {
     const pendingFiles = queuedFiles.filter((f) => f.status === 'pending')

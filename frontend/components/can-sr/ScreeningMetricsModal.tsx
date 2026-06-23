@@ -332,14 +332,11 @@ export default function ScreeningMetricsModal({
   }, [liveHistogram])
 
   const total = summary?.total_citations ?? 0
-  const validatedAll = summary?.validated_all ?? 0
   const queueTotal = summary?.needs_review_total ?? 0
   const queueValidated = summary?.validated_needs_review ?? 0
   const queueRemaining = Math.max(0, queueTotal - queueValidated)
   const notScreened = summary?.not_screened_yet ?? 0
 
-  const validatedPct = pct(validatedAll, total)
-  const queuePct = pct(queueTotal, total)
   const notScreenedPct = pct(notScreened, total)
 
   // Compute aggregate metrics for natural language summary
@@ -646,11 +643,6 @@ export default function ScreeningMetricsModal({
                     {/* Confusion matrix mini */}
                     {m.confusion_matrix ? (() => {
                       const qcm = m.queue_confusion_matrix
-                      // Show +/- for each cell based on queue corrections
-                      const CmDelta = ({ val, className: cls }: { val: number | undefined; className?: string }) => {
-                        if (!val) return null
-                        return <span className={`ml-0.5 text-[9px] ${cls || 'text-gray-400'}`}>{val > 0 ? `-${val}` : `+${Math.abs(val)}`}</span>
-                      }
                       return (
                         <div className="mt-3 flex items-center gap-4">
                           <div className="rounded border border-gray-100 bg-gray-50 p-2">
@@ -779,7 +771,6 @@ export default function ScreeningMetricsModal({
                 const recPoint = rec === null ? null : curve.find((p) => Math.abs(p.threshold - rec) < 1e-9) || null
                 const wr = recPoint && typeof recPoint.workload_reduction === 'number' ? recPoint.workload_reduction * 100 : null
                 const recRecall = recPoint && typeof recPoint.recall === 'number' ? recPoint.recall * 100 : null
-                const fpr = recPoint && typeof recPoint.fpr === 'number' ? recPoint.fpr * 100 : null
 
                 return (
                   <div key={m.criterion_key} className="rounded border border-gray-100 bg-white p-3">

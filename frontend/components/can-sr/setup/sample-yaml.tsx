@@ -32,8 +32,8 @@ criteria:
 l2_criteria:
   "Does this study and case report or case series have more than 10 cases?":
     "Yes" : |
-      This case report or case series covers more than 10 cases 
-    "No (exclude)" : | 
+      This case report or case series covers more than 10 cases
+    "No (exclude)" : |
       This case report or case series covers less than 10 cases
 
 # Extraction parameters: one generic parameter to extract
@@ -48,7 +48,7 @@ l2_criteria:
 parameters:
   "What Epidemiological Parameters are reported in this study?":
     "Attack Rate": |
-      Attack rate is the proportion of an at-risk population that contracts the disease during a specified time interval. It is often reported as a percentage or as rate e.g. 52 people per 10,000 people. 
+      Attack rate is the proportion of an at-risk population that contracts the disease during a specified time interval. It is often reported as a percentage or as rate e.g. 52 people per 10,000 people.
   "What relative contributions are reported in this study?":
     "Human to Human": |
       Proportion of cases that are likely be from human-to human transmission.

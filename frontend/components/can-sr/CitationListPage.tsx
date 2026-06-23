@@ -473,7 +473,7 @@ export default function CitationsListPage({
       window.clearInterval(interval)
     }
   }, [runAllJobId, runAllStorageKey, clearRunAll])
-  
+
 
   const hasActiveRunAll = useMemo(() => {
     const st = String(runAllJob?.status || '').toLowerCase()

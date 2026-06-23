@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Select,
   SelectContent,
@@ -31,28 +31,38 @@ export function ModelSelector({
   selectedModel,
   onModelChange,
 }: ModelSelectorProps) {
-
   const dict = useDictionary()
 
   // Azure OpenAI model configurations with descriptions
-  const modelInfo: Record<string, ModelInfo> = {
-    'gpt-5-mini': {
-      id: 'gpt-5-mini',
-      name: 'GPT-5 mini',
-      description: dict.cansr.modelDescription1,
-      recommended: true,
-    },
-    'gpt-4.1-mini': {
-      id: 'gpt-4.1-mini',
-      name: 'GPT-4.1 mini',
-      description: dict.cansr.modelDescription2,
-    },
-  }
+  const modelInfo = useMemo<Record<string, ModelInfo>>(
+    () => ({
+      'gpt-5-mini': {
+        id: 'gpt-5-mini',
+        name: 'GPT-5 mini',
+        description: dict.cansr.modelDescription1,
+        recommended: true,
+      },
+      'gpt-4.1-mini': {
+        id: 'gpt-4.1-mini',
+        name: 'GPT-4.1 mini',
+        description: dict.cansr.modelDescription2,
+      },
+    }),
+    [dict.cansr.modelDescription1, dict.cansr.modelDescription2],
+  )
 
-  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>(() => [
     modelInfo['gpt-5-mini'],
     modelInfo['gpt-4.1-mini'],
   ])
+
+  useEffect(() => {
+    setAvailableModels((current) =>
+      current.length > 0
+        ? current.map((model) => modelInfo[model.id] ?? model)
+        : [modelInfo['gpt-5-mini'], modelInfo['gpt-4.1-mini']],
+    )
+  }, [modelInfo])
 
   useEffect(() => {
     async function loadModels() {
@@ -69,7 +79,7 @@ export function ModelSelector({
           throw new Error('Failed to fetch models')
         }
 
-        const {config} = await response.json()
+        const { config } = await response.json()
         // Backend may return either:
         // - available_deployments: ["gpt-5-mini", ...] (preferred)
         // - available_models: ["GPT-5-Mini", ...] (models.yaml display keys)
@@ -98,7 +108,7 @@ export function ModelSelector({
 
     const timeoutId = setTimeout(loadModels, 100)
     return () => clearTimeout(timeoutId)
-  }, [])
+  }, [modelInfo])
 
   // Ensure selected model is valid
   useEffect(() => {
