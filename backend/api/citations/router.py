@@ -12,15 +12,19 @@ Behavior:
 
 We intentionally avoid creating a new Postgres database per upload.
 """
+from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
-import os
-import time
 import csv
-import io
-import re
-from datetime import datetime
 import hashlib
+import io
+import os
+import re
+import time
+from datetime import datetime
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 try:
     import rispy  # type: ignore
@@ -52,7 +56,7 @@ def _is_undefined_table_error(exc: Exception) -> bool:
             return True
         # Some errors come wrapped; fall back to message sniffing.
         msg = str(exc).lower()
-        return "does not exist" in msg and "relation" in msg
+        return 'does not exist' in msg and 'relation' in msg
     except Exception:
         return False
 
@@ -66,13 +70,13 @@ def _is_postgres_configured() -> bool:
     except Exception:
         return False
 
-    if not (prof.get("database") and prof.get("user")):
+    if not (prof.get('database') and prof.get('user')):
         return False
 
-    if prof.get("mode") in ("local", "docker") and not prof.get("password"):
+    if prof.get('mode') in ('local', 'docker') and not prof.get('password'):
         return False
 
-    if prof.get("mode") == "azure" and not prof.get("host"):
+    if prof.get('mode') == 'azure' and not prof.get('host'):
         return False
 
     return True
@@ -99,70 +103,70 @@ def _sniff_citations_format(filename: str, raw_bytes: bytes) -> str:
       - Otherwise sniff content for RIS markers
     """
 
-    name = (filename or "").lower()
-    if name.endswith(".csv"):
-        return "csv"
-    if name.endswith(".ris") or name.endswith(".txt"):
-        return "ris"
+    name = (filename or '').lower()
+    if name.endswith('.csv'):
+        return 'csv'
+    if name.endswith('.ris') or name.endswith('.txt'):
+        return 'ris'
 
     try:
-        text = raw_bytes.decode("utf-8", errors="ignore")
+        text = raw_bytes.decode('utf-8', errors='ignore')
     except Exception:
-        text = ""
+        text = ''
 
     # Minimal RIS sniffing: many RIS files contain TY  - ... and ER  -
-    if "ty  -" in text.lower() and "er  -" in text.lower():
-        return "ris"
-    return "csv"
+    if 'ty  -' in text.lower() and 'er  -' in text.lower():
+        return 'ris'
+    return 'csv'
 
 
-def _join_list(v: Any, sep: str = "; ") -> str:
+def _join_list(v: Any, sep: str = '; ') -> str:
     if v is None:
-        return ""
+        return ''
     if isinstance(v, list):
-        return sep.join([str(x) for x in v if x is not None and str(x).strip() != ""]).strip()
+        return sep.join([str(x) for x in v if x is not None and str(x).strip() != '']).strip()
     return str(v)
 
 
 def _extract_year(v: Any) -> str:
     if v is None:
-        return ""
+        return ''
     s = str(v)
-    m = re.search(r"(19|20)\d{2}", s)
-    return m.group(0) if m else ""
+    m = re.search(r'(19|20)\d{2}', s)
+    return m.group(0) if m else ''
 
 
-def _ris_value_for_include(include_col: str, entry: Dict[str, Any]) -> Any:
+def _ris_value_for_include(include_col: str, entry: dict[str, Any]) -> Any:
     """Map a requested include column name (human header) to rispy normalized keys."""
 
-    key = (include_col or "").strip().lower()
+    key = (include_col or '').strip().lower()
 
     # Common include names in our configs
-    if key == "title":
-        return entry.get("title") or entry.get("primary_title") or entry.get("short_title")
-    if key == "abstract":
-        return entry.get("abstract") or entry.get("notes_abstract") or _join_list(entry.get("notes"), "\n")
-    if key == "keywords":
-        return _join_list(entry.get("keywords"))
-    if key == "journal":
+    if key == 'title':
+        return entry.get('title') or entry.get('primary_title') or entry.get('short_title')
+    if key == 'abstract':
+        return entry.get('abstract') or entry.get('notes_abstract') or _join_list(entry.get('notes'), '\n')
+    if key == 'keywords':
+        return _join_list(entry.get('keywords'))
+    if key == 'journal':
         return (
-            entry.get("secondary_title")
-            or entry.get("journal_name")
-            or entry.get("alternate_title1")
-            or entry.get("alternate_title2")
-            or entry.get("alternate_title3")
+            entry.get('secondary_title')
+            or entry.get('journal_name')
+            or entry.get('alternate_title1')
+            or entry.get('alternate_title2')
+            or entry.get('alternate_title3')
         )
-    if key == "type":
-        return entry.get("type_of_reference")
-    if key in ("type of work", "type_of_work"):
-        return entry.get("type_of_work")
-    if key == "notes":
-        return _join_list(entry.get("notes"), "\n")
-    if key == "year":
+    if key == 'type':
+        return entry.get('type_of_reference')
+    if key in ('type of work', 'type_of_work'):
+        return entry.get('type_of_work')
+    if key == 'notes':
+        return _join_list(entry.get('notes'), '\n')
+    if key == 'year':
         return (
-            _extract_year(entry.get("year"))
-            or _extract_year(entry.get("publication_year"))
-            or _extract_year(entry.get("date"))
+            _extract_year(entry.get('year'))
+            or _extract_year(entry.get('publication_year'))
+            or _extract_year(entry.get('date'))
         )
 
     # If someone configures include columns to rispy keys directly, support that too.
@@ -175,9 +179,9 @@ def _ris_value_for_include(include_col: str, entry: Dict[str, Any]) -> Any:
 
 def _parse_citations_csv_bytes(raw_bytes: bytes) -> tuple[list[dict[str, Any]], list[str]]:
     try:
-        text = raw_bytes.decode("utf-8-sig")
+        text = raw_bytes.decode('utf-8-sig')
     except Exception:
-        text = raw_bytes.decode("utf-8", errors="replace")
+        text = raw_bytes.decode('utf-8', errors='replace')
     reader = csv.DictReader(io.StringIO(text))
     rows = list(reader)
     cols = reader.fieldnames or []
@@ -186,12 +190,12 @@ def _parse_citations_csv_bytes(raw_bytes: bytes) -> tuple[list[dict[str, Any]], 
 
 def _parse_citations_ris_bytes(raw_bytes: bytes, include_columns: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
     if not rispy:
-        raise RuntimeError("RIS upload requested but rispy is not installed")
+        raise RuntimeError('RIS upload requested but rispy is not installed')
 
     try:
-        text = raw_bytes.decode("utf-8-sig")
+        text = raw_bytes.decode('utf-8-sig')
     except Exception:
-        text = raw_bytes.decode("utf-8", errors="replace")
+        text = raw_bytes.decode('utf-8', errors='replace')
 
     entries = rispy.load(io.StringIO(text))
     if not entries:
@@ -214,40 +218,40 @@ def _default_ris_columns() -> list[str]:
     """Canonical columns we create when ingesting RIS before criteria exists."""
 
     return [
-        "Title",
-        "Abstract",
-        "Keywords",
-        "Journal",
-        "Year",
-        "Authors",
-        "DOI",
-        "Type",
-        "URL",
+        'Title',
+        'Abstract',
+        'Keywords',
+        'Journal',
+        'Year',
+        'Authors',
+        'DOI',
+        'Type',
+        'URL',
     ]
 
 
-def _ris_value_for_canonical(col: str, entry: Dict[str, Any]) -> Any:
+def _ris_value_for_canonical(col: str, entry: dict[str, Any]) -> Any:
     """Map canonical RIS columns to rispy normalized keys."""
 
-    key = (col or "").strip().lower()
-    if key == "title":
-        return entry.get("title") or entry.get("primary_title") or entry.get("short_title")
-    if key == "abstract":
-        return entry.get("abstract") or entry.get("notes_abstract") or _join_list(entry.get("notes"), "\n")
-    if key == "keywords":
-        return _join_list(entry.get("keywords"))
-    if key == "journal":
-        return entry.get("secondary_title") or entry.get("journal_name")
-    if key == "year":
-        return _extract_year(entry.get("year") or entry.get("publication_year") or entry.get("date"))
-    if key == "authors":
-        return _join_list(entry.get("authors"))
-    if key == "doi":
-        return entry.get("doi")
-    if key == "type":
-        return entry.get("type_of_reference")
-    if key == "url":
-        return _join_list(entry.get("urls"))
+    key = (col or '').strip().lower()
+    if key == 'title':
+        return entry.get('title') or entry.get('primary_title') or entry.get('short_title')
+    if key == 'abstract':
+        return entry.get('abstract') or entry.get('notes_abstract') or _join_list(entry.get('notes'), '\n')
+    if key == 'keywords':
+        return _join_list(entry.get('keywords'))
+    if key == 'journal':
+        return entry.get('secondary_title') or entry.get('journal_name')
+    if key == 'year':
+        return _extract_year(entry.get('year') or entry.get('publication_year') or entry.get('date'))
+    if key == 'authors':
+        return _join_list(entry.get('authors'))
+    if key == 'doi':
+        return entry.get('doi')
+    if key == 'type':
+        return entry.get('type_of_reference')
+    if key == 'url':
+        return _join_list(entry.get('urls'))
 
     # Fallback (shouldn't happen for our canonical list)
     v = entry.get(key)
@@ -261,12 +265,12 @@ def _parse_citations_ris_bytes_auto(raw_bytes: bytes) -> tuple[list[dict[str, An
     """
 
     if not rispy:
-        raise RuntimeError("RIS upload requested but rispy is not installed")
+        raise RuntimeError('RIS upload requested but rispy is not installed')
 
     try:
-        text = raw_bytes.decode("utf-8-sig")
+        text = raw_bytes.decode('utf-8-sig')
     except Exception:
-        text = raw_bytes.decode("utf-8", errors="replace")
+        text = raw_bytes.decode('utf-8', errors='replace')
 
     entries = rispy.load(io.StringIO(text))
     cols = _default_ris_columns()
@@ -285,35 +289,40 @@ def _parse_citations_ris_bytes_auto(raw_bytes: bytes) -> tuple[list[dict[str, An
 
     return rows, cols
 
-def _load_include_columns_from_criteria(sr_doc: Optional[Dict[str, Any]] = None) -> List[str]:
+
+def _load_include_columns_from_criteria(sr_doc: dict[str, Any] | None = None) -> list[str]:
     # Delegate to consolidated postgres service
     try:
         return cits_dp_service.load_include_columns_from_criteria(sr_doc)
     except Exception:
         return []
-def _parse_dsn(dsn: str) -> Dict[str, str]:
+
+
+def _parse_dsn(dsn: str) -> dict[str, str]:
     # Delegate to consolidated postgres service
     try:
         return parse_dsn(dsn)
     except Exception:
         return {}
-def _create_table_and_insert_sync(table_name: str, columns: List[str], rows: List[Dict[str, Any]]) -> int:
+
+
+def _create_table_and_insert_sync(table_name: str, columns: list[str], rows: list[dict[str, Any]]) -> int:
     return cits_dp_service.create_table_and_insert_sync(table_name, columns, rows)
 
 
-def _extract_criteria_questions_from_sr(sr: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def _extract_criteria_questions_from_sr(sr: dict[str, Any] | None) -> dict[str, str]:
     """Extract L1 criteria questions from SR criteria_parsed.
-    
+
     Returns a dict mapping criterion_key -> question_text.
     Example: {"is_this_article_primary_research": "Is this article primary research?"}
     """
     if not sr:
         return {}
-    
-    criteria_parsed = sr.get("criteria_parsed") or {}
-    l1_criteria = criteria_parsed.get("l1") or {}
-    questions = l1_criteria.get("questions") or []
-    
+
+    criteria_parsed = sr.get('criteria_parsed') or {}
+    l1_criteria = criteria_parsed.get('l1') or {}
+    questions = l1_criteria.get('questions') or []
+
     result = {}
     for q in questions:
         if not isinstance(q, str) or not q.strip():
@@ -322,40 +331,40 @@ def _extract_criteria_questions_from_sr(sr: Optional[Dict[str, Any]]) -> Dict[st
         # snake_case already converts "Is this article primary research?" to "is_this_article_primary_research"
         criterion_key = snake_case(q, max_len=56)
         if not criterion_key:
-            criterion_key = "criterion"
+            criterion_key = 'criterion'
         result[criterion_key] = q
-    
+
     return result
 
 
-def _match_csv_column_to_criterion(csv_col: str, criteria_questions: Dict[str, str]) -> Optional[str]:
+def _match_csv_column_to_criterion(csv_col: str, criteria_questions: dict[str, str]) -> str | None:
     """Match a CSV column header to a criterion key.
-    
+
     Handles the "L1 - " prefix and matches exactly against criteria questions.
     Returns the criterion_key if matched, None otherwise.
     """
     if not csv_col or not isinstance(csv_col, str):
         return None
-    
+
     # Remove "L1 - " prefix if present
     col_text = csv_col.strip()
-    if col_text.startswith("L1 - "):
+    if col_text.startswith('L1 - '):
         col_text = col_text[5:].strip()
-    elif col_text.startswith("L2 - "):
+    elif col_text.startswith('L2 - '):
         # Skip L2 columns for now
         return None
-    
+
     # Match exactly against criteria questions
     for criterion_key, question_text in criteria_questions.items():
         if col_text == question_text:
             return criterion_key
-    
+
     return None
 
 
-def _parse_human_answer_to_jsonb(answer_value: Any) -> Dict[str, Any]:
+def _parse_human_answer_to_jsonb(answer_value: Any) -> dict[str, Any]:
     """Convert a CSV human answer value to JSONB format.
-    
+
     Returns a dict with structure:
     {
         "selected": "Yes - primary research",
@@ -364,32 +373,32 @@ def _parse_human_answer_to_jsonb(answer_value: Any) -> Dict[str, Any]:
         "autofilled": true
     }
     """
-    if answer_value is None or (isinstance(answer_value, str) and answer_value.strip() == ""):
+    if answer_value is None or (isinstance(answer_value, str) and answer_value.strip() == ''):
         return {
-            "selected": None,
-            "source": "csv_upload",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "autofilled": True,
+            'selected': None,
+            'source': 'csv_upload',
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'autofilled': True,
         }
-    
+
     selected_value = str(answer_value).strip() if answer_value else None
-    
+
     return {
-        "selected": selected_value,
-        "source": "csv_upload",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "autofilled": True,
+        'selected': selected_value,
+        'source': 'csv_upload',
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'autofilled': True,
     }
 
 
 def _populate_human_answers_from_csv(
     table_name: str,
-    normalized_rows: List[Dict[str, Any]],
-    include_columns: List[str],
-    sr: Optional[Dict[str, Any]],
+    normalized_rows: list[dict[str, Any]],
+    include_columns: list[str],
+    sr: dict[str, Any] | None,
 ) -> None:
     """Populate human_* JSONB columns from CSV data.
-    
+
     This function:
     1. Extracts criteria questions from SR
     2. Matches CSV columns to criteria questions
@@ -399,58 +408,60 @@ def _populate_human_answers_from_csv(
     """
     if not sr or not normalized_rows or not include_columns:
         return
-    
+
     # Extract criteria questions
     criteria_questions = _extract_criteria_questions_from_sr(sr)
     if not criteria_questions:
         return
-    
+
     # Build mapping of CSV column index to criterion_key
-    csv_col_to_criterion: Dict[int, str] = {}
+    csv_col_to_criterion: dict[int, str] = {}
     for col_idx, col_name in enumerate(include_columns):
-        criterion_key = _match_csv_column_to_criterion(col_name, criteria_questions)
+        criterion_key = _match_csv_column_to_criterion(
+            col_name, criteria_questions,
+        )
         if criterion_key:
             csv_col_to_criterion[col_idx] = criterion_key
-    
+
     if not csv_col_to_criterion:
         # No matching columns found
         return
-    
+
     # Fetch all rows from the database to get actual citation IDs
     try:
         all_rows = cits_dp_service.get_citations_by_ids(
             list(range(1, len(normalized_rows) + 1)),
-            table_name=table_name
+            table_name=table_name,
         )
     except Exception:
         # If we can't fetch rows, skip human answer population
         return
-    
+
     # Build a map of row index to citation ID
-    row_id_map: Dict[int, int] = {}
+    row_id_map: dict[int, int] = {}
     for idx, db_row in enumerate(all_rows):
         if db_row and 'id' in db_row:
             row_id_map[idx] = db_row['id']
-    
+
     # Populate human answer columns for each row
     for row_idx, row in enumerate(normalized_rows):
         citation_id = row_id_map.get(row_idx)
         if not citation_id:
             continue
-        
+
         for col_idx, criterion_key in csv_col_to_criterion.items():
             if col_idx >= len(include_columns):
                 continue
-            
+
             col_name = include_columns[col_idx]
             answer_value = row.get(col_name)
-            
+
             # Convert to JSONB format
             human_jsonb = _parse_human_answer_to_jsonb(answer_value)
-            
+
             # Create human_* column name
             human_col = f"human_{criterion_key}"
-            
+
             # Update the JSONB column
             try:
                 cits_dp_service.update_jsonb_column(
@@ -462,11 +473,10 @@ def _populate_human_answers_from_csv(
             except Exception:
                 # Best-effort; continue with other rows
                 pass
-    
-     
+
     # Backfill human decision columns
     try:
-        criteria_parsed = sr.get("criteria_parsed") or {}
+        criteria_parsed = sr.get('criteria_parsed') or {}
         cits_dp_service.backfill_human_decisions(criteria_parsed, table_name)
     except Exception:
         # Best-effort; continue
@@ -476,9 +486,9 @@ def _populate_human_answers_from_csv(
 async def _upload_screening_citations_impl(
     sr_id: str,
     file: UploadFile,
-    current_user: Dict[str, Any],
+    current_user: dict[str, Any],
     *,
-    force_format: Optional[str] = None,
+    force_format: str | None = None,
 ) -> UploadResult:
     """Shared implementation for citations upload (CSV or RIS)."""
 
@@ -496,47 +506,65 @@ async def _upload_screening_citations_impl(
     if not _is_postgres_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Postgres not configured. Set POSTGRES_MODE and POSTGRES_* env vars.",
+            detail='Postgres not configured. Set POSTGRES_MODE and POSTGRES_* env vars.',
         )
 
     if not file or not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
 
     # Read bytes once (UploadFile stream is not reliably seekable after read)
     try:
         raw = await file.read()
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read upload: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read upload: {e}",
+        )
     if not raw:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='Uploaded file is empty',
+        )
 
     fmt = (force_format or _sniff_citations_format(file.filename, raw)).lower()
-    if fmt not in ("csv", "ris"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported citations format: {fmt}")
+    if fmt not in ('csv', 'ris'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported citations format: {fmt}",
+        )
 
     # Parse into normalized rows + include columns
     try:
-        if fmt == "csv":
+        if fmt == 'csv':
             normalized_rows, include_columns = _parse_citations_csv_bytes(raw)
         else:
             # RIS is often uploaded before criteria config exists; derive columns directly from RIS.
-            normalized_rows, include_columns = _parse_citations_ris_bytes_auto(raw)
+            normalized_rows, include_columns = _parse_citations_ris_bytes_auto(
+                raw,
+            )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to parse {fmt.upper()}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to parse {fmt.upper()}: {e}",
+        )
 
     if len(include_columns) == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No columns found to create screening table")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='No columns found to create screening table',
+        )
 
     # Build a unique table name for this upload
-    safe_sr = re.sub(r"[^0-9a-zA-Z_]", "_", sr_id)
+    safe_sr = re.sub(r'[^0-9a-zA-Z_]', '_', sr_id)
     timestamp = int(time.time())
     table_name = f"sr_{safe_sr}_{timestamp}_cit"
 
     # If replacing, best-effort drop previous table (if any)
     try:
-        old = (sr.get("screening_db") or {}).get("table_name")
+        old = (sr.get('screening_db') or {}).get('table_name')
         if old:
             await run_in_threadpool(cits_dp_service.drop_table, old)
     except Exception:
@@ -546,9 +574,14 @@ async def _upload_screening_citations_impl(
     try:
         inserted = await run_in_threadpool(_create_table_and_insert_sync, table_name, include_columns, normalized_rows)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create table or insert rows: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create table or insert rows: {e}",
+        )
 
     # Populate human answers from CSV if criteria config exists
     try:
@@ -566,17 +599,17 @@ async def _upload_screening_citations_impl(
     # Save DB connection metadata into SR Mongo doc
     try:
         screening_info = {
-            "screening_db": {
-                "table_name": table_name,
-                "created_at": datetime.utcnow().isoformat(),
-                "rows": inserted,
-            }
+            'screening_db': {
+                'table_name': table_name,
+                'created_at': datetime.utcnow().isoformat(),
+                'rows': inserted,
+            },
         }
 
         await run_in_threadpool(
             srdb_service.update_screening_db_info,
             sr_id,
-            screening_info["screening_db"],
+            screening_info['screening_db'],
         )
     except Exception as e:
         raise HTTPException(
@@ -593,11 +626,11 @@ async def _upload_screening_citations_impl(
     )
 
 
-@router.post("/{sr_id}/upload-citations", response_model=UploadResult)
+@router.post('/{sr_id}/upload-citations', response_model=UploadResult)
 async def upload_screening_citations(
     sr_id: str,
     file: UploadFile = File(...),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Upload citations for screening.
 
@@ -619,9 +652,9 @@ async def upload_screening_citations(
 # The blocking implementation lives in backend.api.core.postgres.list_citation_ids
 
 
-@router.get("/{sr_id}/citations")
+@router.get('/{sr_id}/citations')
 async def list_citation_ids(
-    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user), filter_step: Optional[str] = None,
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user), filter_step: str | None = None,
 ):
     """
     List all citation ids for the systematic review's screening database.
@@ -633,17 +666,22 @@ async def list_citation_ids(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     if not screening:
-        return {"citation_ids": []}
+        return {'citation_ids': []}
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Ensure decision columns are never stale before filtering.
     # Validation strategy: UI filters by human_l1_decision / human_l2_decision.
     try:
-        cp = (sr or {}).get("criteria_parsed") or (sr or {}).get("criteria") or {}
+        cp = (sr or {}).get('criteria_parsed') or (
+            sr or {}
+        ).get('criteria') or {}
         await run_in_threadpool(cits_dp_service.backfill_human_decisions, cp, table_name)
     except Exception:
         # best-effort; listing should still work even if backfill fails
@@ -652,24 +690,29 @@ async def list_citation_ids(
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
         # If the SR points at a screening table that no longer exists (e.g. dropped),
         # treat it as "no citations" instead of poisoning the shared connection.
         if _is_undefined_table_error(e):
-            return {"citation_ids": []}
+            return {'citation_ids': []}
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
-    return {"citation_ids": ids}
+    return {'citation_ids': ids}
 
 
-@router.get("/{sr_id}/citations/batch")
+@router.get('/{sr_id}/citations/batch')
 async def get_citations_batch(
     sr_id: str,
     ids: str,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-    fields: Optional[str] = None,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+    fields: str | None = None,
 ):
     """Get many citation rows for a given SR in a single request.
 
@@ -695,24 +738,29 @@ async def get_citations_batch(
             detail=f"Failed to load systematic review or screening: {e}",
         )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Parse ids
-    raw_ids = [p.strip() for p in (ids or "").split(",") if p.strip()]
+    raw_ids = [p.strip() for p in (ids or '').split(',') if p.strip()]
     if not raw_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids is required")
-    parsed_ids: List[int] = []
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='ids is required',
+        )
+    parsed_ids: list[int] = []
     for p in raw_ids:
         try:
             parsed_ids.append(int(p))
         except Exception:
             continue
     if not parsed_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids must be a comma-separated list of integers")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='ids must be a comma-separated list of integers',
+        )
 
-    parsed_fields: Optional[List[str]] = None
+    parsed_fields: list[str] | None = None
     if fields is not None:
-        f = [x.strip() for x in fields.split(",") if x.strip()]
+        f = [x.strip() for x in fields.split(',') if x.strip()]
         parsed_fields = f if f else []
 
     try:
@@ -723,21 +771,26 @@ async def get_citations_batch(
             parsed_fields,
         )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
-    return {"citations": rows}
+    return {'citations': rows}
 
 
 # Helper to get citation row by id - delegated to backend.api.core.postgres.get_citation_by_id
 
 
-@router.get("/{sr_id}/citations/{citation_id}")
+@router.get('/{sr_id}/citations/{citation_id}')
 async def get_citation_by_id(
     sr_id: str,
     citation_id: int,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Get full citation data for a given citation id from the SR's screening DB.
@@ -751,39 +804,49 @@ async def get_citation_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     return row
 
 
 # API model + helper to build a combined citation string from selected columns
 class CombinedRequest(BaseModel):
-    include_columns: Optional[List[str]] = None
+    include_columns: list[str] | None = None
 
 
-def _build_combined_citation_from_row(row: Dict[str, Any], include_columns: List[str]) -> str:
+def _build_combined_citation_from_row(row: dict[str, Any], include_columns: list[str]) -> str:
     # Delegate to consolidated postgres service
     return cits_dp_service.build_combined_citation_from_row(row, include_columns)
 
 
-@router.post("/{sr_id}/citations/{citation_id}/combined")
+@router.post('/{sr_id}/citations/{citation_id}/combined')
 async def build_combined_citation(
     sr_id: str,
     citation_id: int,
     payload: CombinedRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Build a combined citation string for a single citation row.
@@ -803,22 +866,35 @@ async def build_combined_citation(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     if not screening:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screening database configured for this systematic review")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='No screening database configured for this systematic review',
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # As a final fallback, use all columns present in include columns
     data = []
@@ -829,18 +905,18 @@ async def build_combined_citation(
         data.append(k)
 
     combined = _build_combined_citation_from_row(row, data)
-    return {"sr_id": sr_id, "citation_id": citation_id, "combined_citation": combined}
+    return {'sr_id': sr_id, 'citation_id': citation_id, 'combined_citation': combined}
 
 
 # Helper to update citation fulltext - delegated to backend.api.core.postgres.update_citation_fulltext
 
 
-@router.post("/{sr_id}/citations/{citation_id}/upload-fulltext")
+@router.post('/{sr_id}/citations/{citation_id}/upload-fulltext')
 async def upload_citation_fulltext(
     sr_id: str,
     citation_id: int,
     file: UploadFile = File(...),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Upload a full-text PDF for a specific citation and attach the storage path to the citation row.
@@ -857,38 +933,53 @@ async def upload_citation_fulltext(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
     # Validate file
     if not file or not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
 
     _, ext = os.path.splitext(file.filename)
     ext = ext.lower()
     # Prefer PDFs but allow other types if necessary; restrict to .pdf here
-    if ext != ".pdf":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are accepted for full text upload")
+    if ext != '.pdf':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Only PDF files are accepted for full text upload',
+        )
 
     content = await file.read()
-    new_md5 = hashlib.md5(content).hexdigest() if content is not None else ""
+    new_md5 = hashlib.md5(content).hexdigest() if content is not None else ''
     # Verify citation exists BEFORE uploading blob to storage
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     try:
         existing_row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not existing_row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # If the PDF changed (md5 differs), clear L2 screening answers + parameter extractions + fulltext artifacts.
     # (Do NOT clear L1 answers.)
     try:
-        existing_md5 = (existing_row or {}).get("fulltext_md5") or ""
-        existing_url = (existing_row or {}).get("fulltext_url") or ""
+        existing_md5 = (existing_row or {}).get('fulltext_md5') or ''
+        existing_url = (existing_row or {}).get('fulltext_url') or ''
 
         pdf_changed = False
         if existing_md5 and new_md5 and existing_md5 != new_md5:
@@ -903,12 +994,12 @@ async def upload_citation_fulltext(
                 cits_dp_service.clear_columns,
                 citation_id,
                 [
-                    "fulltext",
-                    "fulltext_coords",
-                    "fulltext_pages",
-                    "fulltext_figures",
-                    "fulltext_tables",
-                    "fulltext_md5",
+                    'fulltext',
+                    'fulltext_coords',
+                    'fulltext_pages',
+                    'fulltext_figures',
+                    'fulltext_tables',
+                    'fulltext_md5',
                 ],
                 table_name,
             )
@@ -917,17 +1008,21 @@ async def upload_citation_fulltext(
             await run_in_threadpool(
                 cits_dp_service.clear_columns_by_prefix,
                 citation_id,
-                ["llm_param_", "human_param_"],
+                ['llm_param_', 'human_param_'],
                 table_name,
             )
 
             # Clear L2 screening columns only
             # NOTE (validation): we do not use l2_screen for filtering; keep it untouched/non-authoritative.
-            cols_to_clear = ["llm_l2_decision", "human_l2_decision"]
+            cols_to_clear = ['llm_l2_decision', 'human_l2_decision']
             try:
-                cp = (sr or {}).get("criteria_parsed") or (sr or {}).get("criteria") or {}
-                l2 = cp.get("l2") if isinstance(cp, dict) else None
-                l2_questions = (l2 or {}).get("questions") if isinstance(l2, dict) else None
+                cp = (sr or {}).get('criteria_parsed') or (
+                    sr or {}
+                ).get('criteria') or {}
+                l2 = cp.get('l2') if isinstance(cp, dict) else None
+                l2_questions = (l2 or {}).get(
+                    'questions',
+                ) if isinstance(l2, dict) else None
                 if isinstance(l2_questions, list):
                     for q in l2_questions:
                         try:
@@ -936,7 +1031,7 @@ async def upload_citation_fulltext(
                             llm_col = None
                         try:
                             core = snake_case(q, max_len=56)
-                            human_col = f"human_{core}" if core else "human_col"
+                            human_col = f"human_{core}" if core else 'human_col'
                         except Exception:
                             human_col = None
 
@@ -960,17 +1055,23 @@ async def upload_citation_fulltext(
         storage_service = None
 
     if not storage_service:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Storage service not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail='Storage service not available',
+        )
 
     # Upload file for the current user
     document_id = await storage_service.upload_user_document(
-        user_id=current_user["id"],
+        user_id=current_user['id'],
         filename=file.filename,
         file_content=content,
     )
 
     if not document_id:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload file to storage service")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to upload file to storage service',
+        )
     # Build storage path (container + blob name) so it can be stored in Postgres
     # Note: storage.py stores blobs at users/{user_id}/documents/{doc_id}_{filename}
     blob_name = f"users/{current_user['id']}/documents/{document_id}_{file.filename}"
@@ -981,23 +1082,31 @@ async def upload_citation_fulltext(
     try:
         updated = await run_in_threadpool(cits_dp_service.attach_fulltext, citation_id, storage_path, content, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
     if not updated:
         # If the citation id doesn't exist, consider rolling back the uploaded file (best effort)
         # Attempt to delete the uploaded blob (best-effort; not fatal if it fails)
         try:
-            await storage_service.delete_user_document(current_user["id"], document_id, file.filename)
+            await storage_service.delete_user_document(current_user['id'], document_id, file.filename)
         except Exception:
             pass
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to attach fulltext file")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to attach fulltext file',
+        )
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "citation_id": citation_id,
-        "storage_path": storage_path,
-        "document_id": document_id,
+        'status': 'success',
+        'sr_id': sr_id,
+        'citation_id': citation_id,
+        'storage_path': storage_path,
+        'document_id': document_id,
     }
 
 
@@ -1005,7 +1114,7 @@ async def upload_citation_fulltext(
 
 
 # Helper to drop a database - delegated to backend.api.core.postgres.drop_database
-async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
+async def hard_delete_screening_resources(sr_id: str, current_user: dict[str, Any]) -> dict[str, Any]:
     """
     Delete the screening Postgres table and all associated fulltext files
     for the given systematic review.
@@ -1022,26 +1131,37 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    requester_id = current_user.get("id")
-    if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may perform screening cleanup for this systematic review")
+    requester_id = current_user.get('id')
+    if requester_id != sr.get('owner_id'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only the owner may perform screening cleanup for this systematic review',
+        )
 
     if not screening:
-        return {"status": "no_screening_db", "message": "No screening table configured for this SR", "deleted_table": False, "deleted_files": 0}
+        return {'status': 'no_screening_db', 'message': 'No screening table configured for this SR', 'deleted_table': False, 'deleted_files': 0}
 
-    table_name = screening.get("table_name")
+    table_name = screening.get('table_name')
     if not table_name:
-        return {"status": "no_screening_db", "message": "Incomplete screening DB metadata", "deleted_table": False, "deleted_files": 0}
+        return {'status': 'no_screening_db', 'message': 'Incomplete screening DB metadata', 'deleted_table': False, 'deleted_files': 0}
 
     # 1) collect fulltext URLs from the screening DB
     try:
         urls = await run_in_threadpool(cits_dp_service.list_fulltext_urls, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB for fulltext URLs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB for fulltext URLs: {e}",
+        )
 
     # 2) delete blobs for each url (best-effort)
     deleted_files = 0
@@ -1056,8 +1176,8 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
             if not u:
                 continue
             # expect format "container/blob_path"
-            if "/" in u:
-                container, blob = u.split("/", 1)
+            if '/' in u:
+                container, blob = u.split('/', 1)
             else:
                 # unrecognised format, skip
                 failed_files += 1
@@ -1068,15 +1188,16 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
             if storage_service:
                 try:
                     # blob expected: users/{user_id}/documents/{doc_id}_{filename}
-                    if blob.startswith("users/"):
-                        parts = blob.split("/")
+                    if blob.startswith('users/'):
+                        parts = blob.split('/')
                         # expect ["users", user_id, "documents", "{doc_id}_{filename}"]
-                        if len(parts) >= 4 and parts[2] == "documents":
+                        if len(parts) >= 4 and parts[2] == 'documents':
                             user_id = parts[1]
-                            doc_part = "/".join(parts[3:])  # handle any extra slashes in filename
+                            # handle any extra slashes in filename
+                            doc_part = '/'.join(parts[3:])
                             # split first underscore to get doc_id and filename
-                            if "_" in doc_part:
-                                doc_id, filename = doc_part.split("_", 1)
+                            if '_' in doc_part:
+                                doc_id, filename = doc_part.split('_', 1)
                                 # call delete_user_document (async)
                                 try:
                                     ok = await storage_service.delete_user_document(user_id, doc_id, filename)
@@ -1112,40 +1233,45 @@ async def hard_delete_screening_resources(sr_id: str, current_user: Dict[str, An
         await run_in_threadpool(cits_dp_service.drop_table, table_name)
         table_dropped = True
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to drop screening table: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to drop screening table: {e}",
+        )
 
     # 4) remove screening_db metadata from SR document
     try:
         await run_in_threadpool(
             srdb_service.clear_screening_db_info,
-            sr_id
+            sr_id,
         )
     except Exception:
         # non-fatal, but report it
         pass
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "deleted_table": table_dropped,
-        "deleted_files": deleted_files,
-        "failed_file_deletions": failed_files,
+        'status': 'success',
+        'sr_id': sr_id,
+        'deleted_table': table_dropped,
+        'deleted_files': deleted_files,
+        'failed_file_deletions': failed_files,
     }
 
 
 # Optional endpoint to trigger the cleanup directly
-@router.post("/{sr_id}/hard-clean")
-async def hard_clean_screening_endpoint(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.post('/{sr_id}/hard-clean')
+async def hard_clean_screening_endpoint(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     result = await hard_delete_screening_resources(sr_id, current_user)
     return result
 
 
-@router.get("/{sr_id}/export-citations")
+@router.get('/{sr_id}/export-citations')
 async def export_citations_csv(
     sr_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Download an exact CSV dump of the SR's Postgres `citations` table.
 
@@ -1157,7 +1283,7 @@ async def export_citations_csv(
 
     try:
         sr, screening = await load_sr_and_check(
-            sr_id, current_user, srdb_service
+            sr_id, current_user, srdb_service,
         )
     except HTTPException:
         raise
@@ -1170,16 +1296,18 @@ async def export_citations_csv(
     if not screening:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No screening database configured for this systematic review",
+            detail='No screening database configured for this systematic review',
         )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     try:
         # Validation-friendly export: exclude fulltext/artifacts and flatten JSON columns.
         csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv_filtered, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1188,8 +1316,8 @@ async def export_citations_csv(
 
     return Response(
         content=csv_bytes,
-        media_type="text/csv; charset=utf-8",
+        media_type='text/csv; charset=utf-8',
         headers={
-            "Content-Disposition": f'attachment; filename="sr_{sr_id}_citations.csv"'
+            'Content-Disposition': f'attachment; filename="sr_{sr_id}_citations.csv"',
         },
     )

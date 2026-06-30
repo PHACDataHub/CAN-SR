@@ -400,8 +400,6 @@ export default function ScreeningMetricsPanel({
 
             <div className="mt-2 space-y-2">
               {criterionMetrics.map((c) => {
-                const acc = typeof c.accuracy === 'number' ? Math.round(c.accuracy * 100) : null
-                const accCrit = typeof c.accuracy_critical_agent === 'number' ? Math.round(c.accuracy_critical_agent * 100) : null
                 const textVal = thresholdText[c.criterion_key] ?? (Number.isFinite(c.threshold) ? String(c.threshold) : '0.9')
                 const cal = calibByKey.get(c.criterion_key)
                 const rec =

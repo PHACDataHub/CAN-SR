@@ -42,19 +42,16 @@ export function ChatInterface({
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [isCitationSidebarOpen, setIsCitationSidebarOpen] = useState(false)
   const [citationSources, setCitationSources] = useState<Citation[]>([])
-  const [citationMessageId, setCitationMessageId] = useState<string>('')
   const router = useRouter()
 
-  const handleShowSources = (sources: Citation[], messageId: string) => {
+  const handleShowSources = (sources: Citation[]) => {
     setCitationSources(sources)
-    setCitationMessageId(messageId)
     setIsCitationSidebarOpen(true)
   }
 
   const handleCloseCitationSidebar = () => {
     setIsCitationSidebarOpen(false)
     setCitationSources([])
-    setCitationMessageId('')
   }
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
@@ -176,7 +173,7 @@ export function ChatInterface({
               messages={messages}
               isLoading={isLoading}
               onRegenerate={handleRegenerate}
-              onShowSources={handleShowSources}
+              onShowSources={(sources) => handleShowSources(sources)}
             />
           </div>
 

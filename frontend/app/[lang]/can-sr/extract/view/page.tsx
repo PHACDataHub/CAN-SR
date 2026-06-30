@@ -9,6 +9,26 @@ import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/c
 import { ChevronDown, ChevronRight, Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
+function snakeCase(name: string, maxLen = 63): string {
+  if (!name) return ''
+  let s = name.trim().toLowerCase()
+  s = s.replace(/[^\w]+/g, '_')
+  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  if (/^\d/.test(s)) s = `c_${s}`
+  return s.slice(0, maxLen)
+}
+
+function snakeCaseParamLLM(name: string): string {
+  const core = snakeCase(name, 52)
+  const col = core ? `llm_param_${core}` : 'llm_param_param'
+  return col.slice(0, 60)
+}
+
+function humanParamColumn(name: string): string {
+  const llmCol = snakeCaseParamLLM(name)
+  return llmCol.replace('llm_param_', 'human_param_')
+}
+
 export default function CanSrL2ScreenPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -16,7 +36,7 @@ export default function CanSrL2ScreenPage() {
   const citationId = searchParams?.get('citation_id')
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
-  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const [selectedModel, setSelectedModel] = useState('')
   const dict = useDictionary()
 
   // Navigation list (Extract is filtered by L2 pass)
@@ -56,27 +76,6 @@ export default function CanSrL2ScreenPage() {
     }
     loadIds()
   }, [srId])
-
-  // Column name helpers to mirror backend snake_case and column derivation
-  const snakeCase = (name: string, maxLen = 63): string => {
-    if (!name) return ''
-    let s = name.trim().toLowerCase()
-    s = s.replace(/[^\w]+/g, '_')
-    s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-    if (/^\d/.test(s)) s = `c_${s}`
-    return s.slice(0, maxLen)
-  }
-
-  const snakeCaseParamLLM = (name: string): string => {
-    const core = snakeCase(name, 52)
-    const col = core ? `llm_param_${core}` : 'llm_param_param'
-    return col.slice(0, 60)
-  }
-
-  const humanParamColumn = (name: string): string => {
-    const llmCol = snakeCaseParamLLM(name)
-    return llmCol.replace('llm_param_', 'human_param_')
-  }
 
   const [parametersParsed, setParametersParsed] = useState<ParametersParsed | null>(null)
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
@@ -488,7 +487,7 @@ export default function CanSrL2ScreenPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
-      <SRHeader 
+      <SRHeader
         backLabel={dict.cansr.backToCitations}
         title={dict.screening.parameterExtraction}
         srName=""

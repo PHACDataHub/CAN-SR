@@ -2,16 +2,12 @@
 
 import CitationsListPage from '@/components/can-sr/CitationListPage'
 
-import type {
-  AiCall,
-  BuildCitationAiCalls,
-} from '@/components/can-sr/CitationListPage'
+import type { BuildCitationAiCalls } from '@/components/can-sr/CitationListPage'
 
 const buildCitationAiCalls: BuildCitationAiCalls = ({
   srId,
   citationId,
   model,
-  criteria,
   getAuthHeaders,
 }) => {
   // Phase 2 wiring: L1 run-all uses the agentic orchestrator endpoint.

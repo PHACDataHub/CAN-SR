@@ -69,7 +69,11 @@ export async function PUT(request: NextRequest) {
 
     const url = `${BACKEND_URL}/api/sr/${encodeURIComponent(srId)}/criteria`
     const contentType = request.headers.get('content-type') || ''
-    if (contentType.includes('multipart/form-data')) {
+
+    if (
+      contentType.includes('multipart/form-data') ||
+      contentType.includes('application/x-www-form-urlencoded')
+    ) {
       return await forwardFormDataPut(url, request)
     } else {
       // assume JSON body with { criteria_yaml: '...' } or similar

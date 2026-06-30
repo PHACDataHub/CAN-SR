@@ -21,7 +21,7 @@ CAN-SR Backend provides a production-ready REST API for managing systematic revi
 
 ### **Tech Stack**
 - **API Framework**: FastAPI with Python
-- **Databases**: 
+- **Databases**:
   - MongoDB (port 27017) - Systematic review metadata
   - PostgreSQL (port 5432) - Citation storage and screening data
 - **Document Processing**: GROBID (port 8070) - PDF parsing and full-text extraction

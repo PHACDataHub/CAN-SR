@@ -1,76 +1,102 @@
-from typing import Any, Dict, List, Optional, Tuple
-import json
-import re
-import os
-from tempfile import NamedTemporaryFile
+from __future__ import annotations
+
+import asyncio
 import hashlib
+import json
+import os
+import re
 from datetime import datetime
 from pathlib import Path
-import asyncio
+from tempfile import NamedTemporaryFile
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
-from ..services.sr_db_service import srdb_service
-from ..core.config import settings
-from ..core.security import get_current_active_user
-from ..services.azure_openai_client import azure_openai_client
-
-# reuse citations helpers to access screening Postgres rows
 from ..citations import router as citations_router
-
-from .prompts import PARAMETER_PROMPT_JSON
-
-# storage and grobid services
-from ..services.storage import storage_service
-from ..services.grobid_service import grobid_service
 from ..core.cit_utils import load_sr_and_check
-
-from ..services.azure_docint_client import azure_docint_client
+from ..core.config import settings
 from ..core.docint_coords import normalize_bounding_regions_to_boxes
-
+from ..core.security import get_current_active_user
+from ..services.azure_docint_client import azure_docint_client
+from ..services.azure_openai_client import azure_openai_client
+from ..services.cit_db_service import cits_dp_service
+from ..services.cit_db_service import snake_case_param
+from ..services.grobid_service import grobid_service
+from ..services.sr_db_service import srdb_service
+from ..services.storage import storage_service
+from .prompts import PARAMETER_PROMPT_JSON
+# reuse citations helpers to access screening Postgres rows
+# storage and grobid services
 # Import consolidated Postgres helpers if available (optional)
-from ..services.cit_db_service import cits_dp_service, snake_case_param
-
 
 
 router = APIRouter()
 
 
 class ParameterExtractRequest(BaseModel):
-    fulltext: Optional[str] = Field(
+    fulltext: str | None = Field(
         None,
-        description="Full text with numbered sentences (e.g. '[0] First sentence\\n[1] Second sentence'). If omitted the endpoint will try to read fulltext_url from the screening DB row."
+        description="Full text with numbered sentences (e.g. '[0] First sentence\\n[1] Second sentence'). If omitted the endpoint will try to read fulltext_url from the screening DB row.",
     )
-    parameter_name: str = Field(..., description="Short name for the parameter (used as column name slug)")
-    parameter_description: str = Field(..., description="Human-friendly description of what to extract")
-    model: Optional[str] = Field(None, description="Model to use")
-    temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0)
-    max_tokens: Optional[int] = Field(512, ge=1, le=4000)
+    parameter_name: str = Field(
+        ..., description='Short name for the parameter (used as column name slug)',
+    )
+    parameter_description: str = Field(
+        ..., description='Human-friendly description of what to extract',
+    )
+    model: str | None = Field(None, description='Model to use')
+    temperature: float | None = Field(0.0, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(512, ge=1, le=4000)
 
     # Optional artifacts context (if omitted, server will read from citation row when available)
-    tables: Optional[str] = Field(None, description="Optional numbered tables text (markdown).")
-    figures: Optional[str] = Field(None, description="Optional numbered figure captions text.")
-    attach_figures: Optional[bool] = Field(True, description="If true, attach figure images to the LLM request when available")
-
-
+    tables: str | None = Field(
+        None, description='Optional numbered tables text (markdown).',
+    )
+    figures: str | None = Field(
+        None, description='Optional numbered figure captions text.',
+    )
+    attach_figures: bool | None = Field(
+        True, description='If true, attach figure images to the LLM request when available',
+    )
 
 
 class HumanParameterRequest(BaseModel):
-    fulltext: Optional[str] = Field(
+    fulltext: str | None = Field(
         None,
-        description="Optional numbered full text. If omitted the server will try to read fulltext_url from the screening DB row."
+        description='Optional numbered full text. If omitted the server will try to read fulltext_url from the screening DB row.',
     )
-    parameter_name: str = Field(..., description="Short name for the parameter (used as column name slug)")
-    found: bool = Field(..., description="Whether the parameter was found (boolean)")
-    value: Optional[str] = Field(None, description="Human-provided value (string) or null")
-    explanation: Optional[str] = Field("", description="Optional explanation from the human reviewer")
-    evidence_sentences: Optional[List[int]] = Field(None, description="Optional list of evidence sentence indices")
-    reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
+    parameter_name: str = Field(
+        ..., description='Short name for the parameter (used as column name slug)',
+    )
+    found: bool = Field(
+        ...,
+        description='Whether the parameter was found (boolean)',
+    )
+    value: str | None = Field(
+        None, description='Human-provided value (string) or null',
+    )
+    explanation: str | None = Field(
+        '', description='Optional explanation from the human reviewer',
+    )
+    evidence_sentences: list[int] | None = Field(
+        None, description='Optional list of evidence sentence indices',
+    )
+    reviewer: str | None = Field(
+        None, description='Optional reviewer id or name',
+    )
 
 
-def _list_set(seq: List[str]) -> List[str]:
+def _list_set(seq: list[str]) -> list[str]:
     seen = set()
     out = []
     for x in seq:
@@ -80,12 +106,12 @@ def _list_set(seq: List[str]) -> List[str]:
     return out
 
 
-@router.post("/{sr_id}/citations/{citation_id}/extract-parameter")
+@router.post('/{sr_id}/citations/{citation_id}/extract-parameter')
 async def extract_parameter_endpoint(
     sr_id: str,
     citation_id: int,
     payload: ParameterExtractRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Extract a parameter value from full text using an LLM and persist the parsed JSON
@@ -98,9 +124,12 @@ async def extract_parameter_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Obtain fulltext: prefer payload, otherwise read from DB row
     fulltext = payload.fulltext
@@ -109,21 +138,33 @@ async def extract_parameter_endpoint(
         try:
             row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to query screening DB: {e}",
+            )
 
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+            )
 
-        fulltext = row.get("fulltext") if "fulltext" in row else None
+        fulltext = row.get('fulltext') if 'fulltext' in row else None
         if not fulltext:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Full text not provided and not available for this citation")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='Full text not provided and not available for this citation',
+            )
 
     # Build tables/figures context: prefer payload fields, else fetch from DB row (if loaded)
     tables_text = payload.tables
     figures_text = payload.figures
-    images: List[Tuple[bytes, str]] = []
+    images: list[tuple[bytes, str]] = []
 
     if (tables_text is None or figures_text is None) and row is None:
         try:
@@ -134,8 +175,8 @@ async def extract_parameter_endpoint(
     if row and (tables_text is None or figures_text is None):
         # tables: embed markdown
         if tables_text is None:
-            tables_md_lines: List[str] = []
-            ft_tables = row.get("fulltext_tables")
+            tables_md_lines: list[str] = []
+            ft_tables = row.get('fulltext_tables')
             if isinstance(ft_tables, str):
                 try:
                     ft_tables = json.loads(ft_tables)
@@ -145,24 +186,27 @@ async def extract_parameter_endpoint(
                 for item in ft_tables:
                     if not isinstance(item, dict):
                         continue
-                    idx = item.get("index")
-                    blob_addr = item.get("blob_address")
-                    caption = item.get("caption")
+                    idx = item.get('index')
+                    blob_addr = item.get('blob_address')
+                    caption = item.get('caption')
                     if not idx or not blob_addr:
                         continue
                     try:
                         md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
-                        md_txt = md_bytes.decode("utf-8", errors="replace")
-                        header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
-                        tables_md_lines.extend([header, md_txt, ""])
+                        md_txt = md_bytes.decode('utf-8', errors='replace')
+                        header = f"Table [T{idx}]" + \
+                            (f" caption: {caption}" if caption else '')
+                        tables_md_lines.extend([header, md_txt, ''])
                     except Exception:
                         continue
-            tables_text = "\n".join(tables_md_lines) if tables_md_lines else "(none)"
+            tables_text = '\n'.join(
+                tables_md_lines,
+            ) if tables_md_lines else '(none)'
 
         # figures: captions + optionally images
         if figures_text is None:
-            figures_lines: List[str] = []
-            ft_figs = row.get("fulltext_figures")
+            figures_lines: list[str] = []
+            ft_figs = row.get('fulltext_figures')
             if isinstance(ft_figs, str):
                 try:
                     ft_figs = json.loads(ft_figs)
@@ -172,25 +216,27 @@ async def extract_parameter_endpoint(
                 for item in ft_figs:
                     if not isinstance(item, dict):
                         continue
-                    idx = item.get("index")
-                    blob_addr = item.get("blob_address")
-                    caption = item.get("caption")
+                    idx = item.get('index')
+                    blob_addr = item.get('blob_address')
+                    caption = item.get('caption')
                     if not idx or not blob_addr:
                         continue
                     figures_lines.append(
-                        f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})"
+                        f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})",
                     )
                     if payload.attach_figures:
                         try:
                             img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                             if img_bytes:
-                                images.append((img_bytes, "image/png"))
+                                images.append((img_bytes, 'image/png'))
                         except Exception:
                             continue
-            figures_text = "\n".join(figures_lines) if figures_lines else "(none)"
+            figures_text = '\n'.join(
+                figures_lines,
+            ) if figures_lines else '(none)'
 
-    tables_text = tables_text if tables_text is not None else "(none)"
-    figures_text = figures_text if figures_text is not None else "(none)"
+    tables_text = tables_text if tables_text is not None else '(none)'
+    figures_text = figures_text if figures_text is not None else '(none)'
 
     # Build prompt
     prompt = PARAMETER_PROMPT_JSON.format(
@@ -202,7 +248,10 @@ async def extract_parameter_endpoint(
     )
 
     if not azure_openai_client.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Azure OpenAI client is not configured on the server")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail='Azure OpenAI client is not configured on the server',
+        )
 
     try:
         if images:
@@ -223,25 +272,27 @@ async def extract_parameter_endpoint(
                 temperature=payload.temperature or 0.0,
             )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"LLM call failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"LLM call failed: {e}",
+        )
 
     # Parse JSON with robustness: tolerate code fences or preamble text
-    def _extract_json_object(text: str) -> Optional[str]:
+    def _extract_json_object(text: str) -> str | None:
         t = text.strip()
         # strip leading/trailing code fences
-        if t.startswith("```"):
-            t = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", t)
-            t = re.sub(r"\s*```$", "", t)
+        if t.startswith('```'):
+            t = re.sub(r'^```[a-zA-Z0-9_-]*\s*', '', t)
+            t = re.sub(r'\s*```$', '', t)
         # find first balanced {...}
-        start = t.find("{")
+        start = t.find('{')
         if start == -1:
             return None
         depth = 0
         for i in range(start, len(t)):
             ch = t[i]
-            if ch == "{":
+            if ch == '{':
                 depth += 1
-            elif ch == "}":
+            elif ch == '}':
                 depth -= 1
                 if depth == 0:
                     return t[start:i+1]
@@ -258,24 +309,33 @@ async def extract_parameter_endpoint(
             except Exception:
                 parsed = None
         if parsed is None:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response was not valid JSON: {llm_response[:1000]}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"LLM response was not valid JSON: {llm_response[:1000]}",
+            )
 
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM response JSON was not an object")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail='LLM response JSON was not an object',
+        )
 
     # Normalize and validate keys and types (tolerate minor deviations)
-    found_raw = parsed.get("found", None)
+    found_raw = parsed.get('found', None)
     if isinstance(found_raw, bool):
         found_val = found_raw
     elif isinstance(found_raw, str):
-        found_val = found_raw.strip().lower() in ("true", "yes", "1")
+        found_val = found_raw.strip().lower() in ('true', 'yes', '1')
     elif isinstance(found_raw, (int, float)):
         found_val = bool(found_raw)
     else:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM JSON missing or invalid 'found' key")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM JSON missing or invalid 'found' key",
+        )
 
     # value may be string or null; coerce common primitives to string
-    val = parsed.get("value")
+    val = parsed.get('value')
     if val is not None and not isinstance(val, str):
         if isinstance(val, (int, float, bool)):
             val = str(val)
@@ -283,14 +343,16 @@ async def extract_parameter_endpoint(
             try:
                 val = str(val)
             except Exception:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="'value' must be a string or null")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail="'value' must be a string or null",
+                )
 
-    explanation = parsed.get("explanation") or ""
+    explanation = parsed.get('explanation') or ''
     if not isinstance(explanation, str):
         explanation = str(explanation)
 
-    evidence_raw = parsed.get("evidence_sentences")
-    evidence: List[int] = []
+    evidence_raw = parsed.get('evidence_sentences')
+    evidence: list[int] = []
     if evidence_raw is None:
         evidence = []
     elif isinstance(evidence_raw, list):
@@ -307,15 +369,18 @@ async def extract_parameter_endpoint(
                 # skip unsupported types
                 continue
     else:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="'evidence_sentences' must be a list")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="'evidence_sentences' must be a list",
+        )
 
     # Normalize evidence tables/figures
-    def _norm_int_list(v: Any) -> List[int]:
+    def _norm_int_list(v: Any) -> list[int]:
         if v is None:
             return []
         if not isinstance(v, list):
             return []
-        out: List[int] = []
+        out: list[int] = []
         for item in v:
             if isinstance(item, int):
                 out.append(item)
@@ -326,25 +391,25 @@ async def extract_parameter_endpoint(
                     continue
         # stable unique
         seen = set()
-        uniq: List[int] = []
+        uniq: list[int] = []
         for x in out:
             if x not in seen:
                 seen.add(x)
                 uniq.append(x)
         return uniq
 
-    evidence_tables = _norm_int_list(parsed.get("evidence_tables"))
-    evidence_figures = _norm_int_list(parsed.get("evidence_figures"))
+    evidence_tables = _norm_int_list(parsed.get('evidence_tables'))
+    evidence_figures = _norm_int_list(parsed.get('evidence_figures'))
 
     # Build the stored JSON
     stored = {
-        "found": found_val,
-        "value": val,
-        "explanation": explanation,
-        "evidence_sentences": evidence,
-        "evidence_tables": evidence_tables,
-        "evidence_figures": evidence_figures,
-        "llm_raw": llm_response[:4000],
+        'found': found_val,
+        'value': val,
+        'explanation': explanation,
+        'evidence_sentences': evidence,
+        'evidence_tables': evidence_tables,
+        'evidence_figures': evidence_figures,
+        'llm_raw': llm_response[:4000],
     }
 
     # Persist under dynamic column name derived from parameter name
@@ -353,21 +418,29 @@ async def extract_parameter_endpoint(
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
     # Auto-fill human_param_* from llm_param_* if missing (never overwrite)
     try:
-        col_human = col_name.replace("llm_param_", "human_param_", 1)
+        col_human = col_name.replace('llm_param_', 'human_param_', 1)
         human_payload = {
             **stored,
-            "autofilled": True,
-            "source": "llm",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            'autofilled': True,
+            'source': 'llm',
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
         }
         await run_in_threadpool(
             cits_dp_service.copy_jsonb_if_empty,
@@ -380,15 +453,15 @@ async def extract_parameter_endpoint(
     except Exception:
         pass
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "extraction": stored}
+    return {'status': 'success', 'sr_id': sr_id, 'citation_id': citation_id, 'column': col_name, 'extraction': stored}
 
 
-@router.post("/{sr_id}/citations/{citation_id}/human-extract-parameter")
+@router.post('/{sr_id}/citations/{citation_id}/human-extract-parameter')
 async def human_extract_parameter(
     sr_id: str,
     citation_id: int,
     payload: HumanParameterRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Persist a human-provided parameter value into the screening Postgres citations table
@@ -403,20 +476,30 @@ async def human_extract_parameter(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Ensure citation exists (we won't require full_text for human input but check row presence)
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # Normalize value
     val = payload.value
@@ -424,63 +507,79 @@ async def human_extract_parameter(
         try:
             val = str(val)
         except Exception:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="'value' must be a string or null")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="'value' must be a string or null",
+            )
 
     # Normalize evidence_sentences
     evidence = payload.evidence_sentences or []
     if not isinstance(evidence, list) or not all(isinstance(i, int) for i in evidence):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="'evidence_sentences' must be a list of integers")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'evidence_sentences' must be a list of integers",
+        )
 
-    explanation = payload.explanation or ""
+    explanation = payload.explanation or ''
     if not isinstance(explanation, str):
         explanation = str(explanation)
 
     # Build the stored JSON
     stored = {
-        "found": bool(payload.found),
-        "value": val,
-        "explanation": explanation,
-        "evidence_sentences": evidence,
-        "human": True,
-        "reviewer": payload.reviewer,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        'found': bool(payload.found),
+        'value': val,
+        'explanation': explanation,
+        'evidence_sentences': evidence,
+        'human': True,
+        'reviewer': payload.reviewer,
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
     # Derive human-prefixed column name from parameter name. Reuse snake_case_param then replace prefix.
     try:
-        col_llm = snake_case_param(payload.parameter_name) if snake_case_param else None
+        col_llm = snake_case_param(
+            payload.parameter_name,
+        ) if snake_case_param else None
     except Exception:
         col_llm = None
 
     if col_llm:
-        col_name = col_llm.replace("llm_param_", "human_param_", 1)
+        col_name = col_llm.replace('llm_param_', 'human_param_', 1)
     else:
         # fallback core name
         try:
             from ..services.cit_db_service import snake_case as _snake_case
-            core = _snake_case(payload.parameter_name) if _snake_case else ""
+            core = _snake_case(payload.parameter_name) if _snake_case else ''
         except Exception:
-            core = ""
-        col_name = f"human_param_{core}" if core else "human_param_param"
+            core = ''
+        col_name = f"human_param_{core}" if core else 'human_param_param'
 
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, stored, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "extraction": stored}
+    return {'status': 'success', 'sr_id': sr_id, 'citation_id': citation_id, 'column': col_name, 'extraction': stored}
 
 
-@router.post("/{sr_id}/citations/{citation_id}/extract-fulltext")
+@router.post('/{sr_id}/citations/{citation_id}/extract-fulltext')
 async def extract_fulltext_from_storage(
     sr_id: str,
     citation_id: int,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Download the citation's stored PDF from object storage, run Grobid process_structure,
@@ -493,57 +592,79 @@ async def extract_fulltext_from_storage(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # fetch citation row
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # Determine storage path for the citation PDF
-    storage_path = row.get("fulltext_url")
+    storage_path = row.get('fulltext_url')
     if not storage_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No fulltext storage path found on citation row")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='No fulltext storage path found on citation row',
+        )
 
     try:
         content, _filename = await storage_service.get_bytes_by_path(storage_path)
     except FileNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fulltext file not found in storage")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Fulltext file not found in storage',
+        )
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unrecognized storage path format")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Unrecognized storage path format',
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download from storage: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download from storage: {e}",
+        )
 
     # If the citation row already contains an extracted full text in the "fulltext" column,
     # only use it if the stored md5 matches the pdf we just downloaded.
     cached_full_text = None
-    if "fulltext" in row and row.get("fulltext"):
-        cached_full_text = row.get("fulltext")
+    if 'fulltext' in row and row.get('fulltext'):
+        cached_full_text = row.get('fulltext')
 
     # compute md5 of the current PDF bytes from storage
     current_md5 = hashlib.md5(content).hexdigest()
-    stored_md5 = row.get("fulltext_md5")
+    stored_md5 = row.get('fulltext_md5')
 
     if cached_full_text and stored_md5 and current_md5 and stored_md5 == current_md5:
         return {
-            "status": "success",
-            "sr_id": sr_id,
-            "citation_id": citation_id,
-            "fulltext": cached_full_text,
-            "n_pages": None,
-            "cached": True,
+            'status': 'success',
+            'sr_id': sr_id,
+            'citation_id': citation_id,
+            'fulltext': cached_full_text,
+            'n_pages': None,
+            'cached': True,
         }
 
     # write to temp file and call grobid (+ Azure DI in parallel)
-    tmp = NamedTemporaryFile(delete=False, suffix=".pdf")
+    tmp = NamedTemporaryFile(delete=False, suffix='.pdf')
     try:
         tmp.write(content)
         tmp.flush()
@@ -555,8 +676,8 @@ async def extract_fulltext_from_storage(
 
         async def _run_docint():
             if not azure_docint_client or not azure_docint_client.is_available():
-                return {"success": False, "error": "Azure DI not configured", "figures": [], "tables": []}
-            return await azure_docint_client.extract_citation_artifacts(tmp.name, source_type="file")
+                return {'success': False, 'error': 'Azure DI not configured', 'figures': [], 'tables': []}
+            return await azure_docint_client.extract_citation_artifacts(tmp.name, source_type='file')
 
         try:
             (coords, pages), docint_res = await asyncio.gather(
@@ -564,59 +685,72 @@ async def extract_fulltext_from_storage(
                 _run_docint(),
             )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fulltext processing failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Fulltext processing failed: {e}",
+            )
 
         # filter sentence annotations
-        annotations = [a for a in coords if a.get("type") == "s" and a.get("text")]
-        full_text_arr = _list_set([a["text"] for a in annotations])
-        full_text_str = "\n\n".join([f"[{i}] {x}" for i, x in enumerate(full_text_arr)])
+        annotations = [
+            a for a in coords if a.get(
+                'type',
+            ) == 's' and a.get('text')
+        ]
+        full_text_arr = _list_set([a['text'] for a in annotations])
+        full_text_str = '\n\n'.join(
+            [f"[{i}] {x}" for i, x in enumerate(full_text_arr)],
+        )
 
         # -------------------------
         # Upload Azure DI artifacts
         # -------------------------
-        fulltext_figures: List[Dict[str, Any]] = []
-        fulltext_tables: List[Dict[str, Any]] = []
-        artifact_coords: List[Dict[str, Any]] = []
+        fulltext_figures: list[dict[str, Any]] = []
+        fulltext_tables: list[dict[str, Any]] = []
+        artifact_coords: list[dict[str, Any]] = []
 
         try:
-            if docint_res and isinstance(docint_res, dict) and docint_res.get("success"):
-                pages_meta = docint_res.get("pages") or []
+            if docint_res and isinstance(docint_res, dict) and docint_res.get('success'):
+                pages_meta = docint_res.get('pages') or []
                 # Determine artifact base path from the fulltext_url directory
                 # storage_path is "container/blob".
-                container, blob = storage_path.split("/", 1)
-                blob_dir = str(Path(blob).parent).replace("\\", "/")
+                container, blob = storage_path.split('/', 1)
+                blob_dir = str(Path(blob).parent).replace('\\', '/')
                 artifacts_prefix = f"{container}/{blob_dir}/{citation_id}_artifacts"
-                artifacts_prefix = artifacts_prefix.replace("//", "/").rstrip("/")
+                artifacts_prefix = artifacts_prefix.replace(
+                    '//', '/',
+                ).rstrip('/')
 
                 # Figures: write png
-                for fig in (docint_res.get("figures") or []):
+                for fig in (docint_res.get('figures') or []):
                     try:
-                        idx = int(fig.get("index"))
+                        idx = int(fig.get('index'))
                     except Exception:
                         continue
                     artifact_id = f"figure_{idx}.png"
                     blob_address = f"{artifacts_prefix}/{artifact_id}"
-                    png_bytes = fig.get("png_bytes") or b""
-                    caption = fig.get("caption")
-                    bbox = fig.get("bounding_box")
-                    boxes = normalize_bounding_regions_to_boxes(bbox, pages_meta)
+                    png_bytes = fig.get('png_bytes') or b''
+                    caption = fig.get('caption')
+                    bbox = fig.get('bounding_box')
+                    boxes = normalize_bounding_regions_to_boxes(
+                        bbox, pages_meta,
+                    )
 
                     # Upload only if we actually got image bytes
                     if png_bytes:
                         await storage_service.put_bytes_by_path(
                             blob_address,
                             png_bytes,
-                            content_type="image/png",
+                            content_type='image/png',
                         )
 
                     fulltext_figures.append(
                         {
-                            "blob_address": blob_address,
-                            "caption": caption,
-                            "bounding_box": boxes,
-                            "description": None,
-                            "index": idx,
-                        }
+                            'blob_address': blob_address,
+                            'caption': caption,
+                            'bounding_box': boxes,
+                            'description': None,
+                            'index': idx,
+                        },
                     )
 
                     # Also add to overlay coords so the existing PDF viewer logic can
@@ -627,38 +761,40 @@ async def extract_fulltext_from_storage(
                         artifact_coords.append(
                             {
                                 **b,
-                                "type": "figure",
-                                "artifact_index": idx,
-                                "text": f"Figure F{idx}",
-                            }
+                                'type': 'figure',
+                                'artifact_index': idx,
+                                'text': f"Figure F{idx}",
+                            },
                         )
 
                 # Tables: write markdown (.md)
-                for tbl in (docint_res.get("tables") or []):
+                for tbl in (docint_res.get('tables') or []):
                     try:
-                        idx = int(tbl.get("index"))
+                        idx = int(tbl.get('index'))
                     except Exception:
                         continue
                     artifact_id = f"table_{idx}.md"
                     blob_address = f"{artifacts_prefix}/{artifact_id}"
-                    md = (tbl.get("table_markdown") or "").encode("utf-8")
-                    caption = tbl.get("caption")
-                    bbox = tbl.get("bounding_box")
-                    boxes = normalize_bounding_regions_to_boxes(bbox, pages_meta)
+                    md = (tbl.get('table_markdown') or '').encode('utf-8')
+                    caption = tbl.get('caption')
+                    bbox = tbl.get('bounding_box')
+                    boxes = normalize_bounding_regions_to_boxes(
+                        bbox, pages_meta,
+                    )
                     if md:
                         await storage_service.put_bytes_by_path(
                             blob_address,
                             md,
-                            content_type="text/markdown",
+                            content_type='text/markdown',
                         )
                     fulltext_tables.append(
                         {
-                            "blob_address": blob_address,
-                            "caption": caption,
-                            "bounding_box": boxes,
-                            "description": None,
-                            "index": idx,
-                        }
+                            'blob_address': blob_address,
+                            'caption': caption,
+                            'bounding_box': boxes,
+                            'description': None,
+                            'index': idx,
+                        },
                     )
 
                     for b in boxes or []:
@@ -667,10 +803,10 @@ async def extract_fulltext_from_storage(
                         artifact_coords.append(
                             {
                                 **b,
-                                "type": "table",
-                                "artifact_index": idx,
-                                "text": f"Table T{idx}",
-                            }
+                                'type': 'table',
+                                'artifact_index': idx,
+                                'text': f"Table T{idx}",
+                            },
                         )
         except Exception:
             # Best-effort; DI artifacts should not block fulltext extraction.
@@ -687,27 +823,35 @@ async def extract_fulltext_from_storage(
     # persist full_text_str and coordinates/pages into citation row
     try:
         coords_for_overlay = list(annotations) + list(artifact_coords)
-        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext", full_text_str, table_name)
-        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "fulltext_md5", current_md5, table_name)
-        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_coords", coords_for_overlay, table_name)
-        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_pages", pages, table_name)
-        updated5 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_figures", fulltext_figures, table_name)
-        updated6 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, "fulltext_tables", fulltext_tables, table_name)
+        updated1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'fulltext', full_text_str, table_name)
+        updated2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'fulltext_md5', current_md5, table_name)
+        updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_coords', coords_for_overlay, table_name)
+        updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_pages', pages, table_name)
+        updated5 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_figures', fulltext_figures, table_name)
+        updated6 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_tables', fulltext_tables, table_name)
         updated = updated1 or updated2 or updated3 or updated4 or updated5 or updated6
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row with full text: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row with full text: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "citation_id": citation_id,
-        "fulltext": full_text_str,
-        "n_pages": len(pages),
-        "fulltext_figures": fulltext_figures,
-        "fulltext_tables": fulltext_tables,
+        'status': 'success',
+        'sr_id': sr_id,
+        'citation_id': citation_id,
+        'fulltext': full_text_str,
+        'n_pages': len(pages),
+        'fulltext_figures': fulltext_figures,
+        'fulltext_tables': fulltext_tables,
     }

@@ -155,7 +155,7 @@ export async function GET(request: NextRequest) {
       headers: fetchOptions.headers,
     })
 
-    
+
 
 
     if (!backendRes.ok) {

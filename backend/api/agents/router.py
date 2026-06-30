@@ -1,6 +1,7 @@
 """
 Main agents router - centralized routing for all agent endpoints
 """
+from __future__ import annotations
 
 from fastapi import APIRouter
 
@@ -11,5 +12,5 @@ agents_router = APIRouter()
 
 # Include all agent-specific routers
 agents_router.include_router(
-    agentic_search_router, prefix="/agentic_search", tags=["Agentic Search"]
+    agentic_search_router, prefix='/agentic_search', tags=['Agentic Search'],
 )

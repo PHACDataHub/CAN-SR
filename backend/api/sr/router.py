@@ -1,63 +1,68 @@
 """
 API endpoints for managing the Systematic Review GPT systems
 """
+from __future__ import annotations
 
-from typing import Dict, Any, Optional, List
 import os
 import uuid
 from datetime import datetime
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    UploadFile,
-    File,
-    Form,
-    status,
-)
+import yaml
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import File
+from fastapi import Form
+from fastapi import HTTPException
+from fastapi import status
+from fastapi import UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-import yaml
 
+from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
-from ..services.user_db import user_db_service
 from ..services.sr_db_service import srdb_service
-from ..core.cit_utils import load_sr_and_check
+from ..services.user_db import user_db_service
 
 router = APIRouter()
 
+
 class SystematicReviewCreate(BaseModel):
     name: str
-    description: Optional[str] = None
-    criteria_yaml: Optional[str] = None  # raw YAML string
+    description: str | None = None
+    criteria_yaml: str | None = None  # raw YAML string
 
 
 class SystematicReviewRead(BaseModel):
     id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     owner_id: str
     owner_email: str
-    users: List[str]
+    users: list[str]
     created_at: str
     updated_at: str
     # visibility flag - if False the SR is considered deleted/hidden
     visible: bool = True
     # raw parsed YAML mapping (keeps original structure)
-    criteria: Optional[Dict[str, Any]] = None
+    criteria: dict[str, Any] | None = None
     # raw YAML string
-    criteria_yaml: Optional[str] = None
+    criteria_yaml: str | None = None
     # convenience structured metadata extracted from criteria (l1, l2, parameters)
-    criteria_parsed: Optional[Dict[str, Any]] = None
+    criteria_parsed: dict[str, Any] | None = None
+    # screening table metadata used by the setup page to detect existing imported citations
+    screening_db: dict[str, Any] | None = None
 
     # Per-step, per-criterion thresholds (SR-scoped). Example:
     # {
     #   "l1": {"population": 0.9, "intervention": 0.85},
     #   "l2": {"outcome": 0.9}
     # }
-    screening_thresholds: Optional[Dict[str, Any]] = None
+    screening_thresholds: dict[str, Any] | None = None
 
     # SR-scoped per-step per-criterion additions injected into CRITICAL prompts.
     # Shape:
@@ -65,19 +70,16 @@ class SystematicReviewRead(BaseModel):
     #   "l1": {"criterion_key": "..."},
     #   "l2": {"criterion_key": "..."}
     # }
-    critical_prompt_additions: Optional[Dict[str, Any]] = None
+    critical_prompt_additions: dict[str, Any] | None = None
 
 
-
-
-
-@router.post("/create", response_model=SystematicReviewRead, status_code=status.HTTP_201_CREATED)
+@router.post('/create', response_model=SystematicReviewRead, status_code=status.HTTP_201_CREATED)
 async def create_systematic_review(
     name: str = Form(...),
-    description: Optional[str] = Form(None),
-    criteria_file: Optional[UploadFile] = File(None),
-    criteria_yaml: Optional[str] = Form(None),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    description: str | None = Form(None),
+    criteria_file: UploadFile | None = File(None),
+    criteria_yaml: str | None = Form(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Create a new systematic review.
@@ -93,16 +95,18 @@ async def create_systematic_review(
     """
 
     if not name or not name.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='name is required',
+        )
 
     # Load YAML criteria
-    criteria_str: Optional[str] = None
-    criteria_obj: Optional[Dict[str, Any]] = None
+    criteria_str: str | None = None
+    criteria_obj: dict[str, Any] | None = None
 
     try:
         if criteria_file:
             raw = await criteria_file.read()
-            criteria_str = raw.decode("utf-8")
+            criteria_str = raw.decode('utf-8')
         elif criteria_yaml:
             criteria_str = criteria_yaml
 
@@ -114,14 +118,16 @@ async def create_systematic_review(
             elif not isinstance(criteria_obj, dict):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Parsed YAML criteria must be a mapping/object at the top level",
+                    detail='Parsed YAML criteria must be a mapping/object at the top level',
                 )
     except yaml.YAMLError as ye:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}"
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}",
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+        )
 
     try:
         sr_doc = await run_in_threadpool(
@@ -130,47 +136,51 @@ async def create_systematic_review(
             description,
             criteria_str,
             criteria_obj,
-            current_user.get("id"),
-            current_user.get("email"),
+            current_user.get('id'),
+            current_user.get('email'),
         )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create systematic review: {e}",
+        )
 
     return SystematicReviewRead(
-        id=sr_doc.get("id"),
-        name=sr_doc.get("name"),
-        description=sr_doc.get("description"),
-        owner_id=sr_doc.get("owner_id"),
-        owner_email=sr_doc.get("owner_email"),
-        users=sr_doc.get("users", []),
-        created_at=sr_doc.get("created_at"),
-        updated_at=sr_doc.get("updated_at"),
-        visible=sr_doc.get("visible", True),
-        criteria=sr_doc.get("criteria"),
-        criteria_yaml=sr_doc.get("criteria_yaml"),
-        criteria_parsed=sr_doc.get("criteria_parsed"),
-        screening_thresholds=sr_doc.get("screening_thresholds"),
-        critical_prompt_additions=sr_doc.get("critical_prompt_additions"),
+        id=sr_doc.get('id'),
+        name=sr_doc.get('name'),
+        description=sr_doc.get('description'),
+        owner_id=sr_doc.get('owner_id'),
+        owner_email=sr_doc.get('owner_email'),
+        users=sr_doc.get('users', []),
+        created_at=sr_doc.get('created_at'),
+        updated_at=sr_doc.get('updated_at'),
+        visible=sr_doc.get('visible', True),
+        criteria=sr_doc.get('criteria'),
+        criteria_yaml=sr_doc.get('criteria_yaml'),
+        criteria_parsed=sr_doc.get('criteria_parsed'),
+        screening_db=sr_doc.get('screening_db'),
+        screening_thresholds=sr_doc.get('screening_thresholds'),
+        critical_prompt_additions=sr_doc.get('critical_prompt_additions'),
     )
 
 
 class AddUserRequest(BaseModel):
-    user_email: Optional[str] = None
-    user_id: Optional[str] = None
+    user_email: str | None = None
+    user_id: str | None = None
 
 
 class RemoveUserRequest(BaseModel):
-    user_email: Optional[str] = None
-    user_id: Optional[str] = None
+    user_email: str | None = None
+    user_id: str | None = None
 
 
-@router.post("/{sr_id}/add-user")
+@router.post('/{sr_id}/add-user')
 async def add_user_to_systematic_review(
     sr_id: str,
     payload: AddUserRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Add another user to an existing systematic review.
@@ -185,30 +195,37 @@ async def add_user_to_systematic_review(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     # resolve user
     target_user_id = None
     if payload.user_email:
         target_user_id = payload.user_email
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='Missing data user_email',
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get('id'))
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "added_user_id": target_user_id, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {'status': 'success', 'sr_id': sr_id, 'added_user_id': target_user_id, 'matched_count': res.get('matched_count'), 'modified_count': res.get('modified_count')}
 
 
-@router.post("/{sr_id}/remove-user")
+@router.post('/{sr_id}/remove-user')
 async def remove_user_from_systematic_review(
     sr_id: str,
     payload: RemoveUserRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Remove a user from an existing systematic review.
@@ -222,71 +239,86 @@ async def remove_user_from_systematic_review(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
-    
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
+
     # resolve user
     target_user_id = None
     if payload.user_email:
         target_user_id = payload.user_email
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing data user_email")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='Missing data user_email',
+        )
 
     # do not allow removing the owner
-    if target_user_id == sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove the owner from the systematic review")
+    if target_user_id == sr.get('owner_id'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Cannot remove the owner from the systematic review',
+        )
 
     try:
-        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get("id"))
+        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get('id'))
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "removed_user_id": target_user_id, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {'status': 'success', 'sr_id': sr_id, 'removed_user_id': target_user_id, 'matched_count': res.get('matched_count'), 'modified_count': res.get('modified_count')}
 
 
-@router.get("/mine", response_model=List[SystematicReviewRead])
+@router.get('/mine', response_model=list[SystematicReviewRead])
 async def list_systematic_reviews_for_user(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     List all systematic reviews the current user has access to (is a member of).
     Hidden/deleted SRs (visible == False) are excluded.
     """
 
-    user_id = current_user.get("email")
+    user_id = current_user.get('email')
     results = []
     try:
         docs = await run_in_threadpool(srdb_service.list_systematic_reviews_for_user, user_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list systematic reviews: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list systematic reviews: {e}",
+        )
 
     for doc in docs:
         results.append(
             SystematicReviewRead(
-                id=doc.get("id"),
-                name=doc.get("name"),
-                description=doc.get("description"),
-                owner_id=doc.get("owner_id"),
-                owner_email=doc.get("owner_email"),
-                users=doc.get("users", []),
-                created_at=doc.get("created_at"),
-                updated_at=doc.get("updated_at"),
-                visible=doc.get("visible", True),
-                criteria=doc.get("criteria"),
-                criteria_yaml=doc.get("criteria_yaml"),
-                criteria_parsed=doc.get("criteria_parsed"),
-                screening_thresholds=doc.get("screening_thresholds"),
-            )
+                id=doc.get('id'),
+                name=doc.get('name'),
+                description=doc.get('description'),
+                owner_id=doc.get('owner_id'),
+                owner_email=doc.get('owner_email'),
+                users=doc.get('users', []),
+                created_at=doc.get('created_at'),
+                updated_at=doc.get('updated_at'),
+                visible=doc.get('visible', True),
+                criteria=doc.get('criteria'),
+                criteria_yaml=doc.get('criteria_yaml'),
+                criteria_parsed=doc.get('criteria_parsed'),
+                screening_db=doc.get('screening_db'),
+                screening_thresholds=doc.get('screening_thresholds'),
+                critical_prompt_additions=doc.get('critical_prompt_additions'),
+            ),
         )
 
     return results
 
 
-@router.get("/{sr_id}", response_model=SystematicReviewRead)
-async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.get('/{sr_id}', response_model=SystematicReviewRead)
+async def get_systematic_review(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """
     Get a single systematic review by id. User must be a member to view.
     """
@@ -296,28 +328,33 @@ async def get_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depen
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     return SystematicReviewRead(
-        id=doc.get("id"),
-        name=doc.get("name"),
-        description=doc.get("description"),
-        owner_id=doc.get("owner_id"),
-        owner_email=doc.get("owner_email"),
-        users=doc.get("users", []),
-        created_at=doc.get("created_at"),
-        updated_at=doc.get("updated_at"),
-        visible=doc.get("visible", True),
-        criteria=doc.get("criteria"),
-        criteria_yaml=doc.get("criteria_yaml"),
-        criteria_parsed=doc.get("criteria_parsed"),
-        screening_thresholds=doc.get("screening_thresholds"),
+        id=doc.get('id'),
+        name=doc.get('name'),
+        description=doc.get('description'),
+        owner_id=doc.get('owner_id'),
+        owner_email=doc.get('owner_email'),
+        users=doc.get('users', []),
+        created_at=doc.get('created_at'),
+        updated_at=doc.get('updated_at'),
+        visible=doc.get('visible', True),
+        criteria=doc.get('criteria'),
+        criteria_yaml=doc.get('criteria_yaml'),
+        criteria_parsed=doc.get('criteria_parsed'),
+        screening_db=doc.get('screening_db'),
+        screening_thresholds=doc.get('screening_thresholds'),
+        critical_prompt_additions=doc.get('critical_prompt_additions'),
     )
 
 
-@router.get("/{sr_id}/criteria_parsed")
+@router.get('/{sr_id}/criteria_parsed')
 async def get_systematic_review_criteria_parsed(
-    sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Return the structured criteria_parsed object for the given systematic review.
@@ -331,19 +368,22 @@ async def get_systematic_review_criteria_parsed(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    cp = doc.get("criteria_parsed") or {}
-    return {"criteria_parsed": cp}
+    cp = doc.get('criteria_parsed') or {}
+    return {'criteria_parsed': cp}
 
 
-@router.put("/{sr_id}/criteria", response_model=SystematicReviewRead)
+@router.put('/{sr_id}/criteria', response_model=SystematicReviewRead)
 async def update_systematic_review_criteria(
     sr_id: str,
-    criteria_file: Optional[UploadFile] = File(None),
-    criteria_yaml: Optional[str] = Form(None),
-    force: Optional[str] = Form(None),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    criteria_file: UploadFile | None = File(None),
+    criteria_yaml: str | None = Form(None),
+    force: str | None = Form(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Edit/update the criteria for an existing systematic review.
@@ -362,30 +402,38 @@ async def update_systematic_review_criteria(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     # Guard: block criteria update if screening data already exists (unless force=true)
-    existing_table = (sr.get("screening_db") or {}).get("table_name")
-    force_flag = str(force).lower().strip() in ("true", "1", "yes") if force else False
+    existing_table = (sr.get('screening_db') or {}).get('table_name')
+    force_flag = str(force).lower().strip() in (
+        'true', '1', 'yes',
+    ) if force else False
     if existing_table and not force_flag:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This SR already has screening data. Updating criteria may invalidate existing screening results. Pass force=true to confirm.",
+            detail='This SR already has screening data. Updating criteria may invalidate existing screening results. Pass force=true to confirm.',
         )
 
     # Load YAML criteria
-    criteria_str: Optional[str] = None
-    criteria_obj: Optional[Dict[str, Any]] = None
+    criteria_str: str | None = None
+    criteria_obj: dict[str, Any] | None = None
 
     try:
         if criteria_file:
             raw = await criteria_file.read()
-            criteria_str = raw.decode("utf-8")
+            criteria_str = raw.decode('utf-8')
         elif criteria_yaml:
             criteria_str = criteria_yaml
 
         if not criteria_str:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either criteria_file or criteria_yaml must be provided")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='Either criteria_file or criteria_yaml must be provided',
+            )
 
         criteria_obj = yaml.safe_load(criteria_str)
         if criteria_obj is None:
@@ -393,50 +441,57 @@ async def update_systematic_review_criteria(
         elif not isinstance(criteria_obj, dict):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Parsed YAML criteria must be a mapping/object at the top level",
+                detail='Parsed YAML criteria must be a mapping/object at the top level',
             )
     except yaml.YAMLError as ye:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}"
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}",
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+        )
 
     # perform update
     try:
-        doc = await run_in_threadpool(srdb_service.update_criteria, sr_id, criteria_obj, criteria_str, current_user.get("id"))
+        doc = await run_in_threadpool(srdb_service.update_criteria, sr_id, criteria_obj, criteria_str, current_user.get('id'))
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update criteria: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update criteria: {e}",
+        )
 
     return SystematicReviewRead(
-        id=doc.get("id"),
-        name=doc.get("name"),
-        description=doc.get("description"),
-        owner_id=doc.get("owner_id"),
-        owner_email=doc.get("owner_email"),
-        users=doc.get("users", []),
-        created_at=doc.get("created_at"),
-        updated_at=doc.get("updated_at"),
-        visible=doc.get("visible", True),
-        criteria=doc.get("criteria"),
-        criteria_yaml=doc.get("criteria_yaml"),
-        criteria_parsed=doc.get("criteria_parsed"),
-        screening_thresholds=doc.get("screening_thresholds"),
+        id=doc.get('id'),
+        name=doc.get('name'),
+        description=doc.get('description'),
+        owner_id=doc.get('owner_id'),
+        owner_email=doc.get('owner_email'),
+        users=doc.get('users', []),
+        created_at=doc.get('created_at'),
+        updated_at=doc.get('updated_at'),
+        visible=doc.get('visible', True),
+        criteria=doc.get('criteria'),
+        criteria_yaml=doc.get('criteria_yaml'),
+        criteria_parsed=doc.get('criteria_parsed'),
+        screening_db=doc.get('screening_db'),
+        screening_thresholds=doc.get('screening_thresholds'),
+        critical_prompt_additions=doc.get('critical_prompt_additions'),
     )
 
 
 class ThresholdsUpdateRequest(BaseModel):
-    screening_thresholds: Dict[str, Any] = {}
+    screening_thresholds: dict[str, Any] = {}
 
 
 class CriticalPromptAdditionsUpdateRequest(BaseModel):
-    critical_prompt_additions: Dict[str, Any] = {}
+    critical_prompt_additions: dict[str, Any] = {}
 
 
-@router.get("/{sr_id}/screening_thresholds")
-async def get_screening_thresholds(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.get('/{sr_id}/screening_thresholds')
+async def get_screening_thresholds(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """Get SR-scoped per-step per-criterion thresholds."""
 
     try:
@@ -444,19 +499,22 @@ async def get_screening_thresholds(sr_id: str, current_user: Dict[str, Any] = De
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    thresholds = doc.get("screening_thresholds") or {}
+    thresholds = doc.get('screening_thresholds') or {}
     if not isinstance(thresholds, dict):
         thresholds = {}
-    return {"sr_id": sr_id, "screening_thresholds": thresholds}
+    return {'sr_id': sr_id, 'screening_thresholds': thresholds}
 
 
-@router.put("/{sr_id}/screening_thresholds")
+@router.put('/{sr_id}/screening_thresholds')
 async def update_screening_thresholds(
     sr_id: str,
     payload: ThresholdsUpdateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Update SR-scoped per-step per-criterion thresholds.
 
@@ -468,18 +526,24 @@ async def update_screening_thresholds(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     thresholds = payload.screening_thresholds or {}
     if not isinstance(thresholds, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="screening_thresholds must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='screening_thresholds must be an object',
+        )
 
     # Normalize: only allow known steps keys, but keep it permissive.
-    normalized: Dict[str, Any] = {}
-    for step in ("l1", "l2"):
+    normalized: dict[str, Any] = {}
+    for step in ('l1', 'l2'):
         block = thresholds.get(step)
         if isinstance(block, dict):
-            out: Dict[str, float] = {}
+            out: dict[str, float] = {}
             for k, v in block.items():
                 if not isinstance(k, str) or not k.strip():
                     continue
@@ -494,11 +558,11 @@ async def update_screening_thresholds(
             normalized[step] = {}
 
     await run_in_threadpool(srdb_service.update_screening_thresholds, sr_id, normalized)
-    return {"status": "success", "sr_id": sr_id, "screening_thresholds": normalized}
+    return {'status': 'success', 'sr_id': sr_id, 'screening_thresholds': normalized}
 
 
-@router.get("/{sr_id}/critical_prompt_additions")
-async def get_critical_prompt_additions(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.get('/{sr_id}/critical_prompt_additions')
+async def get_critical_prompt_additions(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """Get SR-scoped per-step per-criterion critical prompt additions."""
 
     try:
@@ -506,19 +570,22 @@ async def get_critical_prompt_additions(sr_id: str, current_user: Dict[str, Any]
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    cpa = doc.get("critical_prompt_additions") or {}
+    cpa = doc.get('critical_prompt_additions') or {}
     if not isinstance(cpa, dict):
         cpa = {}
-    return {"sr_id": sr_id, "critical_prompt_additions": cpa}
+    return {'sr_id': sr_id, 'critical_prompt_additions': cpa}
 
 
-@router.put("/{sr_id}/critical_prompt_additions")
+@router.put('/{sr_id}/critical_prompt_additions')
 async def update_critical_prompt_additions(
     sr_id: str,
     payload: CriticalPromptAdditionsUpdateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Update SR-scoped per-step per-criterion critical prompt additions.
 
@@ -530,22 +597,28 @@ async def update_critical_prompt_additions(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
     cpa = payload.critical_prompt_additions or {}
     if not isinstance(cpa, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="critical_prompt_additions must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='critical_prompt_additions must be an object',
+        )
 
-    normalized: Dict[str, Any] = {}
-    for step in ("l1", "l2"):
+    normalized: dict[str, Any] = {}
+    for step in ('l1', 'l2'):
         block = cpa.get(step)
         if isinstance(block, dict):
-            out: Dict[str, str] = {}
+            out: dict[str, str] = {}
             for k, v in block.items():
                 if not isinstance(k, str) or not k.strip():
                     continue
                 if v is None:
-                    out[k] = ""
+                    out[k] = ''
                 else:
                     out[k] = str(v)
             normalized[step] = out
@@ -553,11 +626,11 @@ async def update_critical_prompt_additions(
             normalized[step] = {}
 
     await run_in_threadpool(srdb_service.update_critical_prompt_additions, sr_id, normalized)
-    return {"status": "success", "sr_id": sr_id, "critical_prompt_additions": normalized}
+    return {'status': 'success', 'sr_id': sr_id, 'critical_prompt_additions': normalized}
 
 
-@router.delete("/{sr_id}")
-async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.delete('/{sr_id}')
+async def delete_systematic_review(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """
     Soft-delete a systematic review by marking its 'visible' flag as False.
 
@@ -569,24 +642,33 @@ async def delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = De
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    requester_id = current_user.get("id")
-    if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may delete this systematic review")
+    requester_id = current_user.get('id')
+    if requester_id != sr.get('owner_id'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only the owner may delete this systematic review',
+        )
 
     try:
         res = await run_in_threadpool(srdb_service.soft_delete_systematic_review, sr_id, requester_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete systematic review: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "deleted": True, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {'status': 'success', 'sr_id': sr_id, 'deleted': True, 'matched_count': res.get('matched_count'), 'modified_count': res.get('modified_count')}
 
 
-@router.post("/{sr_id}/undelete")
-async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.post('/{sr_id}/undelete')
+async def undelete_systematic_review(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """
     Undelete (restore) a systematic review by marking its 'visible' flag as True.
 
@@ -598,24 +680,33 @@ async def undelete_systematic_review(sr_id: str, current_user: Dict[str, Any] = 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    requester_id = current_user.get("id")
-    if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may undelete this systematic review")
+    requester_id = current_user.get('id')
+    if requester_id != sr.get('owner_id'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only the owner may undelete this systematic review',
+        )
 
     try:
         res = await run_in_threadpool(srdb_service.undelete_systematic_review, sr_id, requester_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to undelete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to undelete systematic review: {e}",
+        )
 
-    return {"status": "success", "sr_id": sr_id, "undeleted": True, "matched_count": res.get("matched_count"), "modified_count": res.get("modified_count")}
+    return {'status': 'success', 'sr_id': sr_id, 'undeleted': True, 'matched_count': res.get('matched_count'), 'modified_count': res.get('modified_count')}
 
 
-@router.delete("/{sr_id}/hard")
-async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.delete('/{sr_id}/hard')
+async def hard_delete_systematic_review(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """
     Permanently remove the systematic review document from MongoDB.
 
@@ -630,11 +721,17 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review: {e}",
+        )
 
-    requester_id = current_user.get("id")
-    if requester_id != sr.get("owner_id"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner may hard-delete this systematic review")
+    requester_id = current_user.get('id')
+    if requester_id != sr.get('owner_id'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only the owner may hard-delete this systematic review',
+        )
 
     # Attempt to perform screening resources cleanup prior to deleting the SR document.
     cleanup_result = None
@@ -649,26 +746,32 @@ async def hard_delete_systematic_review(sr_id: str, current_user: Dict[str, Any]
             raise
         except Exception as e:
             # non-fatal: capture error and continue with SR deletion
-            cleanup_result = {"status": "cleanup_error", "error": str(e)}
+            cleanup_result = {'status': 'cleanup_error', 'error': str(e)}
     except Exception as e:
         # If import fails, record that cleanup couldn't be run and continue
-        cleanup_result = {"status": "cleanup_import_failed", "error": str(e)}
+        cleanup_result = {'status': 'cleanup_import_failed', 'error': str(e)}
 
     try:
         res = await run_in_threadpool(srdb_service.hard_delete_systematic_review, sr_id, requester_id)
-        deleted_count = res.get("deleted_count")
+        deleted_count = res.get('deleted_count')
         if not deleted_count:
             # If backend reported zero deletions, raise NotFound to match prior behavior
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Systematic review not found during hard delete")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Systematic review not found during hard delete',
+            )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to hard-delete systematic review: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to hard-delete systematic review: {e}",
+        )
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "hard_deleted": True,
-        "deleted_count": deleted_count,
-        "screening_cleanup": cleanup_result,
+        'status': 'success',
+        'sr_id': sr_id,
+        'hard_deleted': True,
+        'deleted_count': deleted_count,
+        'screening_cleanup': cleanup_result,
     }

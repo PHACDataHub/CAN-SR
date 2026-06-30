@@ -1,10 +1,14 @@
 """
 Authentication and user models for the API.
 """
-from typing import Optional
-from datetime import datetime
+from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr, Field
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel
+from pydantic import EmailStr
+from pydantic import Field
 
 
 class Token(BaseModel):
@@ -17,17 +21,17 @@ class Token(BaseModel):
 class TokenPayload(BaseModel):
     """Token payload schema"""
 
-    sub: Optional[str] = None
-    exp: Optional[int] = None
+    sub: str | None = None
+    exp: int | None = None
 
 
 class UserBase(BaseModel):
     """Base user schema"""
 
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    is_active: Optional[bool] = True
-    is_superuser: Optional[bool] = False
+    email: EmailStr | None = None
+    full_name: str | None = None
+    is_active: bool | None = True
+    is_superuser: bool | None = False
 
 
 class UserCreate(UserBase):
@@ -36,15 +40,15 @@ class UserCreate(UserBase):
     email: EmailStr
     full_name: str
     password: str = Field(
-        ..., min_length=8, description="Password must be at least 8 characters"
+        ..., min_length=8, description='Password must be at least 8 characters',
     )
 
 
 class UserUpdate(UserBase):
     """User update schema"""
 
-    password: Optional[str] = Field(
-        None, min_length=8, description="Password must be at least 8 characters"
+    password: str | None = Field(
+        None, min_length=8, description='Password must be at least 8 characters',
     )
 
 
@@ -57,9 +61,9 @@ class UserRead(UserBase):
     is_active: bool
     is_superuser: bool
     created_at: datetime
-    last_login: Optional[datetime] = None
+    last_login: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config = {'from_attributes': True}
 
 
 class UserInDB(UserRead):
@@ -77,7 +81,7 @@ class UserProfile(BaseModel):
     storage_used: int = 0
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {'from_attributes': True}
 
 
 class LoginRequest(BaseModel):
@@ -95,14 +99,14 @@ class RegisterRequest(BaseModel):
     password: str = Field(
         ...,
         min_length=8,
-        description="Password must be at least 8 characters with 1 uppercase letter and 1 digit",
+        description='Password must be at least 8 characters with 1 uppercase letter and 1 digit',
     )
     confirm_password: str
 
     def validate_passwords_match(self):
         """Validate that passwords match"""
         if self.password != self.confirm_password:
-            raise ValueError("Passwords do not match")
+            raise ValueError('Passwords do not match')
         return self
 
     def validate_password_strength(self):
@@ -110,15 +114,19 @@ class RegisterRequest(BaseModel):
         import re
 
         if len(self.password) < 8:
-            raise ValueError("Password must be at least 8 characters long")
+            raise ValueError('Password must be at least 8 characters long')
 
-        if not re.search(r"[A-Z]", self.password):
-            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r'[A-Z]', self.password):
+            raise ValueError(
+                'Password must contain at least one uppercase letter',
+            )
 
-        if not re.search(r"[a-z]", self.password):
-            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r'[a-z]', self.password):
+            raise ValueError(
+                'Password must contain at least one lowercase letter',
+            )
 
-        if not re.search(r"\d", self.password):
-            raise ValueError("Password must contain at least one digit")
+        if not re.search(r'\d', self.password):
+            raise ValueError('Password must contain at least one digit')
 
         return self

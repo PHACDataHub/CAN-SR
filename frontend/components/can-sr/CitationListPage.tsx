@@ -79,7 +79,7 @@ export default function CitationsListPage({
   const [loading, setLoading] = useState<boolean>(true)
   const [exporting, setExporting] = useState<boolean>(false)
   const [runAllModalOpen, setRunAllModalOpen] = useState<boolean>(false)
-  const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini')
+  const [selectedModel, setSelectedModel] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [criteriaData, setCriteriaData] = useState<CriteriaData | null>()
 
@@ -473,7 +473,7 @@ export default function CitationsListPage({
       window.clearInterval(interval)
     }
   }, [runAllJobId, runAllStorageKey, clearRunAll])
-  
+
 
   const hasActiveRunAll = useMemo(() => {
     const st = String(runAllJob?.status || '').toLowerCase()

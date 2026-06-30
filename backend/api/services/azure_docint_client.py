@@ -16,19 +16,25 @@ Key Features:
 - Figure/chart detection and extraction with captions
 - Downloadable cropped figure images
 """
+from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import os
 import uuid
-import json
-import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from api.core.config import settings
-from bs4 import BeautifulSoup
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 from typing import TYPE_CHECKING
+
+from api.core.config import settings
 from azure.identity import DefaultAzureCredential
+from bs4 import BeautifulSoup
 
 try:
     from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -43,7 +49,7 @@ except ImportError:
     from typing import Any as AnalyzeDocumentRequest  # type: ignore
     from typing import Any as AzureKeyCredential  # type: ignore
     print(
-        "Azure Document Intelligence SDK not installed. Install with: pip install azure-ai-documentintelligence azure-core"
+        'Azure Document Intelligence SDK not installed. Install with: pip install azure-ai-documentintelligence azure-core',
     )
 
 
@@ -53,70 +59,74 @@ class AzureDocIntelligenceService:
     def __init__(self):
         self.base_path = Path(__file__).parent.parent.parent.parent.parent
         # Unified directory structure: output/azure_doc_intelligence/{conversion_id}/
-        self.output_base_dir = self.base_path / "output" / "azure_doc_intelligence"
+        self.output_base_dir = self.base_path / 'output' / 'azure_doc_intelligence'
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize Azure client
         self.client = self._init_client()
 
-    def _init_client(self) -> Optional["DocumentIntelligenceClient"]:
+    def _init_client(self) -> DocumentIntelligenceClient | None:
         """Initialize Azure Document Intelligence client"""
         if not AZURE_DOC_INTELLIGENCE_AVAILABLE:
             return None
-        
-        if settings.AZURE_DOC_INT_MODE not in ["key", "entra"]:
+
+        if settings.AZURE_DOC_INT_MODE not in ['key', 'entra']:
             print(
-                f"Invalid AZURE_DOC_INT_MODE: {settings.AZURE_DOC_INT_MODE}. Must be 'key' or 'entra'."
+                f"Invalid AZURE_DOC_INT_MODE: {settings.AZURE_DOC_INT_MODE}. Must be 'key' or 'entra'.",
             )
             return None
-        
+
         if not settings.AZURE_DOC_INT_ENDPOINT:
             print(
-                "Azure Document Intelligence endpoint not found. Set AZURE_DOC_INT_ENDPOINT environment variable."
+                'Azure Document Intelligence endpoint not found. Set AZURE_DOC_INT_ENDPOINT environment variable.',
             )
             return None
 
-        if settings.AZURE_DOC_INT_MODE == "key" and not settings.AZURE_DOC_INT_API_KEY:
+        if settings.AZURE_DOC_INT_MODE == 'key' and not settings.AZURE_DOC_INT_API_KEY:
             print(
-                "Azure Document Intelligence API key not found. Set AZURE_DOC_INT_API_KEY for key-based auth."
+                'Azure Document Intelligence API key not found. Set AZURE_DOC_INT_API_KEY for key-based auth.',
             )
             return None
-        
-        doc_int_kwargs = {"endpoint": settings.AZURE_DOC_INT_ENDPOINT}
 
-        if settings.AZURE_DOC_INT_MODE == "key":
-            doc_int_kwargs["credential"] = AzureKeyCredential(settings.AZURE_DOC_INT_API_KEY)
-        elif settings.AZURE_DOC_INT_MODE == "entra":
-            doc_int_kwargs["credential"] = DefaultAzureCredential()
+        doc_int_kwargs = {'endpoint': settings.AZURE_DOC_INT_ENDPOINT}
+
+        if settings.AZURE_DOC_INT_MODE == 'key':
+            doc_int_kwargs['credential'] = AzureKeyCredential(
+                settings.AZURE_DOC_INT_API_KEY,
+            )
+        elif settings.AZURE_DOC_INT_MODE == 'entra':
+            doc_int_kwargs['credential'] = DefaultAzureCredential()
 
         try:
             return DocumentIntelligenceClient(**doc_int_kwargs)
         except Exception as e:
-            print(f"Failed to initialize Azure Document Intelligence client: {e}")
+            print(
+                f"Failed to initialize Azure Document Intelligence client: {e}",
+            )
             return None
 
     def _analyze_document_sync(
-        self, source: str, source_type: str, output_param: Optional[List[str]]
+        self, source: str, source_type: str, output_param: list[str] | None,
     ):
         """Synchronous wrapper for document analysis to run in thread pool"""
-        if source_type == "file":
-            with open(source, "rb") as f:
+        if source_type == 'file':
+            with open(source, 'rb') as f:
                 file_content = f.read()
             # Use the correct API format
             poller = self.client.begin_analyze_document(
-                model_id="prebuilt-layout",
+                model_id='prebuilt-layout',
                 body=file_content,
-                content_type="application/octet-stream",
-                output_content_format="markdown",
+                content_type='application/octet-stream',
+                output_content_format='markdown',
                 output=output_param,
             )
         else:  # URL
             # For URL, use AnalyzeDocumentRequest
             analyze_request = AnalyzeDocumentRequest(url_source=source)
             poller = self.client.begin_analyze_document(
-                model_id="prebuilt-layout",
+                model_id='prebuilt-layout',
                 analyze_request=analyze_request,
-                output_content_format="markdown",
+                output_content_format='markdown',
                 output=output_param,
             )
 
@@ -127,25 +137,25 @@ class AzureDocIntelligenceService:
         result_id = None
         try:
             # Extract result_id from operation-location header in initial response
-            if hasattr(poller, "_polling_method") and hasattr(
-                poller._polling_method, "_initial_response"
+            if hasattr(poller, '_polling_method') and hasattr(
+                poller._polling_method, '_initial_response',
             ):
                 initial_resp = poller._polling_method._initial_response
-                if hasattr(initial_resp, "http_response") and hasattr(
-                    initial_resp.http_response, "headers"
+                if hasattr(initial_resp, 'http_response') and hasattr(
+                    initial_resp.http_response, 'headers',
                 ):
                     headers = initial_resp.http_response.headers
                     # Try different header names (Azure API uses 'operation-location')
                     for header_name in [
-                        "operation-location",
-                        "Operation-Location",
+                        'operation-location',
+                        'Operation-Location',
                     ]:
                         if header_name in headers:
                             operation_location = headers[header_name]
                             # Extract result_id from URL: .../analyzeResults/{result_id}?api-version=...
-                            if "analyzeResults" in operation_location:
-                                result_id = operation_location.split("/")[-1].split(
-                                    "?"
+                            if 'analyzeResults' in operation_location:
+                                result_id = operation_location.split('/')[-1].split(
+                                    '?',
                                 )[0]
                                 break
         except Exception as e:
@@ -156,10 +166,10 @@ class AzureDocIntelligenceService:
     async def convert_document_to_markdown(
         self,
         source: str,
-        source_type: str = "file",
+        source_type: str = 'file',
         extract_figures: bool = True,
-        output_dir: Optional[Path] = None,
-    ) -> Dict[str, Any]:
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
         """
         Convert document to markdown using Azure Document Intelligence (Non-blocking)
 
@@ -181,10 +191,10 @@ class AzureDocIntelligenceService:
     def _convert_document_sync(
         self,
         source: str,
-        source_type: str = "file",
+        source_type: str = 'file',
         extract_figures: bool = True,
-        output_dir: Optional[Path] = None,
-    ) -> Dict[str, Any]:
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
         """
         Synchronous implementation of document conversion
 
@@ -194,9 +204,9 @@ class AzureDocIntelligenceService:
         """
         if not self.client:
             return {
-                "success": False,
-                "error": "Azure Document Intelligence client not available",
-                "conversion_id": str(uuid.uuid4()),
+                'success': False,
+                'error': 'Azure Document Intelligence client not available',
+                'conversion_id': str(uuid.uuid4()),
             }
 
         conversion_id = str(uuid.uuid4())
@@ -213,22 +223,22 @@ class AzureDocIntelligenceService:
                 conversion_dir.mkdir(parents=True, exist_ok=True)
 
             # Define all file paths within the conversion directory
-            log_path = conversion_dir / "conversion.log"
-            raw_json_path = conversion_dir / "raw_analysis.json"
-            markdown_path = conversion_dir / "document.md"
-            metadata_path = conversion_dir / "metadata.json"
-            figures_dir = conversion_dir / "figures"
+            log_path = conversion_dir / 'conversion.log'
+            raw_json_path = conversion_dir / 'raw_analysis.json'
+            markdown_path = conversion_dir / 'document.md'
+            metadata_path = conversion_dir / 'metadata.json'
+            figures_dir = conversion_dir / 'figures'
 
             self._log_sync(
-                log_path, f"Starting Azure Document Intelligence conversion: {source}"
+                log_path, f"Starting Azure Document Intelligence conversion: {source}",
             )
 
             # Analyze document - Updated API format
             # Include 'figures' in output if extract_figures is True
-            output_param = ["figures"] if extract_figures else None
+            output_param = ['figures'] if extract_figures else None
 
             self._log_sync(
-                log_path, "Document analysis started (in background thread)..."
+                log_path, 'Document analysis started (in background thread)...',
             )
 
             # Run the blocking analysis directly since we are already in a thread
@@ -238,27 +248,27 @@ class AzureDocIntelligenceService:
                 output_param,
             )
 
-            self._log_sync(log_path, "Document analysis completed")
+            self._log_sync(log_path, 'Document analysis completed')
 
             # Convert full result to dictionary for JSON serialization (with ALL bounding boxes)
             result_dict = result.as_dict()
 
             # Add processor field for format detection
-            result_dict["processor"] = "azure_doc_intelligence"
+            result_dict['processor'] = 'azure_doc_intelligence'
 
             # Save the FULL raw JSON response
-            with open(raw_json_path, "w", encoding="utf-8") as f:
+            with open(raw_json_path, 'w', encoding='utf-8') as f:
                 json.dump(result_dict, f, indent=2, ensure_ascii=False)
             self._log_sync(
                 log_path,
-                f"Saved full raw JSON with bounding boxes to raw_analysis.json",
+                'Saved full raw JSON with bounding boxes to raw_analysis.json',
             )
 
             # Extract markdown content
-            markdown_content = result.content if result.content else ""
+            markdown_content = result.content if result.content else ''
 
             # Save markdown
-            with open(markdown_path, "w", encoding="utf-8") as f:
+            with open(markdown_path, 'w', encoding='utf-8') as f:
                 f.write(markdown_content)
 
             # Extract and save tables as separate HTML files
@@ -275,7 +285,7 @@ class AzureDocIntelligenceService:
             if extract_figures and result.figures:
                 figures_dir.mkdir(parents=True, exist_ok=True)
                 self._log_sync(
-                    log_path, f"Found {len(result.figures)} figures to process"
+                    log_path, f"Found {len(result.figures)} figures to process",
                 )
 
                 if result_id:
@@ -286,42 +296,42 @@ class AzureDocIntelligenceService:
                 else:
                     self._log_sync(
                         log_path,
-                        "⚠️ Could not extract result_id - figure images will not be downloaded",
+                        '⚠️ Could not extract result_id - figure images will not be downloaded',
                     )
 
                 for idx, figure in enumerate(result.figures):
                     figure_id = (
                         figure.id
-                        if hasattr(figure, "id") and figure.id
+                        if hasattr(figure, 'id') and figure.id
                         else f"unknown_{idx}"
                     )
 
                     # Extract figure metadata
                     figure_info = {
-                        "id": figure_id,
-                        "page": (
+                        'id': figure_id,
+                        'page': (
                             figure.bounding_regions[0].page_number
                             if figure.bounding_regions
                             else None
                         ),
-                        "caption": (
+                        'caption': (
                             figure.caption.content
-                            if hasattr(figure, "caption") and figure.caption
+                            if hasattr(figure, 'caption') and figure.caption
                             else None
                         ),
-                        "spans": (
+                        'spans': (
                             [
-                                {"offset": span.offset, "length": span.length}
+                                {'offset': span.offset, 'length': span.length}
                                 for span in figure.spans
                             ]
                             if figure.spans
                             else []
                         ),
-                        "bounding_regions": (
+                        'bounding_regions': (
                             [
                                 {
-                                    "page_number": region.page_number,
-                                    "polygon": region.polygon,
+                                    'page_number': region.page_number,
+                                    'polygon': region.polygon,
                                 }
                                 for region in figure.bounding_regions
                             ]
@@ -339,7 +349,7 @@ class AzureDocIntelligenceService:
                             log_path=log_path,
                         )
                         if image_path:
-                            figure_info["image_path"] = image_path
+                            figure_info['image_path'] = image_path
                     else:
                         self._log_sync(
                             log_path,
@@ -348,62 +358,70 @@ class AzureDocIntelligenceService:
 
                     figures_metadata.append(figure_info)
 
-                self._log_sync(log_path, f"Processed {len(figures_metadata)} figures")
+                self._log_sync(
+                    log_path, f"Processed {len(figures_metadata)} figures",
+                )
 
             # Create metadata
             end_time = datetime.now()
             conversion_time = (end_time - start_time).total_seconds()
 
             metadata = {
-                "conversion_id": conversion_id,
-                "source": source,
-                "source_type": source_type,
-                "processor": "azure_doc_intelligence",
-                "model_id": "prebuilt-layout",
-                "status": "success",
-                "conversion_dir": str(conversion_dir),
-                "markdown_path": str(markdown_path),
-                "raw_json_path": str(raw_json_path),
-                "log_path": str(log_path),
-                "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat(),
-                "conversion_time": conversion_time,
-                "content_length": len(markdown_content),
-                "page_count": len(result.pages) if result.pages else 0,
-                "tables_found": len(result.tables) if result.tables else 0,
-                "key_value_pairs_found": (
+                'conversion_id': conversion_id,
+                'source': source,
+                'source_type': source_type,
+                'processor': 'azure_doc_intelligence',
+                'model_id': 'prebuilt-layout',
+                'status': 'success',
+                'conversion_dir': str(conversion_dir),
+                'markdown_path': str(markdown_path),
+                'raw_json_path': str(raw_json_path),
+                'log_path': str(log_path),
+                'start_time': start_time.isoformat(),
+                'end_time': end_time.isoformat(),
+                'conversion_time': conversion_time,
+                'content_length': len(markdown_content),
+                'page_count': len(result.pages) if result.pages else 0,
+                'tables_found': len(result.tables) if result.tables else 0,
+                'key_value_pairs_found': (
                     len(result.key_value_pairs) if result.key_value_pairs else 0
                 ),
-                "figures_found": len(figures_metadata),
-                "figures": figures_metadata,
+                'figures_found': len(figures_metadata),
+                'figures': figures_metadata,
             }
 
             # Save metadata
-            with open(metadata_path, "w", encoding="utf-8") as f:
+            with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
 
             self._log_sync(
-                log_path, f"Conversion completed successfully in {conversion_time:.2f}s"
+                log_path, f"Conversion completed successfully in {conversion_time:.2f}s",
             )
-            self._log_sync(log_path, f"Pages processed: {metadata['page_count']}")
-            self._log_sync(log_path, f"Tables found: {metadata['tables_found']}")
             self._log_sync(
-                log_path, f"Key-value pairs found: {metadata['key_value_pairs_found']}"
+                log_path, f"Pages processed: {metadata['page_count']}",
             )
-            self._log_sync(log_path, f"Figures found: {metadata['figures_found']}")
+            self._log_sync(
+                log_path, f"Tables found: {metadata['tables_found']}",
+            )
+            self._log_sync(
+                log_path, f"Key-value pairs found: {metadata['key_value_pairs_found']}",
+            )
+            self._log_sync(
+                log_path, f"Figures found: {metadata['figures_found']}",
+            )
 
             return {
-                "success": True,
-                "conversion_id": conversion_id,
-                "markdown_path": str(markdown_path),
-                "metadata": {
-                    "content_length": len(markdown_content),
-                    "conversion_time": conversion_time,
-                    "page_count": metadata["page_count"],
-                    "tables_found": metadata["tables_found"],
-                    "key_value_pairs_found": metadata["key_value_pairs_found"],
-                    "figures_found": metadata["figures_found"],
-                    "figures": figures_metadata,
+                'success': True,
+                'conversion_id': conversion_id,
+                'markdown_path': str(markdown_path),
+                'metadata': {
+                    'content_length': len(markdown_content),
+                    'conversion_time': conversion_time,
+                    'page_count': metadata['page_count'],
+                    'tables_found': metadata['tables_found'],
+                    'key_value_pairs_found': metadata['key_value_pairs_found'],
+                    'figures_found': metadata['figures_found'],
+                    'figures': figures_metadata,
                 },
             }
 
@@ -418,32 +436,32 @@ class AzureDocIntelligenceService:
 
             # Save error metadata
             metadata = {
-                "conversion_id": conversion_id,
-                "source": source,
-                "source_type": source_type,
-                "processor": "azure_doc_intelligence",
-                "status": "error",
-                "error": error_msg,
-                "conversion_dir": (
-                    str(conversion_dir) if "conversion_dir" in locals() else None
+                'conversion_id': conversion_id,
+                'source': source,
+                'source_type': source_type,
+                'processor': 'azure_doc_intelligence',
+                'status': 'error',
+                'error': error_msg,
+                'conversion_dir': (
+                    str(conversion_dir) if 'conversion_dir' in locals() else None
                 ),
-                "log_path": str(log_path) if "log_path" in locals() else None,
-                "start_time": start_time.isoformat(),
-                "end_time": datetime.now().isoformat(),
+                'log_path': str(log_path) if 'log_path' in locals() else None,
+                'start_time': start_time.isoformat(),
+                'end_time': datetime.now().isoformat(),
             }
 
             # Save metadata to conversion directory if it exists
             try:
-                if "metadata_path" in locals():
-                    with open(metadata_path, "w", encoding="utf-8") as f:
+                if 'metadata_path' in locals():
+                    with open(metadata_path, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, indent=2)
             except:
                 pass
 
             return {
-                "success": False,
-                "error": error_msg,
-                "conversion_id": conversion_id,
+                'success': False,
+                'error': error_msg,
+                'conversion_id': conversion_id,
             }
 
     async def _log(self, log_path: Path, message: str):
@@ -455,7 +473,7 @@ class AzureDocIntelligenceService:
         timestamp = datetime.now().isoformat()
         log_entry = f"[{timestamp}] {message}\n"
 
-        with open(log_path, "a", encoding="utf-8") as f:
+        with open(log_path, 'a', encoding='utf-8') as f:
             f.write(log_entry)
 
     def _extract_and_save_tables_sync(
@@ -477,37 +495,43 @@ class AzureDocIntelligenceService:
         import re
 
         if not result.tables or len(result.tables) == 0:
-            self._log_sync(log_path, "No tables found in document")
+            self._log_sync(log_path, 'No tables found in document')
             return
 
         # Create tables directory
-        tables_dir = conversion_dir / "tables"
+        tables_dir = conversion_dir / 'tables'
         tables_dir.mkdir(parents=True, exist_ok=True)
 
-        self._log_sync(log_path, f"Found {len(result.tables)} tables to extract")
+        self._log_sync(
+            log_path, f"Found {len(result.tables)} tables to extract",
+        )
 
         # Extract HTML tables from markdown content using regex
         # Match <table>...</table> blocks
-        table_pattern = r"<table>.*?</table>"
+        table_pattern = r'<table>.*?</table>'
         html_tables = re.findall(table_pattern, markdown_content, re.DOTALL)
 
         # Save each table as a separate HTML file
         for idx, html_table in enumerate(html_tables, start=1):
             try:
                 table_html_path = tables_dir / f"table-{idx}.html"
-                with open(table_html_path, "w", encoding="utf-8") as f:
+                with open(table_html_path, 'w', encoding='utf-8') as f:
                     f.write(html_table)
-                self._log_sync(log_path, f"Saved table {idx} to {table_html_path.name}")
+                self._log_sync(
+                    log_path, f"Saved table {idx} to {table_html_path.name}",
+                )
             except Exception as e:
-                self._log_sync(log_path, f"Failed to save table {idx}: {str(e)}")
+                self._log_sync(
+                    log_path, f"Failed to save table {idx}: {str(e)}",
+                )
 
         self._log_sync(
-            log_path, f"Extracted {len(html_tables)} tables to tables/ directory"
+            log_path, f"Extracted {len(html_tables)} tables to tables/ directory",
         )
 
     def _download_figure_sync(
-        self, result_id: str, figure_id: str, figures_dir: Path, log_path: Path
-    ) -> Optional[str]:
+        self, result_id: str, figure_id: str, figures_dir: Path, log_path: Path,
+    ) -> str | None:
         """
         Download a single figure image from Azure Document Intelligence
 
@@ -523,42 +547,44 @@ class AzureDocIntelligenceService:
         try:
             # Get the figure using the SDK's get_analyze_result_figure method
             figure_stream = self.client.get_analyze_result_figure(
-                model_id="prebuilt-layout", result_id=result_id, figure_id=figure_id
+                model_id='prebuilt-layout', result_id=result_id, figure_id=figure_id,
             )
 
             # Save the figure
             figure_filename = f"{figure_id}.png"
             figure_path = figures_dir / figure_filename
 
-            with open(figure_path, "wb") as f:
+            with open(figure_path, 'wb') as f:
                 for chunk in figure_stream:
                     f.write(chunk)
 
             self._log_sync(
-                log_path, f"Downloaded figure {figure_id} to {figure_filename}"
+                log_path, f"Downloaded figure {figure_id} to {figure_filename}",
             )
             return f"figures/{figure_filename}"
 
         except Exception as e:
-            self._log_sync(log_path, f"Failed to download figure {figure_id}: {str(e)}")
+            self._log_sync(
+                log_path, f"Failed to download figure {figure_id}: {str(e)}",
+            )
             return None
 
     async def get_conversion_by_id(
-        self, conversion_id: str
-    ) -> Optional[Dict[str, Any]]:
+        self, conversion_id: str,
+    ) -> dict[str, Any] | None:
         """Get conversion metadata by ID"""
-        metadata_path = self.output_base_dir / conversion_id / "metadata.json"
+        metadata_path = self.output_base_dir / conversion_id / 'metadata.json'
 
         if not metadata_path.exists():
             return None
 
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
+            with open(metadata_path, encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             return None
 
-    async def get_markdown_content(self, conversion_id: str) -> Optional[str]:
+    async def get_markdown_content(self, conversion_id: str) -> str | None:
         """
         Get markdown content by conversion ID for LLM entity extraction
 
@@ -566,12 +592,12 @@ class AzureDocIntelligenceService:
         """
         conversion_dir = self.output_base_dir / conversion_id
 
-        markdown_path = conversion_dir / "document.md"
+        markdown_path = conversion_dir / 'document.md'
         if not markdown_path.exists():
             return None
 
         try:
-            with open(markdown_path, "r", encoding="utf-8") as f:
+            with open(markdown_path, encoding='utf-8') as f:
                 return f.read()
         except Exception:
             return None
@@ -581,8 +607,8 @@ class AzureDocIntelligenceService:
         return AZURE_DOC_INTELLIGENCE_AVAILABLE and self.client is not None
 
     async def get_figures_for_conversion(
-        self, conversion_id: str
-    ) -> Optional[List[Dict[str, Any]]]:
+        self, conversion_id: str,
+    ) -> list[dict[str, Any]] | None:
         """
         Get all figures metadata for a specific conversion
 
@@ -593,13 +619,13 @@ class AzureDocIntelligenceService:
             List of figure metadata dictionaries or None if not found
         """
         metadata = await self.get_conversion_by_id(conversion_id)
-        if metadata and "figures" in metadata:
-            return metadata["figures"]
+        if metadata and 'figures' in metadata:
+            return metadata['figures']
         return None
 
     async def get_raw_analysis_result(
-        self, conversion_id: str
-    ) -> Optional[Dict[str, Any]]:
+        self, conversion_id: str,
+    ) -> dict[str, Any] | None:
         """
         Get the complete raw JSON analysis result with ALL bounding boxes
 
@@ -616,13 +642,13 @@ class AzureDocIntelligenceService:
         Returns:
             Complete analysis result dictionary or None if not found
         """
-        raw_json_path = self.output_base_dir / conversion_id / "raw_analysis.json"
+        raw_json_path = self.output_base_dir / conversion_id / 'raw_analysis.json'
 
         if not raw_json_path.exists():
             return None
 
         try:
-            with open(raw_json_path, "r", encoding="utf-8") as f:
+            with open(raw_json_path, encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             return None
@@ -637,67 +663,70 @@ class AzureDocIntelligenceService:
 
         Best-effort conversion for prompt inclusion.
         """
-        soup = BeautifulSoup(html_table, "html.parser")
-        table = soup.find("table")
+        soup = BeautifulSoup(html_table, 'html.parser')
+        table = soup.find('table')
         if not table:
             return html_table
 
-        rows: List[List[str]] = []
-        for tr in table.find_all("tr"):
-            cells = tr.find_all(["th", "td"])
-            row = [" ".join(c.get_text(" ", strip=True).split()) for c in cells]
+        rows: list[list[str]] = []
+        for tr in table.find_all('tr'):
+            cells = tr.find_all(['th', 'td'])
+            row = [
+                ' '.join(c.get_text(' ', strip=True).split())
+                for c in cells
+            ]
             if row:
                 rows.append(row)
 
         if not rows:
-            return ""
+            return ''
 
         # Normalize row widths
         width = max(len(r) for r in rows)
-        rows = [r + [""] * (width - len(r)) for r in rows]
+        rows = [r + [''] * (width - len(r)) for r in rows]
 
         header = rows[0]
         body = rows[1:] if len(rows) > 1 else []
 
         def esc(v: str) -> str:
-            return (v or "").replace("|", "\\|")
+            return (v or '').replace('|', '\\|')
 
         md_lines = [
-            "| " + " | ".join(esc(x) for x in header) + " |",
-            "| " + " | ".join(["---"] * width) + " |",
+            '| ' + ' | '.join(esc(x) for x in header) + ' |',
+            '| ' + ' | '.join(['---'] * width) + ' |',
         ]
         for r in body:
-            md_lines.append("| " + " | ".join(esc(x) for x in r) + " |")
-        return "\n".join(md_lines)
+            md_lines.append('| ' + ' | '.join(esc(x) for x in r) + ' |')
+        return '\n'.join(md_lines)
 
     @staticmethod
-    def _extract_html_tables_from_markdown(markdown: str) -> List[str]:
+    def _extract_html_tables_from_markdown(markdown: str) -> list[str]:
         """Extract <table> blocks from Azure markdown content."""
         import re
 
         if not markdown:
             return []
-        table_pattern = r"<table>.*?</table>"
+        table_pattern = r'<table>.*?</table>'
         return re.findall(table_pattern, markdown, re.DOTALL)
 
-    def _download_figure_bytes_sync(self, result_id: str, figure_id: str) -> Optional[bytes]:
+    def _download_figure_bytes_sync(self, result_id: str, figure_id: str) -> bytes | None:
         """Download a single figure image from Azure DI as bytes (sync)."""
         try:
             stream = self.client.get_analyze_result_figure(
-                model_id="prebuilt-layout", result_id=result_id, figure_id=figure_id
+                model_id='prebuilt-layout', result_id=result_id, figure_id=figure_id,
             )
-            chunks: List[bytes] = []
+            chunks: list[bytes] = []
             for chunk in stream:
                 chunks.append(chunk)
-            return b"".join(chunks)
+            return b''.join(chunks)
         except Exception:
             return None
 
     async def extract_citation_artifacts(
         self,
         source_pdf: str,
-        source_type: str = "file",
-    ) -> Dict[str, Any]:
+        source_type: str = 'file',
+    ) -> dict[str, Any]:
         """Run Azure DI and return citation-ready figure/table artifacts.
 
         Returns:
@@ -719,73 +748,80 @@ class AzureDocIntelligenceService:
         """
 
         if not self.client:
-            return {"success": False, "error": "Azure Document Intelligence client not available"}
+            return {'success': False, 'error': 'Azure Document Intelligence client not available'}
 
         # We need figures in output.
-        output_param = ["figures"]
+        output_param = ['figures']
 
         try:
             result, result_id = await asyncio.to_thread(
-                self._analyze_document_sync, source_pdf, source_type, output_param
+                self._analyze_document_sync, source_pdf, source_type, output_param,
             )
         except Exception as e:
-            return {"success": False, "error": f"Azure DI analyze failed: {e}"}
+            return {'success': False, 'error': f"Azure DI analyze failed: {e}"}
 
-        raw_analysis = result.as_dict() if hasattr(result, "as_dict") else {}
-        raw_analysis["processor"] = "azure_doc_intelligence"
+        raw_analysis = result.as_dict() if hasattr(result, 'as_dict') else {}
+        raw_analysis['processor'] = 'azure_doc_intelligence'
 
         # Preserve page-level metadata so callers can normalize polygons into
         # the same coordinate system as Grobid TEI coords.
         # Typical shape: {pageNumber,width,height,unit}
-        pages_meta = raw_analysis.get("pages") or []
+        pages_meta = raw_analysis.get('pages') or []
 
-        markdown_content = getattr(result, "content", None) or ""
+        markdown_content = getattr(result, 'content', None) or ''
 
         # -----------------
         # Tables
         # -----------------
         html_tables = self._extract_html_tables_from_markdown(markdown_content)
-        md_tables: List[str] = [self._html_table_to_markdown(t) for t in html_tables]
+        md_tables: list[str] = [
+            self._html_table_to_markdown(t) for t in html_tables
+        ]
 
         # Azure gives table bounding regions under raw_analysis['tables'][*]['boundingRegions']
-        raw_tables = raw_analysis.get("tables", []) or []
+        raw_tables = raw_analysis.get('tables', []) or []
 
-        tables_out: List[Dict[str, Any]] = []
+        tables_out: list[dict[str, Any]] = []
         for i, md in enumerate(md_tables, start=1):
             bbox = None
             if i - 1 < len(raw_tables):
-                bbox = raw_tables[i - 1].get("boundingRegions") or raw_tables[i - 1].get("bounding_regions")
+                bbox = raw_tables[i - 1].get(
+                    'boundingRegions',
+                ) or raw_tables[i - 1].get('bounding_regions')
             tables_out.append(
                 {
-                    "index": i,
-                    "caption": None,
-                    "bounding_box": bbox,
-                    "table_markdown": md,
-                }
+                    'index': i,
+                    'caption': None,
+                    'bounding_box': bbox,
+                    'table_markdown': md,
+                },
             )
 
         # -----------------
         # Figures
         # -----------------
-        figures_out: List[Dict[str, Any]] = []
-        raw_figures = raw_analysis.get("figures", []) or []
+        figures_out: list[dict[str, Any]] = []
+        raw_figures = raw_analysis.get('figures', []) or []
 
         # Prefer SDK figures list for caption/bbox, but fall back to raw dict.
-        sdk_figures = getattr(result, "figures", None) or []
+        sdk_figures = getattr(result, 'figures', None) or []
         for idx, fig in enumerate(sdk_figures, start=1):
-            azure_id = getattr(fig, "id", None) or f"unknown_{idx}"
+            azure_id = getattr(fig, 'id', None) or f"unknown_{idx}"
             caption = None
             try:
-                cap = getattr(fig, "caption", None)
-                caption = getattr(cap, "content", None) if cap else None
+                cap = getattr(fig, 'caption', None)
+                caption = getattr(cap, 'content', None) if cap else None
             except Exception:
                 caption = None
 
             bounding_regions = []
             try:
-                for region in (getattr(fig, "bounding_regions", None) or []):
+                for region in (getattr(fig, 'bounding_regions', None) or []):
                     bounding_regions.append(
-                        {"page_number": region.page_number, "polygon": region.polygon}
+                        {
+                            'page_number': region.page_number,
+                            'polygon': region.polygon,
+                        },
                     )
             except Exception:
                 bounding_regions = []
@@ -796,16 +832,16 @@ class AzureDocIntelligenceService:
 
             if not png_bytes:
                 # If we couldn't download, skip storing bytes (still return metadata)
-                png_bytes = b""
+                png_bytes = b''
 
             figures_out.append(
                 {
-                    "index": idx,
-                    "azure_id": azure_id,
-                    "caption": caption,
-                    "bounding_box": bounding_regions,
-                    "png_bytes": png_bytes,
-                }
+                    'index': idx,
+                    'azure_id': azure_id,
+                    'caption': caption,
+                    'bounding_box': bounding_regions,
+                    'png_bytes': png_bytes,
+                },
             )
 
         # If SDK did not return figures but raw JSON did, include raw ones.
@@ -813,20 +849,20 @@ class AzureDocIntelligenceService:
             for idx, fig in enumerate(raw_figures, start=1):
                 figures_out.append(
                     {
-                        "index": idx,
-                        "azure_id": fig.get("id") or f"raw_{idx}",
-                        "caption": (fig.get("caption", {}) or {}).get("content") if isinstance(fig.get("caption"), dict) else None,
-                        "bounding_box": fig.get("boundingRegions") or fig.get("bounding_regions"),
-                        "png_bytes": b"",
-                    }
+                        'index': idx,
+                        'azure_id': fig.get('id') or f"raw_{idx}",
+                        'caption': (fig.get('caption', {}) or {}).get('content') if isinstance(fig.get('caption'), dict) else None,
+                        'bounding_box': fig.get('boundingRegions') or fig.get('bounding_regions'),
+                        'png_bytes': b'',
+                    },
                 )
 
         return {
-            "success": True,
-            "raw_analysis": raw_analysis,
-            "pages": pages_meta,
-            "figures": figures_out,
-            "tables": tables_out,
+            'success': True,
+            'raw_analysis': raw_analysis,
+            'pages': pages_meta,
+            'figures': figures_out,
+            'tables': tables_out,
         }
 
 

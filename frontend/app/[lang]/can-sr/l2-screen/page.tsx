@@ -11,7 +11,6 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
   srId,
   citationId,
   model,
-  criteria,
   getAuthHeaders,
 }) => {
   const headers = getAuthHeaders()

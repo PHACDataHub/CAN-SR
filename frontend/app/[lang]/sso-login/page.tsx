@@ -9,7 +9,7 @@ export default function LoginPage() {
   const dict = useDictionary()
 
   // Get current language to keep language when navigating
-  const { lang } = useParams<{ lang: string }>();
+  const { lang } = useParams<{ lang: string }>()
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -30,8 +30,7 @@ export default function LoginPage() {
     if (token) {
       router.push(`/${lang}/can-sr`)
     }
-  }, [router])
- 
+  }, [lang, router])
 
   return (
     <div className="flex min-h-screen overflow-hidden">

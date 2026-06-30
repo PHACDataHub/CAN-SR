@@ -6,16 +6,16 @@
 trigger:
 - main
 
-pool: 
+pool:
   name: spib-sdaid-grepexp
   demands:
   - WorkFolder -equals /mnt/storage/sdc/customerworkfolder
- 
+
 
 
 steps:
 - script: |
-    
+
     # Make sure the new working dir is setup
     sudo mkdir -p /mnt/storage/sdc/dockerwrkdir/
 

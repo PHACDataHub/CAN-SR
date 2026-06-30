@@ -1,35 +1,46 @@
-from typing import Any, Dict, List, Optional, Tuple
-import math
+from __future__ import annotations
+
 import json
+import logging
+import math
 import re
 from datetime import datetime
-import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
+
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
-from ..services.sr_db_service import srdb_service
+from ..citations import router as citations_router
+from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
 from ..services.azure_openai_client import azure_openai_client
+from ..services.cit_db_service import cits_dp_service
+from ..services.cit_db_service import snake_case
+from ..services.cit_db_service import snake_case_column
+from ..services.sr_db_service import srdb_service
 from ..services.storage import storage_service
-
+from .agentic_utils import build_critical_options
+from .agentic_utils import parse_agent_xml
+from .agentic_utils import resolve_option
+from .prompts import PROMPT_JSON_TEMPLATE
+from .prompts import PROMPT_JSON_TEMPLATE_FULLTEXT
+from .prompts import PROMPT_XML_TEMPLATE_FULLTEXT
+from .prompts import PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL
+from .prompts import PROMPT_XML_TEMPLATE_TA
+from .prompts import PROMPT_XML_TEMPLATE_TA_CRITICAL
 # Import helpers from citations router to fetch citation rows and build combined citations
-from ..citations import router as citations_router
-from ..core.cit_utils import load_sr_and_check
-
 # Import consolidated Postgres helpers if available (optional)
-from ..services.cit_db_service import cits_dp_service, snake_case_column, snake_case
-from .prompts import (
-    PROMPT_JSON_TEMPLATE,
-    PROMPT_JSON_TEMPLATE_FULLTEXT,
-    PROMPT_XML_TEMPLATE_TA,
-    PROMPT_XML_TEMPLATE_TA_CRITICAL,
-    PROMPT_XML_TEMPLATE_FULLTEXT,
-    PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL,
-)
-from .agentic_utils import build_critical_options, parse_agent_xml, resolve_option
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +51,7 @@ class FilteredCitationIdsResponse(BaseModel):
     sr_id: str
     step: str
     filter: str
-    citation_ids: List[int]
+    citation_ids: list[int]
     total: int
     filtered_total: int
 
@@ -48,8 +59,8 @@ class FilteredCitationIdsResponse(BaseModel):
 class AgentRunsQueryResponse(BaseModel):
     sr_id: str
     pipeline: str
-    citation_ids: List[int]
-    runs: List[Dict[str, Any]]
+    citation_ids: list[int]
+    runs: list[dict[str, Any]]
 
 
 class ScreeningMetricsCriterion(BaseModel):
@@ -62,9 +73,9 @@ class ScreeningMetricsCriterion(BaseModel):
     critical_disagreement_count: int
     confident_exclude_count: int
     needs_human_review_count: int
-    accuracy: Optional[float] = None
+    accuracy: float | None = None
     # NOTE: this is NOT human accuracy; it is agreement between screening + critical agents.
-    accuracy_critical_agent: Optional[float] = None
+    accuracy_critical_agent: float | None = None
 
 
 class ScreeningMetricsSummary(BaseModel):
@@ -81,11 +92,11 @@ class ScreeningMetricsSummary(BaseModel):
 
 class ScreeningMetricsResponse(BaseModel):
     sr_id: str
-    steps: Dict[str, Any]
-    warnings: Optional[List[Dict[str, Any]]] = None
+    steps: dict[str, Any]
+    warnings: list[dict[str, Any]] | None = None
 
 
-def _guardrail_issue_from_run(run: Optional[Dict[str, Any]]) -> bool:
+def _guardrail_issue_from_run(run: dict[str, Any] | None) -> bool:
     """Return True when a run's guardrails indicate a parse/contract issue.
 
     Keep this in sync with list-page needs-review semantics.
@@ -93,18 +104,18 @@ def _guardrail_issue_from_run(run: Optional[Dict[str, Any]]) -> bool:
     if not run:
         return False
     try:
-        g = run.get("guardrails")
+        g = run.get('guardrails')
         if g is None:
             return False
         if isinstance(g, str):
             g = json.loads(g)
         if not isinstance(g, dict):
             return True
-        if g.get("parse_ok") is False:
+        if g.get('parse_ok') is False:
             return True
-        if g.get("missing_answer"):
+        if g.get('missing_answer'):
             return True
-        if g.get("missing_confidence"):
+        if g.get('missing_confidence'):
             return True
         return False
     except Exception:
@@ -112,7 +123,7 @@ def _guardrail_issue_from_run(run: Optional[Dict[str, Any]]) -> bool:
         return True
 
 
-def _is_validated_row_for_step(row: Dict[str, Any], step_norm: str) -> bool:
+def _is_validated_row_for_step(row: dict[str, Any], step_norm: str) -> bool:
     validations_col = f"{step_norm}_validations"
     legacy_validated_by = f"{step_norm}_validated_by"
     v = row.get(validations_col)
@@ -131,17 +142,17 @@ def _is_validated_row_for_step(row: Dict[str, Any], step_norm: str) -> bool:
 def _needs_review_for_citation(
     *,
     citation_id: int,
-    per_crit: Dict[str, Dict[str, Dict[str, Any]]],
-    criteria: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    per_crit: dict[str, dict[str, dict[str, Any]]],
+    criteria: list[dict[str, Any]],
+) -> dict[str, Any]:
     """Compute needs-review booleans used by both metrics and filtered id lists."""
 
     # Not screened yet (no runs at all)
     if not per_crit:
         return {
-            "not_screened": True,
-            "auto_excluded": False,
-            "needs_review": False,
+            'not_screened': True,
+            'auto_excluded': False,
+            'needs_review': False,
         }
 
     has_confident_exclude = False
@@ -150,19 +161,19 @@ def _needs_review_for_citation(
     has_guardrail_issue = False
 
     for c in criteria:
-        ck = str(c.get("criterion_key") or "")
+        ck = str(c.get('criterion_key') or '')
         if not ck:
             continue
-        thr = float(c.get("threshold") or 0.9)
+        thr = float(c.get('threshold') or 0.9)
 
         rpair = per_crit.get(ck) or {}
-        scr = rpair.get("screening")
-        crit = rpair.get("critical")
+        scr = rpair.get('screening')
+        crit = rpair.get('critical')
 
         # Screening low confidence + guardrails
         if scr:
             try:
-                conf_f = float(scr.get("confidence"))
+                conf_f = float(scr.get('confidence'))
             except Exception:
                 conf_f = None
             if conf_f is not None and conf_f < thr:
@@ -171,35 +182,41 @@ def _needs_review_for_citation(
                 has_guardrail_issue = True
 
             # Confident exclude requires critical agreement
-            crit_has = bool(crit) and str(crit.get("answer") or "").strip() != ""
-            crit_agrees = crit_has and (not _is_disagreeing_critical_answer(crit.get("answer")))
-            ans = scr.get("answer")
+            crit_has = bool(crit) and str(
+                crit.get('answer') or '',
+            ).strip() != ''
+            crit_agrees = crit_has and (
+                not _is_disagreeing_critical_answer(crit.get('answer'))
+            )
+            ans = scr.get('answer')
             if conf_f is not None and conf_f >= thr and _is_exclude_answer(ans) and crit_agrees:
                 has_confident_exclude = True
 
         # Critical: missing/empty counts as disagreement
-        if not crit or str(crit.get("answer") or "").strip() == "":
+        if not crit or str(crit.get('answer') or '').strip() == '':
             has_critical_disagreement = True
-        elif _is_disagreeing_critical_answer(crit.get("answer")):
+        elif _is_disagreeing_critical_answer(crit.get('answer')):
             has_critical_disagreement = True
         if _guardrail_issue_from_run(crit):
             has_guardrail_issue = True
 
     auto_excluded = bool(has_confident_exclude)
-    needs_review = (not auto_excluded) and (has_critical_disagreement or has_low_confidence or has_guardrail_issue)
+    needs_review = (not auto_excluded) and (
+        has_critical_disagreement or has_low_confidence or has_guardrail_issue
+    )
     return {
-        "not_screened": False,
-        "auto_excluded": auto_excluded,
-        "needs_review": needs_review,
+        'not_screened': False,
+        'auto_excluded': auto_excluded,
+        'needs_review': needs_review,
     }
 
 
-@router.get("/citation-ids", response_model=FilteredCitationIdsResponse)
+@router.get('/citation-ids', response_model=FilteredCitationIdsResponse)
 async def get_filtered_citation_ids(
     sr_id: str,
-    step: str = "l1",
-    filter: str = "all",
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    step: str = 'l1',
+    filter: str = 'all',
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Return a filtered citation id list for list pagination and viewer navigation.
 
@@ -211,32 +228,42 @@ async def get_filtered_citation_ids(
     - not_screened: no agent runs yet (for this step pipeline)
     """
 
-    step_norm = str(step or "l1").lower().strip()
-    if step_norm not in {"l1", "l2"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+    step_norm = str(step or 'l1').lower().strip()
+    if step_norm not in {'l1', 'l2'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='step must be l1 or l2',
+        )
 
-    filter_norm = str(filter or "all").lower().strip()
-    if filter_norm not in {"all", "needs", "validated", "unvalidated", "not_screened"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filter")
+    filter_norm = str(filter or 'all').lower().strip()
+    if filter_norm not in {'all', 'needs', 'validated', 'unvalidated', 'not_screened'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid filter',
+        )
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Criteria + thresholds
-    cp = sr.get("criteria_parsed") or {}
+    cp = sr.get('criteria_parsed') or {}
     questions = _questions_for_step(cp, step_norm)
 
-    sr_thresholds = sr.get("screening_thresholds") or {}
-    step_thresholds = sr_thresholds.get(step_norm) if isinstance(sr_thresholds, dict) else None
-    step_thresholds = step_thresholds if isinstance(step_thresholds, dict) else {}
+    sr_thresholds = sr.get('screening_thresholds') or {}
+    step_thresholds = sr_thresholds.get(
+        step_norm,
+    ) if isinstance(sr_thresholds, dict) else None
+    step_thresholds = step_thresholds if isinstance(
+        step_thresholds, dict,
+    ) else {}
 
-    criteria: List[Dict[str, Any]] = []
+    criteria: list[dict[str, Any]] = []
     for q in questions:
         if not isinstance(q, str) or not q.strip():
             continue
@@ -247,19 +274,22 @@ async def get_filtered_citation_ids(
             thr = max(0.0, min(1.0, thr))
         except Exception:
             thr = 0.9
-        criteria.append({"criterion_key": ck, "label": q, "threshold": thr})
+        criteria.append({'criterion_key': ck, 'label': q, 'threshold': thr})
 
     # Scope ids for step (L2 scope depends on human L1 include)
-    filter_step = ""
-    if step_norm == "l2":
-        filter_step = "l1"
+    filter_step = ''
+    if step_norm == 'l2':
+        filter_step = 'l1'
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list citations: {e}",
+        )
 
     # Runs + minimal row fields for validation
-    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    pipeline_norm = 'title_abstract' if step_norm == 'l1' else 'fulltext'
     try:
         runs = await run_in_threadpool(
             cits_dp_service.list_latest_agent_runs,
@@ -269,17 +299,20 @@ async def get_filtered_citation_ids(
             pipeline=pipeline_norm,
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agent runs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load agent runs: {e}",
+        )
 
-    runs_by_cit: Dict[int, Dict[str, Dict[str, Dict[str, Any]]]] = {}
+    runs_by_cit: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
     for r in runs or []:
         try:
-            cid = int(r.get("citation_id"))
+            cid = int(r.get('citation_id'))
         except Exception:
             continue
-        ck = str(r.get("criterion_key") or "")
-        stg = str(r.get("stage") or "")
-        if not ck or stg not in {"screening", "critical"}:
+        ck = str(r.get('criterion_key') or '')
+        stg = str(r.get('stage') or '')
+        if not ck or stg not in {'screening', 'critical'}:
             continue
         if cid not in runs_by_cit:
             runs_by_cit[cid] = {}
@@ -294,41 +327,48 @@ async def get_filtered_citation_ids(
             cits_dp_service.get_citations_by_ids,
             ids,
             table_name,
-            ["id", validations_col, legacy_validated_by],
+            ['id', validations_col, legacy_validated_by],
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load citations: {e}",
+        )
 
     # Build response ids in stable order (ids is already ordered)
-    row_by_id: Dict[int, Dict[str, Any]] = {}
+    row_by_id: dict[int, dict[str, Any]] = {}
     for r in rows or []:
         try:
-            row_by_id[int(r.get("id"))] = r
+            row_by_id[int(r.get('id'))] = r
         except Exception:
             continue
 
-    filtered_ids: List[int] = []
+    filtered_ids: list[int] = []
     for cid in ids:
-        row = row_by_id.get(int(cid)) or {"id": cid}
+        row = row_by_id.get(int(cid)) or {'id': cid}
         validated = _is_validated_row_for_step(row, step_norm)
         per_crit = runs_by_cit.get(int(cid), {})
-        flags = _needs_review_for_citation(citation_id=int(cid), per_crit=per_crit, criteria=criteria)
+        flags = _needs_review_for_citation(
+            citation_id=int(
+                cid,
+            ), per_crit=per_crit, criteria=criteria,
+        )
 
-        if filter_norm == "all":
+        if filter_norm == 'all':
             filtered_ids.append(int(cid))
-        elif filter_norm == "validated":
+        elif filter_norm == 'validated':
             if validated:
                 filtered_ids.append(int(cid))
-        elif filter_norm == "unvalidated":
+        elif filter_norm == 'unvalidated':
             if not validated:
                 filtered_ids.append(int(cid))
-        elif filter_norm == "not_screened":
-            if flags.get("not_screened"):
+        elif filter_norm == 'not_screened':
+            if flags.get('not_screened'):
                 filtered_ids.append(int(cid))
-        elif filter_norm == "needs":
+        elif filter_norm == 'needs':
             # "Needs human review" is strictly the *unvalidated* review queue.
             # If a citation is validated, it should appear under the validated filter instead.
-            if (not validated) and flags.get("needs_review"):
+            if (not validated) and flags.get('needs_review'):
                 filtered_ids.append(int(cid))
 
     return FilteredCitationIdsResponse(
@@ -347,11 +387,11 @@ class CalibrationPoint(BaseModel):
     fp: int
     fn: int
     tn: int
-    precision: Optional[float] = None
-    recall: Optional[float] = None
-    fpr: Optional[float] = None
-    tpr: Optional[float] = None
-    workload_reduction: Optional[float] = None
+    precision: float | None = None
+    recall: float | None = None
+    fpr: float | None = None
+    tpr: float | None = None
+    workload_reduction: float | None = None
 
 
 class CalibrationHistogramBin(BaseModel):
@@ -365,16 +405,16 @@ class CalibrationCriterionResponse(BaseModel):
     criterion_key: str
     label: str
     validated_n: int
-    recommended_threshold: Optional[float] = None
-    recommended_reason: Optional[str] = None
-    curve: List[CalibrationPoint]
-    histogram: List[CalibrationHistogramBin]
+    recommended_threshold: float | None = None
+    recommended_reason: str | None = None
+    curve: list[CalibrationPoint]
+    histogram: list[CalibrationHistogramBin]
 
 
 class CalibrationResponse(BaseModel):
     sr_id: str
     step: str
-    criteria: List[CalibrationCriterionResponse]
+    criteria: list[CalibrationCriterionResponse]
 
 
 class LiveConfidenceHistogramBin(BaseModel):
@@ -388,14 +428,14 @@ class LiveConfidenceHistogramBin(BaseModel):
 class LiveConfidenceHistogramCriterionResponse(BaseModel):
     criterion_key: str
     label: str
-    histogram: List[LiveConfidenceHistogramBin]
+    histogram: list[LiveConfidenceHistogramBin]
 
 
 class LiveConfidenceHistogramResponse(BaseModel):
     sr_id: str
     step: str
     bins: int
-    criteria: List[LiveConfidenceHistogramCriterionResponse]
+    criteria: list[LiveConfidenceHistogramCriterionResponse]
 
 
 class CalibrationSampleRow(BaseModel):
@@ -403,34 +443,34 @@ class CalibrationSampleRow(BaseModel):
     criterion_key: str
     label: str
     validated: bool
-    confidence: Optional[float] = None
-    ai_answer: Optional[str] = None
-    human_selected: Optional[str] = None
-    agrees: Optional[bool] = None
-    bucket: Optional[str] = None  # tp/fp/fn/tn given a threshold
+    confidence: float | None = None
+    ai_answer: str | None = None
+    human_selected: str | None = None
+    agrees: bool | None = None
+    bucket: str | None = None  # tp/fp/fn/tn given a threshold
 
 
 class CalibrationSamplesResponse(BaseModel):
     sr_id: str
     step: str
     threshold: float
-    rows: List[CalibrationSampleRow]
+    rows: list[CalibrationSampleRow]
 
 
 def _csv_escape(v: Any) -> str:
-    s = "" if v is None else str(v)
+    s = '' if v is None else str(v)
     # RFC 4180 basic escaping
-    if any(ch in s for ch in [",", "\n", "\r", '"']):
+    if any(ch in s for ch in [',', '\n', '\r', '"']):
         s = '"' + s.replace('"', '""') + '"'
     return s
 
 
-def _normalize_int_list(v: Any) -> List[int]:
+def _normalize_int_list(v: Any) -> list[int]:
     if v is None:
         return []
     if not isinstance(v, list):
         return []
-    out: List[int] = []
+    out: list[int] = []
     for item in v:
         if isinstance(item, int):
             out.append(item)
@@ -443,7 +483,7 @@ def _normalize_int_list(v: Any) -> List[int]:
             continue
     # stable unique
     seen = set()
-    uniq: List[int] = []
+    uniq: list[int] = []
     for x in out:
         if x not in seen:
             seen.add(x)
@@ -452,19 +492,36 @@ def _normalize_int_list(v: Any) -> List[int]:
 
 
 class ClassifyRequest(BaseModel):
-    citation_text: Optional[str] = Field(
-        None, description="Optional combined citation text. If omitted the server will build it from the screening DB row."
+    citation_text: str | None = Field(
+        None, description='Optional combined citation text. If omitted the server will build it from the screening DB row.',
     )
-    include_columns: Optional[List[str]] = Field(
-        None, description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation"
+    include_columns: list[str] | None = Field(
+        None, description='If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation',
     )
-    question: str = Field(..., description="L1 criteria question to apply to this citation")
-    screening_step: str = Field(..., description="Screening step identifier: 'l1' or 'l2', etc.")
-    options: List[str] = Field(..., description="List of possible options (exact strings). The model must pick one.")
-    xtra: Optional[str] = Field("", description="Additional context/instructions for the model")
-    model: Optional[str] = Field(None, description="Model to use (falls back to default configured model)")
-    temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Sampling temperature")
-    max_tokens: Optional[int] = Field(2000, ge=1, le=4000, description="Max tokens for LLM response")
+    question: str = Field(
+        ...,
+        description='L1 criteria question to apply to this citation',
+    )
+    screening_step: str = Field(
+        ...,
+        description="Screening step identifier: 'l1' or 'l2', etc.",
+    )
+    options: list[str] = Field(
+        ..., description='List of possible options (exact strings). The model must pick one.',
+    )
+    xtra: str | None = Field(
+        '', description='Additional context/instructions for the model',
+    )
+    model: str | None = Field(
+        None, description='Model to use (falls back to default configured model)',
+    )
+    temperature: float | None = Field(
+        0.0, ge=0.0, le=1.0, description='Sampling temperature',
+    )
+    max_tokens: int | None = Field(
+        2000, ge=1, le=4000, description='Max tokens for LLM response',
+    )
+
 
 class HumanClassifyRequest(BaseModel):
     """
@@ -472,38 +529,62 @@ class HumanClassifyRequest(BaseModel):
     This mirrors the shape of the LLM-based classify payload but accepts a
     direct `selected` value and optional explanation/confidence.
     """
-    citation_text: Optional[str] = Field(
-        None, description="Optional combined citation text. If omitted the server will build it from the screening DB row."
+    citation_text: str | None = Field(
+        None, description='Optional combined citation text. If omitted the server will build it from the screening DB row.',
     )
-    include_columns: Optional[List[str]] = Field(
-        None, description="If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation"
+    include_columns: list[str] | None = Field(
+        None, description='If citation_text is omitted, these columns (original CSV headers) will be used to build the combined citation',
     )
-    question: str = Field(..., description="L1 criteria question to apply to this citation")
-    selected: str = Field(..., description="Human-selected option (string)")
-    screening_step: str = Field(..., description="Screening step identifier: 'l1' or 'l2', etc.")
-    explanation: Optional[str] = Field("", description="Optional free-text explanation from the human reviewer")
-    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional confidence (0.0 - 1.0)")
-    reviewer: Optional[str] = Field(None, description="Optional reviewer id or name")
+    question: str = Field(
+        ...,
+        description='L1 criteria question to apply to this citation',
+    )
+    selected: str = Field(..., description='Human-selected option (string)')
+    screening_step: str = Field(
+        ...,
+        description="Screening step identifier: 'l1' or 'l2', etc.",
+    )
+    explanation: str | None = Field(
+        '', description='Optional free-text explanation from the human reviewer',
+    )
+    confidence: float | None = Field(
+        None, ge=0.0, le=1.0, description='Optional confidence (0.0 - 1.0)',
+    )
+    reviewer: str | None = Field(
+        None, description='Optional reviewer id or name',
+    )
 
 
 class TitleAbstractRunRequest(BaseModel):
-    sr_id: str = Field(..., description="Systematic review id")
-    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
-    model: Optional[str] = Field(None, description="Model key/deployment to use")
+    sr_id: str = Field(..., description='Systematic review id')
+    citation_id: int = Field(
+        ..., ge=1,
+        description='Citation id (row id in the SR screening table)',
+    )
+    model: str | None = Field(None, description='Model key/deployment to use')
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     max_tokens: int = Field(1200, ge=64, le=4000)
-    prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
-    criterion_key: Optional[str] = Field(None, description="If set, only run this criterion (skip others). Used for per-criterion AI button.")
+    prompt_version: str | None = Field(
+        'v1', description='Prompt version tag for auditing',
+    )
+    criterion_key: str | None = Field(
+        None, description='If set, only run this criterion (skip others). Used for per-criterion AI button.',
+    )
 
 
 class ValidateStepRequest(BaseModel):
-    sr_id: str = Field(..., description="Systematic review id")
-    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
-    step: str = Field("l1", description="Validation step: l1|l2|parameters")
-    checked: bool = Field(True, description="If true, add/update the current user's validation; if false, remove it")
+    sr_id: str = Field(..., description='Systematic review id')
+    citation_id: int = Field(
+        ..., ge=1,
+        description='Citation id (row id in the SR screening table)',
+    )
+    step: str = Field('l1', description='Validation step: l1|l2|parameters')
+    checked: bool = Field(
+        True, description="If true, add/update the current user's validation; if false, remove it",
+    )
 
 
-def _as_validation_list(v: Any) -> List[Dict[str, str]]:
+def _as_validation_list(v: Any) -> list[dict[str, str]]:
     """Normalize DB values into a list of {user, validated_at} dicts."""
 
     if v is None:
@@ -519,36 +600,48 @@ def _as_validation_list(v: Any) -> List[Dict[str, str]]:
     if not isinstance(v, list):
         return []
 
-    out: List[Dict[str, str]] = []
+    out: list[dict[str, str]] = []
     for item in v:
         if not isinstance(item, dict):
             continue
-        user = item.get("user") or item.get("email") or item.get("validated_by")
-        ts = item.get("validated_at") or item.get("timestamp") or item.get("validatedAt")
+        user = item.get('user') or item.get(
+            'email',
+        ) or item.get('validated_by')
+        ts = item.get('validated_at') or item.get(
+            'timestamp',
+        ) or item.get('validatedAt')
         if not user:
             continue
-        out.append({"user": str(user), "validated_at": str(ts or "")})
+        out.append({'user': str(user), 'validated_at': str(ts or '')})
     return out
 
 
-def _dedupe_validations(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _dedupe_validations(items: list[dict[str, str]]) -> list[dict[str, str]]:
     """Keep only one entry per user, keeping the latest timestamp lexicographically (ISO8601)."""
 
-    by_user: Dict[str, Dict[str, str]] = {}
+    by_user: dict[str, dict[str, str]] = {}
     for it in items or []:
-        user = str(it.get("user") or "").strip()
+        user = str(it.get('user') or '').strip()
         if not user:
             continue
         cur = by_user.get(user)
         if not cur:
-            by_user[user] = {"user": user, "validated_at": str(it.get("validated_at") or "")}
+            by_user[user] = {
+                'user': user, 'validated_at': str(
+                    it.get('validated_at') or '',
+                ),
+            }
             continue
         # Prefer newest timestamp (ISO strings compare in chronological order)
-        if str(it.get("validated_at") or "") >= str(cur.get("validated_at") or ""):
-            by_user[user] = {"user": user, "validated_at": str(it.get("validated_at") or "")}
+        if str(it.get('validated_at') or '') >= str(cur.get('validated_at') or ''):
+            by_user[user] = {
+                'user': user, 'validated_at': str(
+                    it.get('validated_at') or '',
+                ),
+            }
 
     # Return newest-first for nicer UI (most recent first)
-    return sorted(by_user.values(), key=lambda x: str(x.get("validated_at") or ""), reverse=True)
+    return sorted(by_user.values(), key=lambda x: str(x.get('validated_at') or ''), reverse=True)
 
 
 def _is_disagreeing_critical_answer(ans: Any) -> bool:
@@ -558,20 +651,20 @@ def _is_disagreeing_critical_answer(ans: Any) -> bool:
     Any non-empty answer other than that is treated as critical disagreement.
     """
 
-    s = str(ans or "").strip()
+    s = str(ans or '').strip()
     if not s:
         return False
-    return s != "None of the above"
+    return s != 'None of the above'
 
 
 def _is_exclude_answer(ans: Any) -> bool:
     """Detect exclude answers by convention: contains '(exclude)' (case-insensitive)."""
 
-    s = str(ans or "")
-    return "(exclude)" in s.lower()
+    s = str(ans or '')
+    return '(exclude)' in s.lower()
 
 
-def _parse_selected_from_human_payload(v: Any) -> Optional[str]:
+def _parse_selected_from_human_payload(v: Any) -> str | None:
     """Extract the human label (selected option) from a human_{criterion_key} cell.
 
     Stored value is usually JSONB like:
@@ -588,33 +681,33 @@ def _parse_selected_from_human_payload(v: Any) -> Optional[str]:
         try:
             obj = json.loads(s)
             if isinstance(obj, dict):
-                sel = obj.get("selected")
+                sel = obj.get('selected')
                 return str(sel).strip() if isinstance(sel, str) else None
         except Exception:
             return s
         return None
     if isinstance(v, dict):
-        sel = v.get("selected")
+        sel = v.get('selected')
         return str(sel).strip() if isinstance(sel, str) else None
     return None
 
 
 def _criterion_key_from_question(question: str) -> str:
     # Keep in sync with the frontend derivation in l2-screen view.
-    q = str(question or "")
+    q = str(question or '')
     try:
         # Prefer shared helper when available.
         return str(snake_case(q, max_len=56))
     except Exception:
         # Fallback: lowercase, non-word -> underscore, collapse underscores.
         s = q.strip().lower()
-        s = re.sub(r"[^\w]+", "_", s)
-        s = re.sub(r"_+", "_", s)
-        s = re.sub(r"^_+|_+$", "", s)
+        s = re.sub(r'[^\w]+', '_', s)
+        s = re.sub(r'_+', '_', s)
+        s = re.sub(r'^_+|_+$', '', s)
         return s[:56]
 
 
-def _questions_for_step(cp: Any, step_norm: str) -> List[str]:
+def _questions_for_step(cp: Any, step_norm: str) -> list[str]:
     """Return criteria questions for a step.
 
     IMPORTANT: For L2 we still apply L1 criteria during full-text screening,
@@ -624,23 +717,23 @@ def _questions_for_step(cp: Any, step_norm: str) -> List[str]:
     if not isinstance(cp, dict):
         return []
 
-    def _get(step_key: str) -> List[str]:
+    def _get(step_key: str) -> list[str]:
         blk = cp.get(step_key)
         if not isinstance(blk, dict):
             return []
-        qs = blk.get("questions")
+        qs = blk.get('questions')
         if not isinstance(qs, list):
             return []
-        out: List[str] = []
+        out: list[str] = []
         for q in qs:
             if isinstance(q, str) and q.strip():
                 out.append(q)
         return out
 
-    if step_norm == "l2":
+    if step_norm == 'l2':
         seen: set[str] = set()
-        merged: List[str] = []
-        for q in _get("l1") + _get("l2"):
+        merged: list[str] = []
+        for q in _get('l1') + _get('l2'):
             if q in seen:
                 continue
             seen.add(q)
@@ -650,28 +743,33 @@ def _questions_for_step(cp: Any, step_norm: str) -> List[str]:
     return _get(step_norm)
 
 
-
 class FulltextRunRequest(BaseModel):
-    sr_id: str = Field(..., description="Systematic review id")
-    citation_id: int = Field(..., ge=1, description="Citation id (row id in the SR screening table)")
-    model: Optional[str] = Field(None, description="Model key/deployment to use")
+    sr_id: str = Field(..., description='Systematic review id')
+    citation_id: int = Field(
+        ..., ge=1,
+        description='Citation id (row id in the SR screening table)',
+    )
+    model: str | None = Field(None, description='Model key/deployment to use')
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     max_tokens: int = Field(2000, ge=64, le=4000)
-    prompt_version: Optional[str] = Field("v1", description="Prompt version tag for auditing")
-    criterion_key: Optional[str] = Field(None, description="If set, only run this criterion (skip others). Used for per-criterion AI button.")
+    prompt_version: str | None = Field(
+        'v1', description='Prompt version tag for auditing',
+    )
+    criterion_key: str | None = Field(
+        None, description='If set, only run this criterion (skip others). Used for per-criterion AI button.',
+    )
 
-    
+
 # _update_sync moved to backend.api.core.postgres.update_jsonb_column
 # Use run_in_threadpool(update_jsonb_column, ...) where needed.
 
 
-
-@router.post("/{sr_id}/citations/{citation_id}/classify")
+@router.post('/{sr_id}/citations/{citation_id}/classify')
 async def classify_citation(
     sr_id: str,
     citation_id: int,
     payload: ClassifyRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Classify a citation using an LLM and persist the parsed JSON result into the screening Postgres citations table
@@ -686,42 +784,59 @@ async def classify_citation(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Load citation row (needed for l2 fulltext and for building citation_text)
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
-    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(row, payload.include_columns)
+    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(
+        row, payload.include_columns,
+    )
 
     # Ensure LLM client is available
     if not azure_openai_client.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Azure OpenAI client is not configured on the server")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail='Azure OpenAI client is not configured on the server',
+        )
 
     # Prepare prompt (use full-text template for l2, otherwise TA/L1 template)
-    options_listed = "\n".join([f"{i}. {opt}" for i, opt in enumerate(payload.options)])
+    options_listed = '\n'.join(
+        [f"{i}. {opt}" for i, opt in enumerate(payload.options)],
+    )
     llm_response: str
 
-    if (payload.screening_step or "").lower() == "l2":
-        fulltext = row.get("fulltext") or ""
+    if (payload.screening_step or '').lower() == 'l2':
+        fulltext = row.get('fulltext') or ''
 
         # Tables/Figures context from citation row (populated by extract-fulltext)
-        tables_md_lines: List[str] = []
-        figures_lines: List[str] = []
-        images: List[Tuple[bytes, str]] = []
+        tables_md_lines: list[str] = []
+        figures_lines: list[str] = []
+        images: list[tuple[bytes, str]] = []
 
         # Tables: fetch markdown blobs and embed
-        ft_tables = row.get("fulltext_tables")
+        ft_tables = row.get('fulltext_tables')
         if isinstance(ft_tables, str):
             try:
                 ft_tables = json.loads(ft_tables)
@@ -731,21 +846,22 @@ async def classify_citation(
             for item in ft_tables:
                 if not isinstance(item, dict):
                     continue
-                idx = item.get("index")
-                blob_addr = item.get("blob_address")
-                caption = item.get("caption")
+                idx = item.get('index')
+                blob_addr = item.get('blob_address')
+                caption = item.get('caption')
                 if not idx or not blob_addr:
                     continue
                 try:
                     md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                 except Exception:
                     continue
-                md_txt = md_bytes.decode("utf-8", errors="replace")
-                header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
-                tables_md_lines.extend([header, md_txt, ""])
+                md_txt = md_bytes.decode('utf-8', errors='replace')
+                header = f"Table [T{idx}]" + \
+                    (f" caption: {caption}" if caption else '')
+                tables_md_lines.extend([header, md_txt, ''])
 
         # Figures: fetch png blobs and attach as images
-        ft_figs = row.get("fulltext_figures")
+        ft_figs = row.get('fulltext_figures')
         if isinstance(ft_figs, str):
             try:
                 ft_figs = json.loads(ft_figs)
@@ -755,28 +871,28 @@ async def classify_citation(
             for item in ft_figs:
                 if not isinstance(item, dict):
                     continue
-                idx = item.get("index")
-                blob_addr = item.get("blob_address")
-                caption = item.get("caption")
+                idx = item.get('index')
+                blob_addr = item.get('blob_address')
+                caption = item.get('caption')
                 if not idx or not blob_addr:
                     continue
                 figures_lines.append(
-                    f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})"
+                    f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})",
                 )
                 try:
                     img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                     if img_bytes:
-                        images.append((img_bytes, "image/png"))
+                        images.append((img_bytes, 'image/png'))
                 except Exception:
                     continue
 
         prompt = PROMPT_JSON_TEMPLATE_FULLTEXT.format(
             question=payload.question,
             options=options_listed,
-            xtra=payload.xtra or "",
+            xtra=payload.xtra or '',
             fulltext=fulltext or citation_text,
-            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
-            figures="\n".join(figures_lines) if figures_lines else "(none)",
+            tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
+            figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
 
         # Prefer multimodal when figures are present
@@ -802,7 +918,7 @@ async def classify_citation(
             question=payload.question,
             cit=citation_text,
             options=options_listed,
-            xtra=payload.xtra or "",
+            xtra=payload.xtra or '',
         )
         llm_response = await azure_openai_client.simple_chat(
             user_message=prompt,
@@ -817,17 +933,29 @@ async def classify_citation(
     try:
         parsed = json.loads(llm_response)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response was not valid JSON: {llm_response[:1000]}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM response was not valid JSON: {llm_response[:1000]}",
+        )
 
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM response JSON was not an object: {str(type(parsed))}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM response JSON was not an object: {str(type(parsed))}",
+        )
 
     # Require 'selected' key and validate it is a string
-    if "selected" not in parsed:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM JSON missing 'selected' key: {json.dumps(parsed)[:1000]}")
-    selected_value = parsed.get("selected")
+    if 'selected' not in parsed:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM JSON missing 'selected' key: {json.dumps(parsed)[:1000]}",
+        )
+    selected_value = parsed.get('selected')
     if not isinstance(selected_value, str):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM 'selected' must be a string: {str(type(selected_value))}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM 'selected' must be a string: {str(type(selected_value))}",
+        )
 
     s = selected_value.strip()
 
@@ -838,8 +966,10 @@ async def classify_citation(
             resolved_selected = opt
             break
 
-    explanation = parsed.get("explanation") or parsed.get("reason") or parsed.get("explain") or ""
-    confidence_raw = parsed.get("confidence")
+    explanation = parsed.get('explanation') or parsed.get(
+        'reason',
+    ) or parsed.get('explain') or ''
+    confidence_raw = parsed.get('confidence')
 
     # Parse confidence
     try:
@@ -848,18 +978,18 @@ async def classify_citation(
     except Exception:
         confidence = 0.0
 
-    evidence = _normalize_int_list(parsed.get("evidence_sentences"))
-    evidence_tables = _normalize_int_list(parsed.get("evidence_tables"))
-    evidence_figures = _normalize_int_list(parsed.get("evidence_figures"))
+    evidence = _normalize_int_list(parsed.get('evidence_sentences'))
+    evidence_tables = _normalize_int_list(parsed.get('evidence_tables'))
+    evidence_figures = _normalize_int_list(parsed.get('evidence_figures'))
 
     classification_json = {
-        "selected": resolved_selected,
-        "explanation": explanation,
-        "confidence": confidence,
-        "evidence_sentences": evidence,
-        "evidence_tables": evidence_tables,
-        "evidence_figures": evidence_figures,
-        "llm_raw": llm_response,  # raw response for audit
+        'selected': resolved_selected,
+        'explanation': explanation,
+        'confidence': confidence,
+        'evidence_sentences': evidence,
+        'evidence_tables': evidence_tables,
+        'evidence_figures': evidence_figures,
+        'llm_raw': llm_response,  # raw response for audit
     }
 
     # Persist into Postgres under a dynamic column name derived from question
@@ -867,28 +997,38 @@ async def classify_citation(
 
     # Human mirror column name (same slug as llm_, but prefixed human_)
     try:
-        col_core_h = snake_case(payload.question, max_len=56) if snake_case else ""
+        col_core_h = snake_case(
+            payload.question, max_len=56,
+        ) if snake_case else ''
     except Exception:
-        col_core_h = ""
-    human_col_name = f"human_{col_core_h}" if col_core_h else "human_col"
+        col_core_h = ''
+    human_col_name = f"human_{col_core_h}" if col_core_h else 'human_col'
 
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
     # Auto-fill human_* from llm_* if missing (never overwrite)
     try:
         human_payload = {
             **classification_json,
-            "autofilled": True,
-            "source": "llm",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            'autofilled': True,
+            'source': 'llm',
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
         }
         await run_in_threadpool(
             cits_dp_service.copy_jsonb_if_empty,
@@ -901,18 +1041,18 @@ async def classify_citation(
     except Exception:
         # best-effort
         pass
-    
-    await update_inclusion_decision(sr, citation_id, payload.screening_step, "llm")
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+    await update_inclusion_decision(sr, citation_id, payload.screening_step, 'llm')
+
+    return {'status': 'success', 'sr_id': sr_id, 'citation_id': citation_id, 'column': col_name, 'classification': classification_json}
 
 
-@router.post("/{sr_id}/citations/{citation_id}/human_classify")
+@router.post('/{sr_id}/citations/{citation_id}/human_classify')
 async def human_classify_citation(
     sr_id: str,
     citation_id: int,
     payload: HumanClassifyRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Persist a human-provided answer for an L1 screening question into the screening
@@ -925,58 +1065,76 @@ async def human_classify_citation(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load systematic review or screening: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or screening: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Ensure citation exists and optionally build combined citation text
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, int(citation_id), table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     citation_text = payload.citation_text
     confidence = payload.confidence
 
     classification_json = {
-        "selected": payload.selected,
-        "explanation": payload.explanation or "",
-        "confidence": confidence if confidence is not None else None,
-        "human": True,
-        "reviewer": payload.reviewer,
-        "citation_text": (citation_text or ""),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        'selected': payload.selected,
+        'explanation': payload.explanation or '',
+        'confidence': confidence if confidence is not None else None,
+        'human': True,
+        'reviewer': payload.reviewer,
+        'citation_text': (citation_text or ''),
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
     # Persist into Postgres under a dynamic column name derived from question
     # Use snake_case to create a stable core name and prefix with 'human_'
     col_core = snake_case(payload.question, max_len=56) if snake_case else None
-    col_name = f"human_{col_core}" if col_core else f"human_col" 
+    col_name = f"human_{col_core}" if col_core else 'human_col'
 
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
 
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
-    
-    await update_inclusion_decision(sr, citation_id, payload.screening_step, "human")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
-    return {"status": "success", "sr_id": sr_id, "citation_id": citation_id, "column": col_name, "classification": classification_json}
+    await update_inclusion_decision(sr, citation_id, payload.screening_step, 'human')
+
+    return {'status': 'success', 'sr_id': sr_id, 'citation_id': citation_id, 'column': col_name, 'classification': classification_json}
 
 
-@router.post("/title-abstract/run")
+@router.post('/title-abstract/run')
 async def run_title_abstract_agentic(
     payload: TitleAbstractRunRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Run orchestrated Title/Abstract screening + critical for one citation.
 
@@ -996,56 +1154,73 @@ async def run_title_abstract_agentic(
             detail=f"Failed to load systematic review or screening: {e}",
         )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Ensure LLM client is available
     if not azure_openai_client.is_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Azure OpenAI client is not configured on the server",
+            detail='Azure OpenAI client is not configured on the server',
         )
 
     # Load citation row
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # Build combined citation text (use SR include columns or fallback to title+abstract)
     include_cols = []
     try:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or []
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
+        ]
     except Exception:
         include_cols = []
     if not include_cols:
-        include_cols = ["title", "abstract"]
+        include_cols = ['title', 'abstract']
 
-    citation_text = citations_router._build_combined_citation_from_row(row, include_cols)
+    citation_text = citations_router._build_combined_citation_from_row(
+        row, include_cols,
+    )
 
     # Load L1 criteria
-    cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
-    l1 = cp.get("l1") if isinstance(cp, dict) else None
-    questions = (l1 or {}).get("questions") if isinstance(l1, dict) else []
-    possible = (l1 or {}).get("possible_answers") if isinstance(l1, dict) else []
-    addinfos = (l1 or {}).get("additional_infos") if isinstance(l1, dict) else []
+    cp = sr.get('criteria_parsed') or sr.get('criteria') or {}
+    l1 = cp.get('l1') if isinstance(cp, dict) else None
+    questions = (l1 or {}).get('questions') if isinstance(l1, dict) else []
+    possible = (l1 or {}).get(
+        'possible_answers',
+    ) if isinstance(l1, dict) else []
+    addinfos = (l1 or {}).get(
+        'additional_infos',
+    ) if isinstance(l1, dict) else []
     questions = questions if isinstance(questions, list) else []
     possible = possible if isinstance(possible, list) else []
     addinfos = addinfos if isinstance(addinfos, list) else []
 
     if not questions:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SR has no L1 criteria questions configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='SR has no L1 criteria questions configured',
+        )
 
-    async def _call_llm(prompt: str) -> Tuple[str, Dict[str, Any], int]:
+    async def _call_llm(prompt: str) -> tuple[str, dict[str, Any], int]:
         """Return (content, usage, latency_ms)."""
         import time
 
         t0 = time.time()
-        messages = [{"role": "user", "content": prompt}]
+        messages = [{'role': 'user', 'content': prompt}]
         resp = await azure_openai_client.chat_completion(
             messages=messages,
             model=payload.model,
@@ -1054,36 +1229,42 @@ async def run_title_abstract_agentic(
             stream=False,
         )
         latency_ms = int((time.time() - t0) * 1000)
-        content = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        usage = resp.get("usage") or {}
+        content = ((resp.get('choices') or [{}])[0].get(
+            'message',
+        ) or {}).get('content') or ''
+        usage = resp.get('usage') or {}
         return str(content), dict(usage), latency_ms
 
-    results: List[Dict[str, Any]] = []
-    user_email = str(current_user.get("email") or current_user.get("id") or "")
+    results: list[dict[str, Any]] = []
+    user_email = str(current_user.get('email') or current_user.get('id') or '')
 
     # Normalize per-criterion filter (if provided, only run that criterion)
-    filter_criterion_key = str(payload.criterion_key or "").strip() or None
+    filter_criterion_key = str(payload.criterion_key or '').strip() or None
 
     for i, q in enumerate(questions):
         if not isinstance(q, str) or not q.strip():
             continue
 
-        opts = possible[i] if i < len(possible) and isinstance(possible[i], list) else []
+        opts = possible[i] if i < len(
+            possible,
+        ) and isinstance(possible[i], list) else []
         opts = [str(o) for o in opts if o is not None and str(o).strip()]
-        xtra = addinfos[i] if i < len(addinfos) and isinstance(addinfos[i], str) else ""
+        xtra = addinfos[i] if i < len(
+            addinfos,
+        ) and isinstance(addinfos[i], str) else ''
 
         if not opts:
             # still return shape to UI
             results.append(
                 {
-                    "question": q,
-                    "criterion_key": snake_case(q, max_len=56),
-                    "error": "No options configured",
-                }
+                    'question': q,
+                    'criterion_key': snake_case(q, max_len=56),
+                    'error': 'No options configured',
+                },
             )
             continue
 
-        options_listed = "\n".join(opts)
+        options_listed = '\n'.join(opts)
         criterion_key = snake_case(q, max_len=56)
 
         # Per-criterion filter: skip if a specific criterion_key was requested
@@ -1095,7 +1276,7 @@ async def run_title_abstract_agentic(
             question=q,
             cit=citation_text,
             options=options_listed,
-            xtra=xtra or "",
+            xtra=xtra or '',
         )
         screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
         screening_parsed = parse_agent_xml(screening_raw)
@@ -1105,99 +1286,115 @@ async def run_title_abstract_agentic(
             screening_run_id = await run_in_threadpool(
                 cits_dp_service.insert_screening_agent_run,
                 {
-                    "sr_id": sr_id,
-                    "table_name": table_name,
-                    "citation_id": citation_id,
-                    "pipeline": "title_abstract",
-                    "criterion_key": criterion_key,
-                    "stage": "screening",
-                    "answer": screening_answer,
-                    "confidence": screening_parsed.confidence,
-                    "rationale": screening_parsed.rationale,
-                    "raw_response": screening_raw,
-                    "guardrails": _build_guardrails(screening_parsed, raw_text=screening_raw, stage="screening"),
-                    "model": payload.model,
-                    "prompt_version": payload.prompt_version,
-                    "temperature": payload.temperature,
-                    "latency_ms": screening_latency,
-                    "input_tokens": screening_usage.get("prompt_tokens"),
-                    "output_tokens": screening_usage.get("completion_tokens"),
+                    'sr_id': sr_id,
+                    'table_name': table_name,
+                    'citation_id': citation_id,
+                    'pipeline': 'title_abstract',
+                    'criterion_key': criterion_key,
+                    'stage': 'screening',
+                    'answer': screening_answer,
+                    'confidence': screening_parsed.confidence,
+                    'rationale': screening_parsed.rationale,
+                    'raw_response': screening_raw,
+                    'guardrails': _build_guardrails(screening_parsed, raw_text=screening_raw, stage='screening'),
+                    'model': payload.model,
+                    'prompt_version': payload.prompt_version,
+                    'temperature': payload.temperature,
+                    'latency_ms': screening_latency,
+                    'input_tokens': screening_usage.get('prompt_tokens'),
+                    'output_tokens': screening_usage.get('completion_tokens'),
                 },
             )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist screening run: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to persist screening run: {e}",
+            )
 
         # 2) critical
-        critical_additions = ""
+        critical_additions = ''
         try:
-            cpa = sr.get("critical_prompt_additions") or {}
+            cpa = sr.get('critical_prompt_additions') or {}
             if isinstance(cpa, dict):
-                block = cpa.get("l1")
+                block = cpa.get('l1')
                 if isinstance(block, dict):
-                    critical_additions = str(block.get(criterion_key) or "")
+                    critical_additions = str(block.get(criterion_key) or '')
         except Exception:
-            critical_additions = ""
+            critical_additions = ''
         if not critical_additions.strip():
-            critical_additions = "(none)"
+            critical_additions = '(none)'
 
-        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
-        critical_listed = "\n".join(critical_opts)
+        critical_opts = build_critical_options(
+            all_options=opts, screening_answer=screening_answer,
+        )
+        critical_listed = '\n'.join(critical_opts)
         critical_prompt = PROMPT_XML_TEMPLATE_TA_CRITICAL.format(
             question=q,
             cit=citation_text,
             screening_answer=screening_answer,
             options=critical_listed,
-            xtra=xtra or "",
+            xtra=xtra or '',
             critical_additions=critical_additions,
         )
         critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
         critical_parsed = parse_agent_xml(critical_raw)
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
 
-        disagrees = str(critical_answer).strip() != "None of the above"
+        disagrees = str(critical_answer).strip() != 'None of the above'
 
         try:
             critical_run_id = await run_in_threadpool(
                 cits_dp_service.insert_screening_agent_run,
                 {
-                    "sr_id": sr_id,
-                    "table_name": table_name,
-                    "citation_id": citation_id,
-                    "pipeline": "title_abstract",
-                    "criterion_key": criterion_key,
-                    "stage": "critical",
-                    "answer": critical_answer,
-                    "confidence": critical_parsed.confidence,
-                    "rationale": critical_parsed.rationale,
-                    "raw_response": critical_raw,
-                    "guardrails": _build_guardrails(critical_parsed, raw_text=critical_raw, stage="critical"),
-                    "model": payload.model,
-                    "prompt_version": payload.prompt_version,
-                    "temperature": payload.temperature,
-                    "latency_ms": critical_latency,
-                    "input_tokens": critical_usage.get("prompt_tokens"),
-                    "output_tokens": critical_usage.get("completion_tokens"),
+                    'sr_id': sr_id,
+                    'table_name': table_name,
+                    'citation_id': citation_id,
+                    'pipeline': 'title_abstract',
+                    'criterion_key': criterion_key,
+                    'stage': 'critical',
+                    'answer': critical_answer,
+                    'confidence': critical_parsed.confidence,
+                    'rationale': critical_parsed.rationale,
+                    'raw_response': critical_raw,
+                    'guardrails': _build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
+                    'model': payload.model,
+                    'prompt_version': payload.prompt_version,
+                    'temperature': payload.temperature,
+                    'latency_ms': critical_latency,
+                    'input_tokens': critical_usage.get('prompt_tokens'),
+                    'output_tokens': critical_usage.get('completion_tokens'),
                 },
             )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to persist critical run: {e}",
+            )
 
         # Write-back to llm_* column so the UI can display the result in aiPanels
         # (same shape as the legacy /classify endpoint, minus evidence fields for TA)
         try:
             llm_col = snake_case_column(q)
             llm_payload = {
-                "selected": screening_answer,
-                "confidence": screening_parsed.confidence,
-                "explanation": screening_parsed.rationale or "",
-                "evidence_sentences": [],
-                "evidence_tables": [],
-                "evidence_figures": [],
-                "source": "agentic",
+                'selected': screening_answer,
+                'confidence': screening_parsed.confidence,
+                'explanation': screening_parsed.rationale or '',
+                'evidence_sentences': [],
+                'evidence_tables': [],
+                'evidence_figures': [],
+                'source': 'agentic',
             }
             await run_in_threadpool(
                 cits_dp_service.update_jsonb_column,
@@ -1211,39 +1408,39 @@ async def run_title_abstract_agentic(
 
         results.append(
             {
-                "question": q,
-                "criterion_key": criterion_key,
-                "screening": {
-                    "run_id": screening_run_id,
-                    "answer": screening_answer,
-                    "confidence": screening_parsed.confidence,
-                    "rationale": screening_parsed.rationale,
-                    "parse_ok": screening_parsed.parse_ok,
+                'question': q,
+                'criterion_key': criterion_key,
+                'screening': {
+                    'run_id': screening_run_id,
+                    'answer': screening_answer,
+                    'confidence': screening_parsed.confidence,
+                    'rationale': screening_parsed.rationale,
+                    'parse_ok': screening_parsed.parse_ok,
                 },
-                "critical": {
-                    "run_id": critical_run_id,
-                    "answer": critical_answer,
-                    "confidence": critical_parsed.confidence,
-                    "rationale": critical_parsed.rationale,
-                    "parse_ok": critical_parsed.parse_ok,
-                    "disagrees": disagrees,
+                'critical': {
+                    'run_id': critical_run_id,
+                    'answer': critical_answer,
+                    'confidence': critical_parsed.confidence,
+                    'rationale': critical_parsed.rationale,
+                    'parse_ok': critical_parsed.parse_ok,
+                    'disagrees': disagrees,
                 },
-            }
+            },
         )
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "citation_id": citation_id,
-        "pipeline": "title_abstract",
-        "criteria": results,
+        'status': 'success',
+        'sr_id': sr_id,
+        'citation_id': citation_id,
+        'pipeline': 'title_abstract',
+        'criteria': results,
     }
 
 
-@router.post("/validate")
+@router.post('/validate')
 async def validate_screening_step(
     payload: ValidateStepRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Mark a citation as validated for a given step.
 
@@ -1253,49 +1450,67 @@ async def validate_screening_step(
 
     sr_id = str(payload.sr_id)
     citation_id = int(payload.citation_id)
-    step = (payload.step or "l1").lower().strip()
+    step = (payload.step or 'l1').lower().strip()
     checked = bool(payload.checked)
 
-    if step not in {"l1", "l2", "parameters"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be one of: l1, l2, parameters")
+    if step not in {'l1', 'l2', 'parameters'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='step must be one of: l1, l2, parameters',
+        )
 
     try:
         _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # New storage: per-step validations list (JSONB)
     validations_col = f"{step}_validations"
     validated_by_col = f"{step}_validated_by"       # legacy summary
     validated_at_col = f"{step}_validated_at"       # legacy summary
 
-    user_email = str(current_user.get("email") or current_user.get("id") or "").strip()
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    user_email = str(
+        current_user.get('email')
+        or current_user.get('id') or '',
+    ).strip()
+    now_iso = datetime.utcnow().isoformat() + 'Z'
 
     try:
         # Ensure columns exist (best-effort; no-migrations philosophy)
-        await run_in_threadpool(cits_dp_service.create_column, validations_col, "JSONB", table_name)
-        await run_in_threadpool(cits_dp_service.create_column, validated_by_col, "TEXT", table_name)
-        await run_in_threadpool(cits_dp_service.create_column, validated_at_col, "TIMESTAMPTZ", table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validations_col, 'JSONB', table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validated_by_col, 'TEXT', table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validated_at_col, 'TIMESTAMPTZ', table_name)
 
         # Load row to get existing validations list
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+            )
 
         existing = _as_validation_list(row.get(validations_col))
 
         if checked:
             # Upsert (replace existing entry for this user with new timestamp)
-            existing = [x for x in existing if str(x.get("user") or "") != user_email]
-            existing.append({"user": user_email, "validated_at": now_iso})
+            existing = [
+                x for x in existing if str(
+                    x.get('user') or '',
+                ) != user_email
+            ]
+            existing.append({'user': user_email, 'validated_at': now_iso})
         else:
             # Remove
-            existing = [x for x in existing if str(x.get("user") or "") != user_email]
+            existing = [
+                x for x in existing if str(
+                    x.get('user') or '',
+                ) != user_email
+            ]
 
         normalized = _dedupe_validations(existing)
 
@@ -1315,39 +1530,47 @@ async def validate_screening_step(
             summary_by = None
             summary_at = None
         else:
-            summary_by = normalized[0].get("user")
-            summary_at = normalized[0].get("validated_at")
-            await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_by_col, str(summary_by or ""), table_name)
-            await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_at_col, str(summary_at or ""), table_name)
+            summary_by = normalized[0].get('user')
+            summary_at = normalized[0].get('validated_at')
+            await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_by_col, str(summary_by or ''), table_name)
+            await run_in_threadpool(cits_dp_service.update_text_column, citation_id, validated_at_col, str(summary_at or ''), table_name)
 
     except HTTPException:
         raise
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update validation fields: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update validation fields: {e}",
+        )
 
     if not u_list:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "citation_id": citation_id,
-        "step": step,
-        "checked": checked,
-        "user": user_email,
-        "validated_at": now_iso if checked else None,
-        "validations": normalized,
-        "summary_validated_by": summary_by,
-        "summary_validated_at": summary_at,
+        'status': 'success',
+        'sr_id': sr_id,
+        'citation_id': citation_id,
+        'step': step,
+        'checked': checked,
+        'user': user_email,
+        'validated_at': now_iso if checked else None,
+        'validations': normalized,
+        'summary_validated_by': summary_by,
+        'summary_validated_at': summary_at,
     }
 
 
-@router.post("/fulltext/run")
+@router.post('/fulltext/run')
 async def run_fulltext_agentic(
     payload: FulltextRunRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Run orchestrated Fulltext screening + critical for one citation (L2)."""
 
@@ -1359,35 +1582,45 @@ async def run_fulltext_agentic(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     if not azure_openai_client.is_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Azure OpenAI client is not configured on the server",
+            detail='Azure OpenAI client is not configured on the server',
         )
 
     # Load citation row
     try:
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
 
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
+        )
 
     # Ensure fulltext exists (CAN-SR source of truth: extracted DI/Grobid artifacts)
-    if not row.get("fulltext"):
+    if not row.get('fulltext'):
         # We don't have a direct SR id in the extract endpoint signature; it expects sr_id.
         # We'll try best-effort to trigger extraction if fulltext_url exists.
         try:
             from ..extract.router import extract_fulltext_from_storage
 
-            await extract_fulltext_from_storage(sr_id, citation_id, current_user=current_user)  # type: ignore
+            # type: ignore
+            await extract_fulltext_from_storage(sr_id, citation_id, current_user=current_user)
         except Exception:
             pass
 
@@ -1395,21 +1628,24 @@ async def run_fulltext_agentic(
 
     include_cols = []
     try:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or []
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
+        ]
     except Exception:
         include_cols = []
     if not include_cols:
-        include_cols = ["title", "abstract"]
+        include_cols = ['title', 'abstract']
 
-    citation_text = citations_router._build_combined_citation_from_row(row or {}, include_cols)
-    fulltext = (row or {}).get("fulltext") or citation_text
+    citation_text = citations_router._build_combined_citation_from_row(
+        row or {}, include_cols,
+    )
+    fulltext = (row or {}).get('fulltext') or citation_text
 
     # Tables/Figures context from row
-    tables_md_lines: List[str] = []
-    figures_lines: List[str] = []
-    images: List[Tuple[bytes, str]] = []
+    tables_md_lines: list[str] = []
+    figures_lines: list[str] = []
+    images: list[tuple[bytes, str]] = []
 
-    ft_tables = (row or {}).get("fulltext_tables")
+    ft_tables = (row or {}).get('fulltext_tables')
     if isinstance(ft_tables, str):
         try:
             ft_tables = json.loads(ft_tables)
@@ -1419,20 +1655,21 @@ async def run_fulltext_agentic(
         for item in ft_tables:
             if not isinstance(item, dict):
                 continue
-            idx = item.get("index")
-            blob_addr = item.get("blob_address")
-            caption = item.get("caption")
+            idx = item.get('index')
+            blob_addr = item.get('blob_address')
+            caption = item.get('caption')
             if not idx or not blob_addr:
                 continue
             try:
                 md_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
-                md_txt = md_bytes.decode("utf-8", errors="replace")
-                header = f"Table [T{idx}]" + (f" caption: {caption}" if caption else "")
-                tables_md_lines.extend([header, md_txt, ""])
+                md_txt = md_bytes.decode('utf-8', errors='replace')
+                header = f"Table [T{idx}]" + \
+                    (f" caption: {caption}" if caption else '')
+                tables_md_lines.extend([header, md_txt, ''])
             except Exception:
                 continue
 
-    ft_figs = (row or {}).get("fulltext_figures")
+    ft_figs = (row or {}).get('fulltext_figures')
     if isinstance(ft_figs, str):
         try:
             ft_figs = json.loads(ft_figs)
@@ -1442,30 +1679,44 @@ async def run_fulltext_agentic(
         for item in ft_figs:
             if not isinstance(item, dict):
                 continue
-            idx = item.get("index")
-            blob_addr = item.get("blob_address")
-            caption = item.get("caption")
+            idx = item.get('index')
+            blob_addr = item.get('blob_address')
+            caption = item.get('caption')
             if not idx or not blob_addr:
                 continue
-            figures_lines.append(f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})")
+            figures_lines.append(
+                f"Figure [F{idx}] caption: {caption or '(no caption)'} (see attached image F{idx})",
+            )
             try:
                 img_bytes, _ = await storage_service.get_bytes_by_path(blob_addr)
                 if img_bytes:
-                    images.append((img_bytes, "image/png"))
+                    images.append((img_bytes, 'image/png'))
             except Exception:
                 continue
 
     # Load L2 criteria (L2 = L1 + L2 questions)
-    cp = sr.get("criteria_parsed") or sr.get("criteria") or {}
-    l1_blk = cp.get("l1") if isinstance(cp, dict) else None
-    l2_blk = cp.get("l2") if isinstance(cp, dict) else None
+    cp = sr.get('criteria_parsed') or sr.get('criteria') or {}
+    l1_blk = cp.get('l1') if isinstance(cp, dict) else None
+    l2_blk = cp.get('l2') if isinstance(cp, dict) else None
 
-    l1_questions = (l1_blk or {}).get("questions") if isinstance(l1_blk, dict) else []
-    l2_questions = (l2_blk or {}).get("questions") if isinstance(l2_blk, dict) else []
-    l1_possible = (l1_blk or {}).get("possible_answers") if isinstance(l1_blk, dict) else []
-    l2_possible = (l2_blk or {}).get("possible_answers") if isinstance(l2_blk, dict) else []
-    l1_addinfos = (l1_blk or {}).get("additional_infos") if isinstance(l1_blk, dict) else []
-    l2_addinfos = (l2_blk or {}).get("additional_infos") if isinstance(l2_blk, dict) else []
+    l1_questions = (l1_blk or {}).get(
+        'questions',
+    ) if isinstance(l1_blk, dict) else []
+    l2_questions = (l2_blk or {}).get(
+        'questions',
+    ) if isinstance(l2_blk, dict) else []
+    l1_possible = (l1_blk or {}).get(
+        'possible_answers',
+    ) if isinstance(l1_blk, dict) else []
+    l2_possible = (l2_blk or {}).get(
+        'possible_answers',
+    ) if isinstance(l2_blk, dict) else []
+    l1_addinfos = (l1_blk or {}).get(
+        'additional_infos',
+    ) if isinstance(l1_blk, dict) else []
+    l2_addinfos = (l2_blk or {}).get(
+        'additional_infos',
+    ) if isinstance(l2_blk, dict) else []
 
     # Normalize lists
     l1_questions = l1_questions if isinstance(l1_questions, list) else []
@@ -1477,23 +1728,27 @@ async def run_fulltext_agentic(
 
     # Merge preserving order and remembering which block it came from so we can
     # pick the right options/additional_infos.
-    merged_questions: List[Tuple[str, str, int]] = []  # (question, source_step, index)
+    # (question, source_step, index)
+    merged_questions: list[tuple[str, str, int]] = []
     seen_q: set[str] = set()
     for idx, q in enumerate(l1_questions):
         if not isinstance(q, str) or not q.strip() or q in seen_q:
             continue
         seen_q.add(q)
-        merged_questions.append((q, "l1", idx))
+        merged_questions.append((q, 'l1', idx))
     for idx, q in enumerate(l2_questions):
         if not isinstance(q, str) or not q.strip() or q in seen_q:
             continue
         seen_q.add(q)
-        merged_questions.append((q, "l2", idx))
+        merged_questions.append((q, 'l2', idx))
 
     if not merged_questions:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SR has no L2 criteria questions configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='SR has no L2 criteria questions configured',
+        )
 
-    async def _call_llm(prompt: str) -> Tuple[str, Dict[str, Any], int]:
+    async def _call_llm(prompt: str) -> tuple[str, dict[str, Any], int]:
         import time
 
         t0 = time.time()
@@ -1511,7 +1766,7 @@ async def run_fulltext_agentic(
             # multimodal_chat does not expose usage
             return str(content), {}, latency_ms
 
-        messages = [{"role": "user", "content": prompt}]
+        messages = [{'role': 'user', 'content': prompt}]
         resp = await azure_openai_client.chat_completion(
             messages=messages,
             model=payload.model,
@@ -1520,34 +1775,48 @@ async def run_fulltext_agentic(
             stream=False,
         )
         latency_ms = int((time.time() - t0) * 1000)
-        content = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        usage = resp.get("usage") or {}
+        content = ((resp.get('choices') or [{}])[0].get(
+            'message',
+        ) or {}).get('content') or ''
+        usage = resp.get('usage') or {}
         return str(content), dict(usage), latency_ms
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Normalize per-criterion filter (if provided, only run that criterion)
-    filter_criterion_key = str(payload.criterion_key or "").strip() or None
+    filter_criterion_key = str(payload.criterion_key or '').strip() or None
 
     for q, source_step, idx in merged_questions:
         if not isinstance(q, str) or not q.strip():
             continue
 
-        if source_step == "l1":
-            opts_raw = l1_possible[idx] if idx < len(l1_possible) and isinstance(l1_possible[idx], list) else []
-            xtra = l1_addinfos[idx] if idx < len(l1_addinfos) and isinstance(l1_addinfos[idx], str) else ""
+        if source_step == 'l1':
+            opts_raw = l1_possible[idx] if idx < len(
+                l1_possible,
+            ) and isinstance(l1_possible[idx], list) else []
+            xtra = l1_addinfos[idx] if idx < len(
+                l1_addinfos,
+            ) and isinstance(l1_addinfos[idx], str) else ''
         else:
-            opts_raw = l2_possible[idx] if idx < len(l2_possible) and isinstance(l2_possible[idx], list) else []
-            xtra = l2_addinfos[idx] if idx < len(l2_addinfos) and isinstance(l2_addinfos[idx], str) else ""
+            opts_raw = l2_possible[idx] if idx < len(
+                l2_possible,
+            ) and isinstance(l2_possible[idx], list) else []
+            xtra = l2_addinfos[idx] if idx < len(
+                l2_addinfos,
+            ) and isinstance(l2_addinfos[idx], str) else ''
 
         opts = [str(o) for o in opts_raw if o is not None and str(o).strip()]
 
         if not opts:
-            results.append({"question": q, "criterion_key": snake_case(q, max_len=56), "error": "No options configured"})
+            results.append({
+                'question': q, 'criterion_key': snake_case(
+                    q, max_len=56,
+                ), 'error': 'No options configured',
+            })
             continue
 
         criterion_key = snake_case(q, max_len=56)
-        options_listed = "\n".join(opts)
+        options_listed = '\n'.join(opts)
 
         # Per-criterion filter: skip if a specific criterion_key was requested
         if filter_criterion_key and criterion_key != filter_criterion_key:
@@ -1557,10 +1826,10 @@ async def run_fulltext_agentic(
         screening_prompt = PROMPT_XML_TEMPLATE_FULLTEXT.format(
             question=q,
             options=options_listed,
-            xtra=xtra or "",
+            xtra=xtra or '',
             fulltext=fulltext,
-            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
-            figures="\n".join(figures_lines) if figures_lines else "(none)",
+            tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
+            figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
         screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
         screening_parsed = parse_agent_xml(screening_raw)
@@ -1570,104 +1839,128 @@ async def run_fulltext_agentic(
             screening_run_id = await run_in_threadpool(
                 cits_dp_service.insert_screening_agent_run,
                 {
-                    "sr_id": sr_id,
-                    "table_name": table_name,
-                    "citation_id": citation_id,
-                    "pipeline": "fulltext",
-                    "criterion_key": criterion_key,
-                    "stage": "screening",
-                    "answer": screening_answer,
-                    "confidence": screening_parsed.confidence,
-                    "rationale": screening_parsed.rationale,
-                    "raw_response": screening_raw,
-                    "guardrails": _build_guardrails(screening_parsed, raw_text=screening_raw, stage="screening"),
-                    "model": payload.model,
-                    "prompt_version": payload.prompt_version,
-                    "temperature": payload.temperature,
-                    "latency_ms": screening_latency,
-                    "input_tokens": screening_usage.get("prompt_tokens"),
-                    "output_tokens": screening_usage.get("completion_tokens"),
+                    'sr_id': sr_id,
+                    'table_name': table_name,
+                    'citation_id': citation_id,
+                    'pipeline': 'fulltext',
+                    'criterion_key': criterion_key,
+                    'stage': 'screening',
+                    'answer': screening_answer,
+                    'confidence': screening_parsed.confidence,
+                    'rationale': screening_parsed.rationale,
+                    'raw_response': screening_raw,
+                    'guardrails': _build_guardrails(screening_parsed, raw_text=screening_raw, stage='screening'),
+                    'model': payload.model,
+                    'prompt_version': payload.prompt_version,
+                    'temperature': payload.temperature,
+                    'latency_ms': screening_latency,
+                    'input_tokens': screening_usage.get('prompt_tokens'),
+                    'output_tokens': screening_usage.get('completion_tokens'),
                 },
             )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist screening run: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to persist screening run: {e}",
+            )
 
         # 2) critical
-        critical_additions = ""
+        critical_additions = ''
         try:
-            cpa = sr.get("critical_prompt_additions") or {}
+            cpa = sr.get('critical_prompt_additions') or {}
             if isinstance(cpa, dict):
                 # Prefer L2 additions (fulltext step). If this question originated from L1,
                 # fall back to L1 additions when L2 is missing.
-                block_l2 = cpa.get("l2") if isinstance(cpa.get("l2"), dict) else {}
-                block_l1 = cpa.get("l1") if isinstance(cpa.get("l1"), dict) else {}
-                critical_additions = str((block_l2 or {}).get(criterion_key) or "")
-                if (not critical_additions.strip()) and source_step == "l1":
-                    critical_additions = str((block_l1 or {}).get(criterion_key) or "")
+                block_l2 = cpa.get('l2') if isinstance(
+                    cpa.get('l2'), dict,
+                ) else {}
+                block_l1 = cpa.get('l1') if isinstance(
+                    cpa.get('l1'), dict,
+                ) else {}
+                critical_additions = str(
+                    (block_l2 or {}).get(criterion_key) or '',
+                )
+                if (not critical_additions.strip()) and source_step == 'l1':
+                    critical_additions = str(
+                        (block_l1 or {}).get(criterion_key) or '',
+                    )
         except Exception:
-            critical_additions = ""
+            critical_additions = ''
         if not critical_additions.strip():
-            critical_additions = "(none)"
+            critical_additions = '(none)'
 
-        critical_opts = build_critical_options(all_options=opts, screening_answer=screening_answer)
-        critical_listed = "\n".join(critical_opts)
+        critical_opts = build_critical_options(
+            all_options=opts, screening_answer=screening_answer,
+        )
+        critical_listed = '\n'.join(critical_opts)
         critical_prompt = PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL.format(
             question=q,
             screening_answer=screening_answer,
             options=critical_listed,
-            xtra=xtra or "",
+            xtra=xtra or '',
             critical_additions=critical_additions,
             fulltext=fulltext,
-            tables="\n".join(tables_md_lines) if tables_md_lines else "(none)",
-            figures="\n".join(figures_lines) if figures_lines else "(none)",
+            tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
+            figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
         critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
         critical_parsed = parse_agent_xml(critical_raw)
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
-        disagrees = str(critical_answer).strip() != "None of the above"
+        disagrees = str(critical_answer).strip() != 'None of the above'
 
         try:
             critical_run_id = await run_in_threadpool(
                 cits_dp_service.insert_screening_agent_run,
                 {
-                    "sr_id": sr_id,
-                    "table_name": table_name,
-                    "citation_id": citation_id,
-                    "pipeline": "fulltext",
-                    "criterion_key": criterion_key,
-                    "stage": "critical",
-                    "answer": critical_answer,
-                    "confidence": critical_parsed.confidence,
-                    "rationale": critical_parsed.rationale,
-                    "raw_response": critical_raw,
-                    "guardrails": _build_guardrails(critical_parsed, raw_text=critical_raw, stage="critical"),
-                    "model": payload.model,
-                    "prompt_version": payload.prompt_version,
-                    "temperature": payload.temperature,
-                    "latency_ms": critical_latency,
-                    "input_tokens": critical_usage.get("prompt_tokens"),
-                    "output_tokens": critical_usage.get("completion_tokens"),
+                    'sr_id': sr_id,
+                    'table_name': table_name,
+                    'citation_id': citation_id,
+                    'pipeline': 'fulltext',
+                    'criterion_key': criterion_key,
+                    'stage': 'critical',
+                    'answer': critical_answer,
+                    'confidence': critical_parsed.confidence,
+                    'rationale': critical_parsed.rationale,
+                    'raw_response': critical_raw,
+                    'guardrails': _build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
+                    'model': payload.model,
+                    'prompt_version': payload.prompt_version,
+                    'temperature': payload.temperature,
+                    'latency_ms': critical_latency,
+                    'input_tokens': critical_usage.get('prompt_tokens'),
+                    'output_tokens': critical_usage.get('completion_tokens'),
                 },
             )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist critical run: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to persist critical run: {e}",
+            )
 
         # Write-back to llm_* column so the UI can display the result in aiPanels
         # (fulltext: includes evidence fields parsed from the XML response)
         try:
             llm_col = snake_case_column(q)
             llm_payload = {
-                "selected": screening_answer,
-                "confidence": screening_parsed.confidence,
-                "explanation": screening_parsed.rationale or "",
-                "evidence_sentences": screening_parsed.evidence_sentences or [],
-                "evidence_tables": screening_parsed.evidence_tables or [],
-                "evidence_figures": screening_parsed.evidence_figures or [],
-                "source": "agentic",
+                'selected': screening_answer,
+                'confidence': screening_parsed.confidence,
+                'explanation': screening_parsed.rationale or '',
+                'evidence_sentences': screening_parsed.evidence_sentences or [],
+                'evidence_tables': screening_parsed.evidence_tables or [],
+                'evidence_figures': screening_parsed.evidence_figures or [],
+                'source': 'agentic',
             }
             await run_in_threadpool(
                 cits_dp_service.update_jsonb_column,
@@ -1681,44 +1974,44 @@ async def run_fulltext_agentic(
 
         results.append(
             {
-                "question": q,
-                "criterion_key": criterion_key,
-                "screening": {
-                    "run_id": screening_run_id,
-                    "answer": screening_answer,
-                    "confidence": screening_parsed.confidence,
-                    "rationale": screening_parsed.rationale,
-                    "parse_ok": screening_parsed.parse_ok,
-                    "evidence_sentences": screening_parsed.evidence_sentences,
-                    "evidence_tables": screening_parsed.evidence_tables,
-                    "evidence_figures": screening_parsed.evidence_figures,
+                'question': q,
+                'criterion_key': criterion_key,
+                'screening': {
+                    'run_id': screening_run_id,
+                    'answer': screening_answer,
+                    'confidence': screening_parsed.confidence,
+                    'rationale': screening_parsed.rationale,
+                    'parse_ok': screening_parsed.parse_ok,
+                    'evidence_sentences': screening_parsed.evidence_sentences,
+                    'evidence_tables': screening_parsed.evidence_tables,
+                    'evidence_figures': screening_parsed.evidence_figures,
                 },
-                "critical": {
-                    "run_id": critical_run_id,
-                    "answer": critical_answer,
-                    "confidence": critical_parsed.confidence,
-                    "rationale": critical_parsed.rationale,
-                    "parse_ok": critical_parsed.parse_ok,
-                    "disagrees": disagrees,
+                'critical': {
+                    'run_id': critical_run_id,
+                    'answer': critical_answer,
+                    'confidence': critical_parsed.confidence,
+                    'rationale': critical_parsed.rationale,
+                    'parse_ok': critical_parsed.parse_ok,
+                    'disagrees': disagrees,
                 },
-            }
+            },
         )
 
     return {
-        "status": "success",
-        "sr_id": sr_id,
-        "citation_id": citation_id,
-        "pipeline": "fulltext",
-        "criteria": results,
+        'status': 'success',
+        'sr_id': sr_id,
+        'citation_id': citation_id,
+        'pipeline': 'fulltext',
+        'criteria': results,
     }
 
 
-@router.get("/agent-runs/latest", response_model=AgentRunsQueryResponse)
+@router.get('/agent-runs/latest', response_model=AgentRunsQueryResponse)
 async def get_latest_agent_runs(
     sr_id: str,
     pipeline: str,
     citation_ids: str,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Fetch latest screening_agent_runs for a set of citations.
 
@@ -1728,32 +2021,42 @@ async def get_latest_agent_runs(
       - citation_ids: comma-separated citation ids
     """
 
-    pipeline_norm = (pipeline or "").strip().lower()
-    if pipeline_norm in {"ta", "titleabstract", "title-abstract"}:
-        pipeline_norm = "title_abstract"
-    if pipeline_norm not in {"title_abstract", "fulltext"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pipeline must be 'title_abstract' or 'fulltext'")
+    pipeline_norm = (pipeline or '').strip().lower()
+    if pipeline_norm in {'ta', 'titleabstract', 'title-abstract'}:
+        pipeline_norm = 'title_abstract'
+    if pipeline_norm not in {'title_abstract', 'fulltext'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="pipeline must be 'title_abstract' or 'fulltext'",
+        )
 
-    raw_ids = [p.strip() for p in (citation_ids or "").split(",") if p.strip()]
+    raw_ids = [p.strip() for p in (citation_ids or '').split(',') if p.strip()]
     if not raw_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="citation_ids is required")
-    parsed_ids: List[int] = []
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='citation_ids is required',
+        )
+    parsed_ids: list[int] = []
     for p in raw_ids:
         try:
             parsed_ids.append(int(p))
         except Exception:
             continue
     if not parsed_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="citation_ids must be a comma-separated list of integers")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='citation_ids must be a comma-separated list of integers',
+        )
 
     try:
         _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     try:
         rows = await run_in_threadpool(
@@ -1764,18 +2067,23 @@ async def get_latest_agent_runs(
             pipeline=pipeline_norm,
         )
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening_agent_runs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening_agent_runs: {e}",
+        )
 
     return AgentRunsQueryResponse(sr_id=sr_id, pipeline=pipeline_norm, citation_ids=parsed_ids, runs=rows)
 
 
-@router.get("/metrics", response_model=ScreeningMetricsResponse, response_model_exclude_none=True)
+@router.get('/metrics', response_model=ScreeningMetricsResponse, response_model_exclude_none=True)
 async def get_screening_metrics(
     sr_id: str,
-    step: str = "l1",
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    step: str = 'l1',
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Return per-criterion metrics + validation summaries for a screening step.
 
@@ -1788,30 +2096,38 @@ async def get_screening_metrics(
         3) Else needs review if ANY criterion is low confidence (below its threshold).
     """
 
-    step_norm = str(step or "l1").lower().strip()
-    if step_norm not in {"l1", "l2"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+    step_norm = str(step or 'l1').lower().strip()
+    if step_norm not in {'l1', 'l2'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='step must be l1 or l2',
+        )
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Criteria questions for step (L2 includes L1 + L2)
-    cp = sr.get("criteria_parsed") or {}
+    cp = sr.get('criteria_parsed') or {}
     questions = _questions_for_step(cp, step_norm)
 
     # Threshold map
-    sr_thresholds = sr.get("screening_thresholds") or {}
-    step_thresholds = sr_thresholds.get(step_norm) if isinstance(sr_thresholds, dict) else None
-    step_thresholds = step_thresholds if isinstance(step_thresholds, dict) else {}
+    sr_thresholds = sr.get('screening_thresholds') or {}
+    step_thresholds = sr_thresholds.get(
+        step_norm,
+    ) if isinstance(sr_thresholds, dict) else None
+    step_thresholds = step_thresholds if isinstance(
+        step_thresholds, dict,
+    ) else {}
 
     # Build criterion list (key + label + threshold)
-    criteria: List[Dict[str, Any]] = []
+    criteria: list[dict[str, Any]] = []
     for q in questions:
         if not isinstance(q, str) or not q.strip():
             continue
@@ -1822,19 +2138,22 @@ async def get_screening_metrics(
             thr = max(0.0, min(1.0, thr))
         except Exception:
             thr = 0.9
-        criteria.append({"criterion_key": ck, "label": q, "threshold": thr})
+        criteria.append({'criterion_key': ck, 'label': q, 'threshold': thr})
 
     # Pull all citation ids for this step (L2 list is filtered by human_l1_decision include)
-    filter_step = ""
-    if step_norm == "l2":
-        filter_step = "l1"
+    filter_step = ''
+    if step_norm == 'l2':
+        filter_step = 'l1'
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list citations: {e}",
+        )
 
     # Load only columns we need
-    needed_cols: List[str] = ["id"]
+    needed_cols: list[str] = ['id']
     validations_col = f"{step_norm}_validations"
     legacy_validated_by = f"{step_norm}_validated_by"
 
@@ -1842,14 +2161,14 @@ async def get_screening_metrics(
 
     # Phase 2: canonical human labels (per criterion) live in human_{criterion_key} JSONB.
     # We only need these to compute validated-set agreement metrics.
-    human_cols: Dict[str, str] = {}
+    human_cols: dict[str, str] = {}
     for c in criteria:
-        ck = c["criterion_key"]
-        col = f"human_{ck}" if ck else "human_col"
+        ck = c['criterion_key']
+        col = f"human_{ck}" if ck else 'human_col'
         human_cols[ck] = col
         needed_cols.append(col)
 
-    warnings: List[Dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     # Legacy safety: do NOT attempt to fabricate agent runs.
     # If legacy llm_* outputs exist but normalized runs are missing, we warn the UI
     # so the user can run run-all (which will force overwrite and create real runs).
@@ -1864,19 +2183,19 @@ async def get_screening_metrics(
         if legacy_needs:
             warnings.append(
                 {
-                    "code": "LEGACY_DATA_NEEDS_RUN_ALL",
-                    "severity": "warning",
-                    "message": "Legacy screening results detected (llm_* columns) but agentic runs are missing. Please run Run-all to regenerate results.",
-                    "sr_id": sr_id,
-                    "step": step_norm,
-                }
+                    'code': 'LEGACY_DATA_NEEDS_RUN_ALL',
+                    'severity': 'warning',
+                    'message': 'Legacy screening results detected (llm_* columns) but agentic runs are missing. Please run Run-all to regenerate results.',
+                    'sr_id': sr_id,
+                    'step': step_norm,
+                },
             )
     except Exception:
         pass
 
     # We'll compute per-citation needs-review based on agent runs only.
     # Fetch latest runs for all citations (bulk query using service helper)
-    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    pipeline_norm = 'title_abstract' if step_norm == 'l1' else 'fulltext'
     try:
         runs = await run_in_threadpool(
             cits_dp_service.list_latest_agent_runs,
@@ -1886,18 +2205,21 @@ async def get_screening_metrics(
             pipeline=pipeline_norm,
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agent runs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load agent runs: {e}",
+        )
 
     # Group runs by citation then criterion
-    runs_by_cit: Dict[int, Dict[str, Dict[str, Dict[str, Any]]]] = {}
+    runs_by_cit: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
     for r in runs or []:
         try:
-            cid = int(r.get("citation_id"))
+            cid = int(r.get('citation_id'))
         except Exception:
             continue
-        ck = str(r.get("criterion_key") or "")
-        stg = str(r.get("stage") or "")
-        if not ck or stg not in {"screening", "critical"}:
+        ck = str(r.get('criterion_key') or '')
+        stg = str(r.get('stage') or '')
+        if not ck or stg not in {'screening', 'critical'}:
             continue
         if cid not in runs_by_cit:
             runs_by_cit[cid] = {}
@@ -1910,10 +2232,13 @@ async def get_screening_metrics(
     try:
         rows = await run_in_threadpool(cits_dp_service.get_citations_by_ids, ids, table_name, needed_cols)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load citation rows: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load citation rows: {e}",
+        )
 
     # Helper: is validated?
-    def _is_validated(row: Dict[str, Any]) -> bool:
+    def _is_validated(row: dict[str, Any]) -> bool:
         v = row.get(validations_col)
         if v:
             try:
@@ -1927,42 +2252,42 @@ async def get_screening_metrics(
         return bool(row.get(legacy_validated_by))
 
     # Per-criterion aggregates
-    agg: Dict[str, Dict[str, int]] = {}
+    agg: dict[str, dict[str, int]] = {}
     for c in criteria:
-        ck = c["criterion_key"]
+        ck = c['criterion_key']
         agg[ck] = {
-            "total_citations": 0,
-            "has_run_count": 0,
-            "low_confidence_count": 0,
-            "critical_disagreement_count": 0,
-            "confident_exclude_count": 0,
+            'total_citations': 0,
+            'has_run_count': 0,
+            'low_confidence_count': 0,
+            'critical_disagreement_count': 0,
+            'confident_exclude_count': 0,
             # Count of citations where THIS criterion triggered needs-review.
-            "needs_human_review_count": 0,
+            'needs_human_review_count': 0,
             # Validated-set agreement counts (AI screening vs canonical human label).
-            "human_agree_count": 0,
-            "human_total_count": 0,
+            'human_agree_count': 0,
+            'human_total_count': 0,
             # All-with-human-answers agreement counts (not just validated).
-            "human_agree_count_all": 0,
-            "human_total_count_all": 0,
+            'human_agree_count_all': 0,
+            'human_total_count_all': 0,
             # Confusion matrix counters (all with human answers).
             # Positive = include, Negative = exclude.
             # TP = AI include & human include, FP = AI include & human exclude,
             # FN = AI exclude & human include, TN = AI exclude & human exclude.
-            "cm_tp": 0,
-            "cm_fp": 0,
-            "cm_fn": 0,
-            "cm_tn": 0,
+            'cm_tp': 0,
+            'cm_fp': 0,
+            'cm_fn': 0,
+            'cm_tn': 0,
             # Queue-specific confusion matrix: only for citations where this criterion
             # triggered human review. Used to compute post-validation corrected metrics.
-            "queue_cm_tp": 0,
-            "queue_cm_fp": 0,
-            "queue_cm_fn": 0,
-            "queue_cm_tn": 0,
+            'queue_cm_tp': 0,
+            'queue_cm_fp': 0,
+            'queue_cm_fn': 0,
+            'queue_cm_tn': 0,
 
             # Fallback proxy when human labels are not available:
             # count how often critical agrees with screening.
-            "crit_agree_count": 0,
-            "crit_total_count": 0,
+            'crit_agree_count': 0,
+            'crit_total_count': 0,
         }
 
     total_citations = 0
@@ -1975,7 +2300,7 @@ async def get_screening_metrics(
     # Iterate citations and compute needs-review + per-criterion counts
     for row in rows or []:
         try:
-            cid = int(row.get("id"))
+            cid = int(row.get('id'))
         except Exception:
             continue
         total_citations += 1
@@ -1997,158 +2322,166 @@ async def get_screening_metrics(
         has_guardrail_issue = False
 
         for c in criteria:
-            ck = c["criterion_key"]
-            thr = float(c["threshold"])
+            ck = c['criterion_key']
+            thr = float(c['threshold'])
             a = agg.get(ck)
             if a is None:
                 continue
-            a["total_citations"] += 1
+            a['total_citations'] += 1
 
             triggered_this_criterion = False
 
             rpair = per_crit.get(ck) or {}
-            scr = rpair.get("screening")
-            crit = rpair.get("critical")
+            scr = rpair.get('screening')
+            crit = rpair.get('critical')
 
             if scr:
-                a["has_run_count"] += 1
-                conf = scr.get("confidence")
+                a['has_run_count'] += 1
+                conf = scr.get('confidence')
                 try:
                     conf_f = float(conf)
                 except Exception:
                     conf_f = None
-                ans = scr.get("answer")
+                ans = scr.get('answer')
 
                 # Compute agreement for ALL citations with human answers (not just validated)
                 hcol = human_cols.get(ck) or f"human_{ck}"
                 human_sel = _parse_selected_from_human_payload(row.get(hcol))
                 if human_sel is not None:
-                    a["human_total_count_all"] += 1
+                    a['human_total_count_all'] += 1
                     # Agreement definition: exact string match after stripping.
-                    if str(human_sel).strip() == str(ans or "").strip():
-                        a["human_agree_count_all"] += 1
-                    
+                    if str(human_sel).strip() == str(ans or '').strip():
+                        a['human_agree_count_all'] += 1
+
                     # Also count for validated set if this citation is validated
                     if validated:
-                        a["human_total_count"] += 1
-                        if str(human_sel).strip() == str(ans or "").strip():
-                            a["human_agree_count"] += 1
+                        a['human_total_count'] += 1
+                        if str(human_sel).strip() == str(ans or '').strip():
+                            a['human_agree_count'] += 1
 
                     # Confusion matrix: Positive=include, Negative=exclude
                     # AI predicts "include" if answer does NOT contain (exclude)
                     ai_is_include = not _is_exclude_answer(ans)
                     human_is_include = not _is_exclude_answer(human_sel)
                     if ai_is_include and human_is_include:
-                        a["cm_tp"] += 1
+                        a['cm_tp'] += 1
                     elif ai_is_include and not human_is_include:
-                        a["cm_fp"] += 1
+                        a['cm_fp'] += 1
                     elif not ai_is_include and human_is_include:
-                        a["cm_fn"] += 1
+                        a['cm_fn'] += 1
                     else:
-                        a["cm_tn"] += 1
+                        a['cm_tn'] += 1
 
                     # Track queue-specific CM (will be populated after triggered_this_criterion is finalized)
                     # Store (ai_is_include, human_is_include) for deferred queue CM update
                     # We use a sentinel to mark that this citation+criterion has a CM contribution
-                    if not hasattr(a, "_pending_cm"):
+                    if not hasattr(a, '_pending_cm'):
                         pass  # handled below after triggered_this_criterion
 
                 if conf_f is not None and conf_f < thr:
-                    a["low_confidence_count"] += 1
+                    a['low_confidence_count'] += 1
                     has_low_confidence = True
                     # This criterion triggers review for this citation.
                     triggered_this_criterion = True
 
                 # Guardrails: missing/failed parse should be treated as needs review.
                 try:
-                    g = scr.get("guardrails")
+                    g = scr.get('guardrails')
                     if isinstance(g, str):
                         g = json.loads(g)
                     if isinstance(g, dict):
-                        if g.get("parse_ok") is False or g.get("missing_answer") or g.get("missing_confidence"):
+                        if g.get('parse_ok') is False or g.get('missing_answer') or g.get('missing_confidence'):
                             has_guardrail_issue = True
                             triggered_this_criterion = True
                 except Exception:
                     # If guardrails column exists but is unparsable, treat as issue.
-                    if scr.get("guardrails") is not None:
+                    if scr.get('guardrails') is not None:
                         has_guardrail_issue = True
                         triggered_this_criterion = True
 
                 # Confident exclude requires critical agreement
-                crit_has = bool(crit) and str(crit.get("answer") or "").strip() != ""
-                crit_agrees = crit_has and (not _is_disagreeing_critical_answer(crit.get("answer")))
+                crit_has = bool(crit) and str(
+                    crit.get('answer') or '',
+                ).strip() != ''
+                crit_agrees = crit_has and (
+                    not _is_disagreeing_critical_answer(crit.get('answer'))
+                )
                 if crit_has:
-                    a["crit_total_count"] += 1
+                    a['crit_total_count'] += 1
                     if crit_agrees:
-                        a["crit_agree_count"] += 1
+                        a['crit_agree_count'] += 1
                 if conf_f is not None and conf_f >= thr and _is_exclude_answer(ans) and crit_agrees:
-                    a["confident_exclude_count"] += 1
+                    a['confident_exclude_count'] += 1
                     has_confident_exclude = True
 
             # Treat missing/empty critical as disagreement/parse issue (conservative).
-            if not crit or str(crit.get("answer") or "").strip() == "":
-                a["critical_disagreement_count"] += 1
+            if not crit or str(crit.get('answer') or '').strip() == '':
+                a['critical_disagreement_count'] += 1
                 has_critical_disagreement = True
                 triggered_this_criterion = True
-            elif _is_disagreeing_critical_answer(crit.get("answer")):
-                a["critical_disagreement_count"] += 1
+            elif _is_disagreeing_critical_answer(crit.get('answer')):
+                a['critical_disagreement_count'] += 1
                 has_critical_disagreement = True
                 triggered_this_criterion = True
 
             # Guardrails on critical stage
             try:
                 if crit:
-                    g2 = crit.get("guardrails")
+                    g2 = crit.get('guardrails')
                     if isinstance(g2, str):
                         g2 = json.loads(g2)
                     if isinstance(g2, dict):
-                        if g2.get("parse_ok") is False or g2.get("missing_answer") or g2.get("missing_confidence"):
+                        if g2.get('parse_ok') is False or g2.get('missing_answer') or g2.get('missing_confidence'):
                             has_guardrail_issue = True
                             triggered_this_criterion = True
             except Exception:
-                if crit and crit.get("guardrails") is not None:
+                if crit and crit.get('guardrails') is not None:
                     has_guardrail_issue = True
                     triggered_this_criterion = True
 
             if triggered_this_criterion:
-                a["needs_human_review_count"] += 1
+                a['needs_human_review_count'] += 1
                 # Queue-specific confusion matrix: only count if this citation has a human label
                 if scr and human_sel is not None:
-                    ai_is_inc = not _is_exclude_answer(scr.get("answer"))
+                    ai_is_inc = not _is_exclude_answer(scr.get('answer'))
                     human_is_inc = not _is_exclude_answer(human_sel)
                     if ai_is_inc and human_is_inc:
-                        a["queue_cm_tp"] += 1
+                        a['queue_cm_tp'] += 1
                     elif ai_is_inc and not human_is_inc:
-                        a["queue_cm_fp"] += 1
+                        a['queue_cm_fp'] += 1
                     elif not ai_is_inc and human_is_inc:
-                        a["queue_cm_fn"] += 1
+                        a['queue_cm_fn'] += 1
                     else:
-                        a["queue_cm_tn"] += 1
+                        a['queue_cm_tn'] += 1
 
         if has_confident_exclude:
             auto_excluded += 1
-        needs_review = (not has_confident_exclude) and (has_critical_disagreement or has_low_confidence or has_guardrail_issue)
+        needs_review = (not has_confident_exclude) and (
+            has_critical_disagreement or has_low_confidence or has_guardrail_issue
+        )
         if needs_review:
             needs_review_total += 1
             if validated:
                 validated_needs_review += 1
 
     unvalidated_all = max(0, total_citations - validated_all)
-    unvalidated_needs_review = max(0, needs_review_total - validated_needs_review)
+    unvalidated_needs_review = max(
+        0, needs_review_total - validated_needs_review,
+    )
 
     # Build response
-    crit_out: List[Dict[str, Any]] = []
+    crit_out: list[dict[str, Any]] = []
     for c in criteria:
-        ck = c["criterion_key"]
+        ck = c['criterion_key']
         a = agg.get(ck) or {}
         # Accuracy is human-vs-AI agreement on the validated set (when canonical human labels exist).
         # Do NOT fall back to critical agreement here (misleading).
-        accuracy: Optional[float] = None
-        accuracy_all: Optional[float] = None
-        accuracy_critical_agent: Optional[float] = None
+        accuracy: float | None = None
+        accuracy_all: float | None = None
+        accuracy_critical_agent: float | None = None
         try:
-            h_total = int(a.get("human_total_count") or 0)
-            h_agree = int(a.get("human_agree_count") or 0)
+            h_total = int(a.get('human_total_count') or 0)
+            h_agree = int(a.get('human_agree_count') or 0)
             if h_total > 0:
                 accuracy = (h_agree / h_total)
         except Exception:
@@ -2156,8 +2489,8 @@ async def get_screening_metrics(
 
         # Accuracy for all citations with human answers (not just validated)
         try:
-            h_total_all = int(a.get("human_total_count_all") or 0)
-            h_agree_all = int(a.get("human_agree_count_all") or 0)
+            h_total_all = int(a.get('human_total_count_all') or 0)
+            h_agree_all = int(a.get('human_agree_count_all') or 0)
             if h_total_all > 0:
                 accuracy_all = (h_agree_all / h_total_all)
         except Exception:
@@ -2165,53 +2498,66 @@ async def get_screening_metrics(
 
         # Separate metric: agreement between screening agent and critical agent.
         try:
-            crit_total = int(a.get("crit_total_count") or 0)
-            crit_agree = int(a.get("crit_agree_count") or 0)
-            accuracy_critical_agent = (crit_agree / crit_total) if crit_total > 0 else None
+            crit_total = int(a.get('crit_total_count') or 0)
+            crit_agree = int(a.get('crit_agree_count') or 0)
+            accuracy_critical_agent = (
+                crit_agree / crit_total
+            ) if crit_total > 0 else None
         except Exception:
             accuracy_critical_agent = None
 
-        row: Dict[str, Any] = {
-            "criterion_key": ck,
-            "label": c["label"],
-            "threshold": float(c["threshold"]),
+        row: dict[str, Any] = {
+            'criterion_key': ck,
+            'label': c['label'],
+            'threshold': float(c['threshold']),
             **a,
         }
         if accuracy is not None:
-            row["accuracy"] = accuracy
+            row['accuracy'] = accuracy
         if accuracy_all is not None:
-            row["accuracy_all"] = accuracy_all
+            row['accuracy_all'] = accuracy_all
         if accuracy_critical_agent is not None:
-            row["accuracy_critical_agent"] = accuracy_critical_agent
+            row['accuracy_critical_agent'] = accuracy_critical_agent
 
         # Compute F1 and NPV from confusion matrix
-        cm_tp = int(a.get("cm_tp") or 0)
-        cm_fp = int(a.get("cm_fp") or 0)
-        cm_fn = int(a.get("cm_fn") or 0)
-        cm_tn = int(a.get("cm_tn") or 0)
+        cm_tp = int(a.get('cm_tp') or 0)
+        cm_fp = int(a.get('cm_fp') or 0)
+        cm_fn = int(a.get('cm_fn') or 0)
+        cm_tn = int(a.get('cm_tn') or 0)
         cm_total = cm_tp + cm_fp + cm_fn + cm_tn
 
         if cm_total > 0:
             # F1 = 2*TP / (2*TP + FP + FN)
             f1_denom = 2 * cm_tp + cm_fp + cm_fn
-            row["f1_score"] = (2 * cm_tp / f1_denom) if f1_denom > 0 else None
+            row['f1_score'] = (2 * cm_tp / f1_denom) if f1_denom > 0 else None
             # Precision = TP / (TP + FP)
-            row["precision"] = (cm_tp / (cm_tp + cm_fp)) if (cm_tp + cm_fp) > 0 else None
+            row['precision'] = (
+                cm_tp / (cm_tp + cm_fp)
+            ) if (cm_tp + cm_fp) > 0 else None
             # Recall (sensitivity) = TP / (TP + FN)
-            row["recall"] = (cm_tp / (cm_tp + cm_fn)) if (cm_tp + cm_fn) > 0 else None
+            row['recall'] = (
+                cm_tp / (cm_tp + cm_fn)
+            ) if (cm_tp + cm_fn) > 0 else None
             # NPV = TN / (TN + FN) — "of papers AI excluded, what % were truly irrelevant"
-            row["npv"] = (cm_tn / (cm_tn + cm_fn)) if (cm_tn + cm_fn) > 0 else None
+            row['npv'] = (
+                cm_tn / (cm_tn + cm_fn)
+            ) if (cm_tn + cm_fn) > 0 else None
             # Include raw confusion matrix for frontend
-            row["confusion_matrix"] = {"tp": cm_tp, "fp": cm_fp, "fn": cm_fn, "tn": cm_tn}
+            row['confusion_matrix'] = {
+                'tp': cm_tp,
+                'fp': cm_fp, 'fn': cm_fn, 'tn': cm_tn,
+            }
 
         # Queue-specific confusion matrix (citations that triggered human review for this criterion)
-        q_tp = int(a.get("queue_cm_tp") or 0)
-        q_fp = int(a.get("queue_cm_fp") or 0)
-        q_fn = int(a.get("queue_cm_fn") or 0)
-        q_tn = int(a.get("queue_cm_tn") or 0)
+        q_tp = int(a.get('queue_cm_tp') or 0)
+        q_fp = int(a.get('queue_cm_fp') or 0)
+        q_fn = int(a.get('queue_cm_fn') or 0)
+        q_tn = int(a.get('queue_cm_tn') or 0)
         q_total = q_tp + q_fp + q_fn + q_tn
         if q_total > 0:
-            row["queue_confusion_matrix"] = {"tp": q_tp, "fp": q_fp, "fn": q_fn, "tn": q_tn}
+            row['queue_confusion_matrix'] = {
+                'tp': q_tp, 'fp': q_fp, 'fn': q_fn, 'tn': q_tn,
+            }
 
         crit_out.append(row)
 
@@ -2219,25 +2565,25 @@ async def get_screening_metrics(
         sr_id=sr_id,
         steps={
             step_norm: {
-                "summary": {
-                    "step": step_norm,
-                    "total_citations": total_citations,
-                    "validated_all": validated_all,
-                    "unvalidated_all": unvalidated_all,
-                    "needs_review_total": needs_review_total,
-                    "validated_needs_review": validated_needs_review,
-                    "unvalidated_needs_review": unvalidated_needs_review,
-                    "not_screened_yet": not_screened_yet,
-                    "auto_excluded": auto_excluded,
+                'summary': {
+                    'step': step_norm,
+                    'total_citations': total_citations,
+                    'validated_all': validated_all,
+                    'unvalidated_all': unvalidated_all,
+                    'needs_review_total': needs_review_total,
+                    'validated_needs_review': validated_needs_review,
+                    'unvalidated_needs_review': unvalidated_needs_review,
+                    'not_screened_yet': not_screened_yet,
+                    'auto_excluded': auto_excluded,
                 },
-                "criteria": crit_out,
-            }
+                'criteria': crit_out,
+            },
         },
         warnings=warnings or None,
     )
 
 
-def _safe_div(n: float, d: float) -> Optional[float]:
+def _safe_div(n: float, d: float) -> float | None:
     try:
         if d == 0:
             return None
@@ -2256,7 +2602,7 @@ def _clip01(v: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _parse_confidence(v: Any) -> Optional[float]:
+def _parse_confidence(v: Any) -> float | None:
     if v is None:
         return None
     try:
@@ -2268,37 +2614,39 @@ def _parse_confidence(v: Any) -> Optional[float]:
         return None
 
 
-def _build_guardrails(parsed: Any, *, raw_text: str, stage: str) -> Dict[str, Any]:
+def _build_guardrails(parsed: Any, *, raw_text: str, stage: str) -> dict[str, Any]:
     """Build a compact guardrails payload for persisting with screening_agent_runs."""
-    raw = str(raw_text or "")
-    out: Dict[str, Any] = {
-        "schema_version": "v1",
-        "stage": str(stage or ""),
-        "parse_ok": bool(getattr(parsed, "parse_ok", False)),
-        "missing_answer": bool(getattr(parsed, "missing_answer", False)),
-        "missing_confidence": bool(getattr(parsed, "missing_confidence", False)),
-        "missing_rationale": not bool(str(getattr(parsed, "rationale", "") or "").strip()),
-        "raw_len": len(raw),
-        "has_answer_tag": "<answer" in raw.lower(),
-        "has_confidence_tag": "<confidence" in raw.lower(),
-        "has_rationale_tag": "<rationale" in raw.lower(),
+    raw = str(raw_text or '')
+    out: dict[str, Any] = {
+        'schema_version': 'v1',
+        'stage': str(stage or ''),
+        'parse_ok': bool(getattr(parsed, 'parse_ok', False)),
+        'missing_answer': bool(getattr(parsed, 'missing_answer', False)),
+        'missing_confidence': bool(getattr(parsed, 'missing_confidence', False)),
+        'missing_rationale': not bool(str(getattr(parsed, 'rationale', '') or '').strip()),
+        'raw_len': len(raw),
+        'has_answer_tag': '<answer' in raw.lower(),
+        'has_confidence_tag': '<confidence' in raw.lower(),
+        'has_rationale_tag': '<rationale' in raw.lower(),
     }
     # Flag when confidence appears outside [0,1] in raw (heuristic)
     try:
-        conf = float(getattr(parsed, "confidence", 0.0))
-        out["confidence_clipped"] = bool(conf in (0.0, 1.0)) and ("confidence" in raw.lower())
+        conf = float(getattr(parsed, 'confidence', 0.0))
+        out['confidence_clipped'] = bool(
+            conf in (0.0, 1.0),
+        ) and ('confidence' in raw.lower())
     except Exception:
-        out["confidence_clipped"] = False
+        out['confidence_clipped'] = False
     return out
 
 
-@router.get("/calibration", response_model=CalibrationResponse)
+@router.get('/calibration', response_model=CalibrationResponse)
 async def get_screening_calibration(
     sr_id: str,
-    step: str = "l1",
-    thresholds: str = "0.5,0.525,0.55,0.575,0.6,0.625,0.65,0.675,0.7,0.725,0.75,0.775,0.8,0.825,0.85,0.875,0.9,0.925,0.95,0.975",
+    step: str = 'l1',
+    thresholds: str = '0.5,0.525,0.55,0.575,0.6,0.625,0.65,0.675,0.7,0.725,0.75,0.775,0.8,0.825,0.85,0.875,0.9,0.925,0.95,0.975',
     bins: int = 10,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Compute calibration curves using all citations with human answers.
 
@@ -2317,42 +2665,49 @@ async def get_screening_calibration(
       with a recall-first tie-break (higher recall).
     """
 
-    step_norm = str(step or "l1").lower().strip()
-    if step_norm not in {"l1", "l2"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+    step_norm = str(step or 'l1').lower().strip()
+    if step_norm not in {'l1', 'l2'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='step must be l1 or l2',
+        )
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Criteria questions for step (L2 includes L1 + L2)
-    cp = sr.get("criteria_parsed") or {}
+    cp = sr.get('criteria_parsed') or {}
     questions = _questions_for_step(cp, step_norm)
 
-    criteria: List[Dict[str, str]] = []
+    criteria: list[dict[str, str]] = []
     for q in questions:
         if not isinstance(q, str) or not q.strip():
             continue
         ck = _criterion_key_from_question(q)
-        criteria.append({"criterion_key": ck, "label": q})
+        criteria.append({'criterion_key': ck, 'label': q})
 
     # Determine SR scope ids for step (same as metrics)
-    filter_step = ""
-    if step_norm == "l2":
-        filter_step = "l1"
+    filter_step = ''
+    if step_norm == 'l2':
+        filter_step = 'l1'
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list citations: {e}",
+        )
 
     # Parse thresholds list
-    thr_list: List[float] = []
-    for part in str(thresholds or "").split(","):
+    thr_list: list[float] = []
+    for part in str(thresholds or '').split(','):
         part = part.strip()
         if not part:
             continue
@@ -2362,7 +2717,7 @@ async def get_screening_calibration(
             continue
     if not thr_list:
         thr_list = [0.9]
-    thr_list = sorted(set([_clip01(t) for t in thr_list]))
+    thr_list = sorted({_clip01(t) for t in thr_list})
 
     try:
         bins_n = int(bins)
@@ -2374,16 +2729,16 @@ async def get_screening_calibration(
     legacy_validated_by = f"{step_norm}_validated_by"
 
     # Build columns for row fetch
-    needed_cols: List[str] = ["id", validations_col, legacy_validated_by]
-    human_cols: Dict[str, str] = {}
+    needed_cols: list[str] = ['id', validations_col, legacy_validated_by]
+    human_cols: dict[str, str] = {}
     for c in criteria:
-        ck = c["criterion_key"]
-        hcol = f"human_{ck}" if ck else "human_col"
+        ck = c['criterion_key']
+        hcol = f"human_{ck}" if ck else 'human_col'
         human_cols[ck] = hcol
         needed_cols.append(hcol)
 
     # Load latest screening runs for all ids in this step/pipeline
-    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    pipeline_norm = 'title_abstract' if step_norm == 'l1' else 'fulltext'
     try:
         runs = await run_in_threadpool(
             cits_dp_service.list_latest_agent_runs,
@@ -2393,18 +2748,21 @@ async def get_screening_calibration(
             pipeline=pipeline_norm,
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agent runs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load agent runs: {e}",
+        )
 
     # Group screening runs by citation then criterion
-    screening_by_cit: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    screening_by_cit: dict[int, dict[str, dict[str, Any]]] = {}
     for r in runs or []:
         try:
-            cid = int(r.get("citation_id"))
+            cid = int(r.get('citation_id'))
         except Exception:
             continue
-        if str(r.get("stage") or "") != "screening":
+        if str(r.get('stage') or '') != 'screening':
             continue
-        ck = str(r.get("criterion_key") or "")
+        ck = str(r.get('criterion_key') or '')
         if not ck:
             continue
         if cid not in screening_by_cit:
@@ -2415,9 +2773,12 @@ async def get_screening_calibration(
     try:
         rows = await run_in_threadpool(cits_dp_service.get_citations_by_ids, ids, table_name, needed_cols)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load citation rows: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load citation rows: {e}",
+        )
 
-    def _is_validated_row(row: Dict[str, Any]) -> bool:
+    def _is_validated_row(row: dict[str, Any]) -> bool:
         v = row.get(validations_col)
         if v:
             try:
@@ -2431,39 +2792,44 @@ async def get_screening_calibration(
         return bool(row.get(legacy_validated_by))
 
     # Build examples per criterion from ALL citations with human answers: (confidence, agree_bool)
-    examples: Dict[str, List[Tuple[float, bool]]] = {c["criterion_key"]: [] for c in criteria}
+    examples: dict[str, list[tuple[float, bool]]] = {
+        c['criterion_key']: [] for c in criteria
+    }
     for row in rows or []:
         try:
-            cid = int(row.get("id"))
+            cid = int(row.get('id'))
         except Exception:
             continue
         # IMPORTANT: Include ALL citations with human answers, not just validated ones
         scr_map = screening_by_cit.get(cid) or {}
         for c in criteria:
-            ck = c["criterion_key"]
+            ck = c['criterion_key']
             scr = scr_map.get(ck)
             if not scr:
                 continue
-            conf = _parse_confidence(scr.get("confidence"))
+            conf = _parse_confidence(scr.get('confidence'))
             if conf is None:
                 continue
-            ai_ans = str(scr.get("answer") or "").strip()
-            human_sel = _parse_selected_from_human_payload(row.get(human_cols.get(ck) or f"human_{ck}"))
+            ai_ans = str(scr.get('answer') or '').strip()
+            human_sel = _parse_selected_from_human_payload(
+                row.get(human_cols.get(ck) or f"human_{ck}"),
+            )
             if human_sel is None:
                 continue
             agree = str(human_sel).strip() == ai_ans
             examples[ck].append((conf, agree))
 
     # Compute curve + histogram per criterion
-    out_criteria: List[CalibrationCriterionResponse] = []
+    out_criteria: list[CalibrationCriterionResponse] = []
     for c in criteria:
-        ck = c["criterion_key"]
-        label = c["label"]
+        ck = c['criterion_key']
+        label = c['label']
         ex = examples.get(ck) or []
-        validated_n = len(ex)  # Note: "validated_n" is kept for API compatibility but now means "with human answer"
+        # Note: "validated_n" is kept for API compatibility but now means "with human answer"
+        validated_n = len(ex)
 
         # Histogram bins
-        hist: List[CalibrationHistogramBin] = []
+        hist: list[CalibrationHistogramBin] = []
         if validated_n > 0:
             for b in range(bins_n):
                 start = b / bins_n
@@ -2472,7 +2838,9 @@ async def get_screening_calibration(
                 disagree_ct = 0
                 for conf, agree in ex:
                     # include 1.0 in last bin
-                    in_bin = (conf >= start and conf < end) or (b == bins_n - 1 and conf == 1.0)
+                    in_bin = (conf >= start and conf < end) or (
+                        b == bins_n - 1 and conf == 1.0
+                    )
                     if not in_bin:
                         continue
                     if agree:
@@ -2485,18 +2853,24 @@ async def get_screening_calibration(
                         bin_end=round(end, 6),
                         agree=agree_ct,
                         disagree=disagree_ct,
-                    )
+                    ),
                 )
         else:
             for b in range(bins_n):
                 start = b / bins_n
                 end = (b + 1) / bins_n
-                hist.append(CalibrationHistogramBin(bin_start=round(start, 6), bin_end=round(end, 6), agree=0, disagree=0))
+                hist.append(
+                    CalibrationHistogramBin(
+                        bin_start=round(
+                            start, 6,
+                        ), bin_end=round(end, 6), agree=0, disagree=0,
+                    ),
+                )
 
-        curve: List[CalibrationPoint] = []
-        best_thr: Optional[float] = None
-        best_score: Optional[float] = None
-        best_recall: Optional[float] = None
+        curve: list[CalibrationPoint] = []
+        best_thr: float | None = None
+        best_score: float | None = None
+        best_recall: float | None = None
 
         for thr in thr_list:
             tp = fp = fn = tn = 0
@@ -2538,7 +2912,7 @@ async def get_screening_calibration(
                     fpr=fpr,
                     tpr=tpr,
                     workload_reduction=workload_reduction,
-                )
+                ),
             )
 
             # Choose recommended threshold by maximizing Youden's J; tie-break by higher recall.
@@ -2557,29 +2931,31 @@ async def get_screening_calibration(
 
         reason = None
         if best_thr is not None:
-            reason = "max_youden_j (tpr-fpr), tie-break: max recall"
+            reason = 'max_youden_j (tpr-fpr), tie-break: max recall'
 
         out_criteria.append(
             CalibrationCriterionResponse(
                 criterion_key=ck,
                 label=label,
                 validated_n=validated_n,
-                recommended_threshold=float(best_thr) if best_thr is not None else None,
+                recommended_threshold=float(
+                    best_thr,
+                ) if best_thr is not None else None,
                 recommended_reason=reason,
                 curve=curve,
                 histogram=hist,
-            )
+            ),
         )
 
     return CalibrationResponse(sr_id=sr_id, step=step_norm, criteria=out_criteria)
 
 
-@router.get("/confidence-histogram", response_model=LiveConfidenceHistogramResponse)
+@router.get('/confidence-histogram', response_model=LiveConfidenceHistogramResponse)
 async def get_live_confidence_histogram(
     sr_id: str,
-    step: str = "l1",
+    step: str = 'l1',
     bins: int = 20,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Operational (live) confidence histogram split by unlabelled/agree/disagree.
 
@@ -2592,39 +2968,46 @@ async def get_live_confidence_histogram(
     This is designed to be polled frequently by the UI.
     """
 
-    step_norm = str(step or "l1").lower().strip()
-    if step_norm not in {"l1", "l2"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+    step_norm = str(step or 'l1').lower().strip()
+    if step_norm not in {'l1', 'l2'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='step must be l1 or l2',
+        )
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Criteria questions for step (L2 includes L1 + L2)
-    cp = sr.get("criteria_parsed") or {}
+    cp = sr.get('criteria_parsed') or {}
     questions = _questions_for_step(cp, step_norm)
-    criteria: List[Dict[str, str]] = []
+    criteria: list[dict[str, str]] = []
     for q in questions:
         if not isinstance(q, str) or not q.strip():
             continue
         ck = _criterion_key_from_question(q)
-        criteria.append({"criterion_key": ck, "label": q})
+        criteria.append({'criterion_key': ck, 'label': q})
 
     # Scope ids for step
-    filter_step = ""
-    if step_norm == "l2":
-        filter_step = "l1"
+    filter_step = ''
+    if step_norm == 'l2':
+        filter_step = 'l1'
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list citations: {e}",
+        )
 
-    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    pipeline_norm = 'title_abstract' if step_norm == 'l1' else 'fulltext'
 
     try:
         bins_i = int(bins)
@@ -2635,9 +3018,9 @@ async def get_live_confidence_histogram(
     if bins_i > 50:
         bins_i = 50
 
-    out: List[LiveConfidenceHistogramCriterionResponse] = []
+    out: list[LiveConfidenceHistogramCriterionResponse] = []
     for c in criteria:
-        ck = c.get("criterion_key") or ""
+        ck = c.get('criterion_key') or ''
         if not ck:
             continue
         human_col = f"human_{ck}"
@@ -2655,7 +3038,11 @@ async def get_live_confidence_histogram(
                 bins=bins_i,
             )
         except RuntimeError as rexc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(
+                    rexc,
+                ),
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2665,23 +3052,23 @@ async def get_live_confidence_histogram(
         out.append(
             LiveConfidenceHistogramCriterionResponse(
                 criterion_key=ck,
-                label=c.get("label") or ck,
+                label=c.get('label') or ck,
                 histogram=hist or [],
-            )
+            ),
         )
 
     return LiveConfidenceHistogramResponse(sr_id=sr_id, step=step_norm, bins=bins_i, criteria=out)
 
 
-@router.get("/calibration/samples")
+@router.get('/calibration/samples')
 async def get_calibration_samples(
     sr_id: str,
-    step: str = "l1",
+    step: str = 'l1',
     threshold: float = 0.9,
-    criterion_key: Optional[str] = None,
+    criterion_key: str | None = None,
     limit: int = 200,
-    format: str = "json",
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    format: str = 'json',
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Return calibration sample rows (validated citations only) for auditing.
 
@@ -2706,64 +3093,77 @@ async def get_calibration_samples(
     - format: json|csv
     """
 
-    step_norm = str(step or "l1").lower().strip()
-    if step_norm not in {"l1", "l2"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="step must be l1 or l2")
+    step_norm = str(step or 'l1').lower().strip()
+    if step_norm not in {'l1', 'l2'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='step must be l1 or l2',
+        )
 
     thr = _clip01(threshold, default=0.9)
     lim = max(1, min(2000, int(limit or 200)))
-    fmt = str(format or "json").lower().strip()
-    if fmt not in {"json", "csv"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="format must be json or csv")
+    fmt = str(format or 'json').lower().strip()
+    if fmt not in {'json', 'csv'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='format must be json or csv',
+        )
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load SR: {e}",
+        )
 
-    table_name = (screening or {}).get("table_name") or "citations"
+    table_name = (screening or {}).get('table_name') or 'citations'
 
     # Criteria questions for step (L2 includes L1 + L2)
-    cp = sr.get("criteria_parsed") or {}
+    cp = sr.get('criteria_parsed') or {}
     questions = _questions_for_step(cp, step_norm)
 
-    criteria: List[Dict[str, str]] = []
+    criteria: list[dict[str, str]] = []
     for q in questions:
         if not isinstance(q, str) or not q.strip():
             continue
         ck = _criterion_key_from_question(q)
         if criterion_key and str(criterion_key).strip() != ck:
             continue
-        criteria.append({"criterion_key": ck, "label": q})
+        criteria.append({'criterion_key': ck, 'label': q})
 
     if criterion_key and not criteria:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown criterion_key for this step")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Unknown criterion_key for this step',
+        )
 
     # Determine SR scope ids for step
-    filter_step = ""
-    if step_norm == "l2":
-        filter_step = "l1"
+    filter_step = ''
+    if step_norm == 'l2':
+        filter_step = 'l1'
     try:
         ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list citations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list citations: {e}",
+        )
 
     validations_col = f"{step_norm}_validations"
     legacy_validated_by = f"{step_norm}_validated_by"
 
     # Build columns for row fetch
-    needed_cols: List[str] = ["id", validations_col, legacy_validated_by]
-    human_cols: Dict[str, str] = {}
+    needed_cols: list[str] = ['id', validations_col, legacy_validated_by]
+    human_cols: dict[str, str] = {}
     for c in criteria:
-        ck = c["criterion_key"]
-        hcol = f"human_{ck}" if ck else "human_col"
+        ck = c['criterion_key']
+        hcol = f"human_{ck}" if ck else 'human_col'
         human_cols[ck] = hcol
         needed_cols.append(hcol)
 
     # Load latest screening runs for all ids
-    pipeline_norm = "title_abstract" if step_norm == "l1" else "fulltext"
+    pipeline_norm = 'title_abstract' if step_norm == 'l1' else 'fulltext'
     try:
         runs = await run_in_threadpool(
             cits_dp_service.list_latest_agent_runs,
@@ -2773,18 +3173,21 @@ async def get_calibration_samples(
             pipeline=pipeline_norm,
         )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load agent runs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load agent runs: {e}",
+        )
 
     # Group screening runs by citation then criterion
-    screening_by_cit: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    screening_by_cit: dict[int, dict[str, dict[str, Any]]] = {}
     for r in runs or []:
         try:
-            cid = int(r.get("citation_id"))
+            cid = int(r.get('citation_id'))
         except Exception:
             continue
-        if str(r.get("stage") or "") != "screening":
+        if str(r.get('stage') or '') != 'screening':
             continue
-        ck = str(r.get("criterion_key") or "")
+        ck = str(r.get('criterion_key') or '')
         if not ck:
             continue
         if criterion_key and ck != str(criterion_key).strip():
@@ -2797,9 +3200,12 @@ async def get_calibration_samples(
     try:
         rows = await run_in_threadpool(cits_dp_service.get_citations_by_ids, ids, table_name, needed_cols)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load citation rows: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load citation rows: {e}",
+        )
 
-    def _is_validated_row(row: Dict[str, Any]) -> bool:
+    def _is_validated_row(row: dict[str, Any]) -> bool:
         v = row.get(validations_col)
         if v:
             try:
@@ -2812,12 +3218,12 @@ async def get_calibration_samples(
                 pass
         return bool(row.get(legacy_validated_by))
 
-    out_rows: List[CalibrationSampleRow] = []
+    out_rows: list[CalibrationSampleRow] = []
     for row in rows or []:
         if len(out_rows) >= lim:
             break
         try:
-            cid = int(row.get("id"))
+            cid = int(row.get('id'))
         except Exception:
             continue
         if not _is_validated_row(row):
@@ -2826,58 +3232,61 @@ async def get_calibration_samples(
         for c in criteria:
             if len(out_rows) >= lim:
                 break
-            ck = c["criterion_key"]
+            ck = c['criterion_key']
             scr = scr_map.get(ck)
             if not scr:
                 continue
-            conf = _parse_confidence(scr.get("confidence"))
-            ai_ans = str(scr.get("answer") or "").strip() if scr.get("answer") is not None else None
-            human_sel = _parse_selected_from_human_payload(row.get(human_cols.get(ck) or f"human_{ck}"))
+            conf = _parse_confidence(scr.get('confidence'))
+            ai_ans = str(scr.get('answer') or '').strip(
+            ) if scr.get('answer') is not None else None
+            human_sel = _parse_selected_from_human_payload(
+                row.get(human_cols.get(ck) or f"human_{ck}"),
+            )
             if human_sel is None:
                 continue
-            agrees = (str(human_sel).strip() == str(ai_ans or "").strip())
+            agrees = (str(human_sel).strip() == str(ai_ans or '').strip())
             pred_pos = (conf is not None) and (conf >= thr)
             if pred_pos and agrees:
-                bucket = "tp"
+                bucket = 'tp'
             elif pred_pos and (not agrees):
-                bucket = "fp"
+                bucket = 'fp'
             elif (not pred_pos) and agrees:
-                bucket = "fn"
+                bucket = 'fn'
             else:
-                bucket = "tn"
+                bucket = 'tn'
 
             out_rows.append(
                 CalibrationSampleRow(
                     citation_id=cid,
                     criterion_key=ck,
-                    label=c["label"],
+                    label=c['label'],
                     validated=True,
                     confidence=conf,
                     ai_answer=ai_ans,
                     human_selected=human_sel,
                     agrees=agrees,
                     bucket=bucket,
-                )
+                ),
             )
 
-    if fmt == "json":
+    if fmt == 'json':
         return CalibrationSamplesResponse(sr_id=sr_id, step=step_norm, threshold=thr, rows=out_rows)
 
     # CSV format
     header = [
-        "citation_id",
-        "criterion_key",
-        "label",
-        "confidence",
-        "ai_answer",
-        "human_selected",
-        "agrees",
-        "bucket",
+        'citation_id',
+        'criterion_key',
+        'label',
+        'confidence',
+        'ai_answer',
+        'human_selected',
+        'agrees',
+        'bucket',
     ]
-    lines = [",".join(header)]
+    lines = [','.join(header)]
     for r in out_rows:
         lines.append(
-            ",".join(
+            ','.join(
                 [
                     _csv_escape(r.citation_id),
                     _csv_escape(r.criterion_key),
@@ -2887,37 +3296,45 @@ async def get_calibration_samples(
                     _csv_escape(r.human_selected),
                     _csv_escape(r.agrees),
                     _csv_escape(r.bucket),
-                ]
-            )
+                ],
+            ),
         )
-    csv_bytes = ("\n".join(lines) + "\n").encode("utf-8")
-    return Response(content=csv_bytes, media_type="text/csv")
+    csv_bytes = ('\n'.join(lines) + '\n').encode('utf-8')
+    return Response(content=csv_bytes, media_type='text/csv')
+
 
 async def update_inclusion_decision(
-    sr: Dict[str, Any],
+    sr: dict[str, Any],
     citation_id: int,
     screening_step: str,
     decision_maker: str,
-):  
-    table_name = (sr.get("screening_db") or {}).get("table_name") or "citations"
+):
+    table_name = (sr.get('screening_db') or {}).get(
+        'table_name',
+    ) or 'citations'
 
     # IMPORTANT: decision/pass computation must not be stale.
     # Always re-fetch the citation row when computing decisions, because callers may
     # have just written human/llm columns earlier in the request.
-    def _get_row_fresh() -> Dict[str, Any]:
+    def _get_row_fresh() -> dict[str, Any]:
         r = cits_dp_service.get_citation_by_id(int(citation_id), table_name)
         return r or {}
 
     try:
         row = await run_in_threadpool(_get_row_fresh)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query screening DB: {e}")
-    
-    questions = sr["criteria_parsed"][screening_step]["questions"]
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query screening DB: {e}",
+        )
+
+    questions = sr['criteria_parsed'][screening_step]['questions']
     classified = True
-    decision = "undecided"
+    decision = 'undecided'
     for question in questions:
         col_core = snake_case(question, max_len=56) if snake_case else None
         col_name = f"{decision_maker}_{col_core}"
@@ -2925,23 +3342,31 @@ async def update_inclusion_decision(
         if result is None:
             classified = False
             break
-        selected = result["selected"]
-        if "exclude" in str(selected).lower():
-            decision = "exclude"
+        selected = result['selected']
+        if 'exclude' in str(selected).lower():
+            decision = 'exclude'
 
-    if classified and decision == "undecided":
-        decision = "include"
-    
+    if classified and decision == 'undecided':
+        decision = 'include'
+
     col_name = f"{decision_maker}_{screening_step}_decision"
     try:
         updated = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, col_name, decision, table_name)
     except RuntimeError as rexc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update citation row: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update citation row: {e}",
+        )
     print(updated)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Citation not found to update")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Citation not found to update',
+        )
 
     # Validation rule (B1/B2): do NOT use l1_screen/l2_screen for filtering.
     # Ensure human_l1_decision / human_l2_decision are always correct and derived
@@ -2955,46 +3380,48 @@ async def update_inclusion_decision(
             Priority rules:
             1. Human-set values have highest priority (include/exclude)
             2. If no human answer exists, fall back to AI/LLM answer
-            3. If neither human nor AI answer exists, don't pass (undecided)
+            3. If neither human nor AI answer exists, treat as exclude
 
             Scope:
             - human_l1_decision is derived ONLY from L1 questions.
             - human_l2_decision represents "passed to L2/extract" and must consider
               BOTH L1 + L2 criteria questions.
             """
-            cp = sr.get("criteria_parsed") or {}
+            cp = sr.get('criteria_parsed') or {}
 
             # L1: only L1 questions
-            if step == "l1":
-                qs = (cp.get("l1") or {}).get("questions") or []
+            if step == 'l1':
+                qs = (cp.get('l1') or {}).get('questions') or []
             # L2: union of L1 + L2 questions
-            elif step == "l2":
-                l1_qs = (cp.get("l1") or {}).get("questions") or []
-                l2_qs = (cp.get("l2") or {}).get("questions") or []
+            elif step == 'l2':
+                l1_qs = (cp.get('l1') or {}).get('questions') or []
+                l2_qs = (cp.get('l2') or {}).get('questions') or []
                 qs = list(l1_qs) + list(l2_qs)
             else:
-                qs = (cp.get(step) or {}).get("questions") or []
+                qs = (cp.get(step) or {}).get('questions') or []
 
             if not isinstance(qs, list) or not qs:
-                return "undecided"
+                return 'undecided'
 
             for q in qs:
-                core = snake_case(q, max_len=56) if snake_case else ""
-                hcol = f"human_{core}" if core else "human_col"
-                llm_col = f"llm_{core}" if core else "llm_col"
+                core = snake_case(q, max_len=56) if snake_case else ''
+                hcol = f"human_{core}" if core else 'human_col'
+                llm_col = f"llm_{core}" if core else 'llm_col'
 
                 # Priority 1: Check human answer
                 hval = fresh.get(hcol)
                 selected = None
                 if hval is not None:
                     try:
-                        hobj = json.loads(hval) if isinstance(hval, str) else hval
-                        selected = (hobj or {}).get("selected")
+                        hobj = json.loads(hval) if isinstance(
+                            hval, str,
+                        ) else hval
+                        selected = (hobj or {}).get('selected')
                     except Exception:
                         selected = None
 
                 # Treat empty/whitespace as unanswered
-                if selected is not None and isinstance(selected, str) and selected.strip() == "":
+                if selected is not None and isinstance(selected, str) and selected.strip() == '':
                     selected = None
 
                 # Priority 2: Fall back to AI/LLM answer if no human answer
@@ -3002,38 +3429,42 @@ async def update_inclusion_decision(
                     llm_val = fresh.get(llm_col)
                     if llm_val is not None:
                         try:
-                            llm_obj = json.loads(llm_val) if isinstance(llm_val, str) else llm_val
-                            selected = (llm_obj or {}).get("selected")
+                            llm_obj = json.loads(llm_val) if isinstance(
+                                llm_val, str,
+                            ) else llm_val
+                            selected = (llm_obj or {}).get('selected')
                         except Exception:
                             selected = None
                     # Check critical answer override if available
                     if selected is not None and isinstance(llm_val, (dict, str)):
                         try:
-                            obj = json.loads(llm_val) if isinstance(llm_val, str) else llm_val
-                            critical = (obj or {}).get("critical")
-                            if isinstance(critical, dict) and critical.get("selected"):
-                                selected = critical["selected"]
+                            obj = json.loads(llm_val) if isinstance(
+                                llm_val, str,
+                            ) else llm_val
+                            critical = (obj or {}).get('critical')
+                            if isinstance(critical, dict) and critical.get('selected'):
+                                selected = critical['selected']
                         except Exception:
                             pass
 
                 # Treat empty/whitespace as unanswered
-                if selected is not None and isinstance(selected, str) and selected.strip() == "":
+                if selected is not None and isinstance(selected, str) and selected.strip() == '':
                     selected = None
 
-                # Priority 3: Neither exists -> undecided
+                # Priority 3: Neither exists -> exclude
                 if selected is None:
-                    return "undecided"
+                    return 'exclude'
 
-                if "exclude" in str(selected).lower():
-                    return "exclude"
+                if 'exclude' in str(selected).lower():
+                    return 'exclude'
 
-            return "include"
+            return 'include'
 
         # Always set both human decisions on any update, so the list filters never go stale.
-        h1 = _compute_human_decision("l1")
-        h2 = _compute_human_decision("l2")
-        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l1_decision", h1, table_name)
-        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, "human_l2_decision", h2, table_name)
+        h1 = _compute_human_decision('l1')
+        h2 = _compute_human_decision('l2')
+        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'human_l1_decision', h1, table_name)
+        await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'human_l2_decision', h2, table_name)
     except Exception:
         # best-effort; do not block response
         pass

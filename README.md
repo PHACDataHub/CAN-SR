@@ -47,7 +47,7 @@ npm run dev
 
 - **Frontend**: Next.js 15 with React 19, TypeScript, Tailwind CSS
 - **Backend**: FastAPI with Python, async/await patterns
-- **Databases**: 
+- **Databases**:
   - MongoDB - Systematic review metadata
   - PostgreSQL - Citation storage and screening data
 - **Document Processing**: GROBID for PDF parsing and full-text extraction
@@ -97,12 +97,12 @@ CAN-SR is designed to accelerate and standardize the systematic review process f
 - **Deduplication**: Automatic identification and handling of duplicate citations
 
 #### 3. AI-Assisted Screening Workflow
-- **Level 1 (Title/Abstract) Screening**: 
+- **Level 1 (Title/Abstract) Screening**:
   - AI analyzes citations based on configured criteria
   - Provides inclusion/exclusion recommendations with reasoning
   - Flags uncertain cases for human review
   - Learns from reviewer feedback to improve accuracy
-  
+
 - **Level 2 (Full-Text) Screening**:
   - Automated PDF processing and text extraction via GROBID + Document Intelligence (soon)
   - Deep analysis of full-text articles against detailed criteria
@@ -112,8 +112,8 @@ CAN-SR is designed to accelerate and standardize the systematic review process f
 - **Automated Parameter Extraction**: AI extracts key data points from included studies:
   - Deep analysis of full-text articles against list of desired parameters for extraction
   - Identification of relevant evidence against detailed criteria
-  - Agentic workflow to complete extractions and needed analysis 
-  
+  - Agentic workflow to complete extractions and needed analysis
+
 - **Customizable Templates**: Define custom extraction templates for specific review types
 - **Validation Workflow**: All extracted data is presented to reviewers for validation and correction
 - **Export Capabilities**: Export extracted data to CSV, Excel, or JSON for further analysis
@@ -273,7 +273,7 @@ POSTGRES_PASSWORD=password
 DATABRICKS_INSTANCE=your-instance
 DATABRICKS_TOKEN=your-token
 
-# Database Search 
+# Database Search
 ENTREZ_EMAIL=your-pubmed-entrez-email
 ENTREZ_API_KEY=your-pubmed-api-key
 

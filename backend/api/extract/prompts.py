@@ -1,3 +1,4 @@
+from __future__ import annotations
 PARAMETER_PROMPT_JSON = """
 You are an expert information extractor for scientific full-text articles. You will be given:
 - A short description of a parameter to extract (what the parameter is and how it is defined).

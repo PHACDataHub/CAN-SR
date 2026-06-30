@@ -1,42 +1,46 @@
-import os
-import logging
+from __future__ import annotations
 
-from grobid_client.grobid_client import GrobidClient
+import logging
+import os
+
 from bs4 import BeautifulSoup
+from grobid_client.grobid_client import GrobidClient
 
 logger = logging.getLogger(__name__)
 
 COLORS = {
-    "persName": "rgba(0, 0, 255, 1)",  # Blue
-    "s": "rgba(139, 0, 0, 1)",  # Green
-    "p": "rgba(139, 0, 0, 1)",  # Dark red
-    "ref": "rgba(255, 255, 0, 1)",  # ??
-    "biblStruct": "rgba(139, 0, 0, 1)",  # Dark Red
-    "head": "rgba(139, 139, 0, 1)",  # Dark Yellow
-    "formula": "rgba(255, 165, 0, 1)",  # Orange
-    "figure": "rgba(165, 42, 42, 1)",  # Brown
-    "title": "rgba(255, 0, 0, 1)",  # Red
-    "affiliation": "rgba(255, 165, 0, 1)"  # red-orengi
+    'persName': 'rgba(0, 0, 255, 1)',  # Blue
+    's': 'rgba(139, 0, 0, 1)',  # Green
+    'p': 'rgba(139, 0, 0, 1)',  # Dark red
+    'ref': 'rgba(255, 255, 0, 1)',  # ??
+    'biblStruct': 'rgba(139, 0, 0, 1)',  # Dark Red
+    'head': 'rgba(139, 139, 0, 1)',  # Dark Yellow
+    'formula': 'rgba(255, 165, 0, 1)',  # Orange
+    'figure': 'rgba(165, 42, 42, 1)',  # Brown
+    'title': 'rgba(255, 0, 0, 1)',  # Red
+    'affiliation': 'rgba(255, 165, 0, 1)',  # red-orengi
 }
 
 
 def get_color(name, param):
-    color = COLORS[name] if name in COLORS else "rgba(128, 128, 128, 1.0)"
+    color = COLORS[name] if name in COLORS else 'rgba(128, 128, 128, 1.0)'
     if param:
-        color = color.replace("1)", "0.4)")
+        color = color.replace('1)', '0.4)')
 
     return color
 
+
 def exclude_tags(tag):
     ret = False
-    ret |= tag.name != 'abstract' # exclude the abstract
+    ret |= tag.name != 'abstract'  # exclude the abstract
     return ret
+
 
 class GrobidService:
     def __init__(self):
 
         self.base_service_url = os.getenv(
-            "GROBID_SERVICE_URL", "http://grobid-service:8000"
+            'GROBID_SERVICE_URL', 'http://grobid-service:8000',
         )
 
         # IMPORTANT:
@@ -48,17 +52,17 @@ class GrobidService:
                 grobid_server=self.base_service_url,
                 batch_size=1000,
                 coordinates=[
-                    "p",
-                    "s",
-                    "persName",
-                    "biblStruct",
-                    "figure",
-                    "formula",
-                    "head",
-                    "note",
-                    "title",
-                    "ref",
-                    "affiliation",
+                    'p',
+                    's',
+                    'persName',
+                    'biblStruct',
+                    'figure',
+                    'formula',
+                    'head',
+                    'note',
+                    'title',
+                    'ref',
+                    'affiliation',
                 ],
                 sleep_time=5,
                 timeout=240,
@@ -67,7 +71,7 @@ class GrobidService:
             self.grobid_client = grobid_client
         except Exception as e:
             logger.error(
-                "Failed to initialize GrobidClient (service may be down): %s",
+                'Failed to initialize GrobidClient (service may be down): %s',
                 e,
             )
             self.grobid_client = None
@@ -77,16 +81,20 @@ class GrobidService:
 
     async def process_structure(self, input_path) -> (dict, list):
         if not self.grobid_client:
-            raise RuntimeError("GROBID client is not available (service not configured or down)")
-        pdf_file, status, text = self.grobid_client.process_pdf("processFulltextDocument",
-                                                                input_path,
-                                                                consolidate_header=True,
-                                                                consolidate_citations=False,
-                                                                segment_sentences=True,
-                                                                tei_coordinates=True,
-                                                                include_raw_citations=False,
-                                                                include_raw_affiliations=False,
-                                                                generateIDs=True)
+            raise RuntimeError(
+                'GROBID client is not available (service not configured or down)',
+            )
+        pdf_file, status, text = self.grobid_client.process_pdf(
+            'processFulltextDocument',
+            input_path,
+            consolidate_header=True,
+            consolidate_citations=False,
+            segment_sentences=True,
+            tei_coordinates=True,
+            include_raw_citations=False,
+            include_raw_affiliations=False,
+            generateIDs=True,
+        )
 
         if status != 200:
             return
@@ -99,7 +107,10 @@ class GrobidService:
     @staticmethod
     def box_to_dict(box, color=None, type=None, text=None):
 
-        item = {"page": box[0], "x": box[1], "y": box[2], "width": box[3], "height": box[4]}
+        item = {
+            'page': box[0], 'x': box[1], 'y': box[2],
+            'width': box[3], 'height': box[4],
+        }
         if color is not None:
             item['color'] = color
 
@@ -124,13 +135,13 @@ class GrobidService:
         coordinates = []
         count = 0
         for block_id, block in enumerate(all_blocks_with_coordinates):
-            for box in filter(lambda c: len(c) > 0 and c[0] != "", block['coords'].split(";")):
+            for box in filter(lambda c: len(c) > 0 and c[0] != '', block['coords'].split(';')):
                 coordinates.append(
                     self.box_to_dict(
-                        box.split(","),
+                        box.split(','),
                         get_color(block.name, count % 2 == 0),
                         type=block.name,
-                        text=block.text
+                        text=block.text,
                     ),
                 )
             count += 1
@@ -138,17 +149,23 @@ class GrobidService:
 
     async def get_pages(self, text):
         soup = BeautifulSoup(text, 'xml')
-        pages_infos = soup.find_all("surface")
+        pages_infos = soup.find_all('surface')
 
-        pages = [{'width': float(page['lrx']) - float(page['ulx']), 'height': float(page['lry']) - float(page['uly'])}
-             for page in pages_infos]
+        pages = [
+            {
+                'width': float(page['lrx']) - float(page['ulx']),
+                'height': float(page['lry']) - float(page['uly']),
+            }
+            for page in pages_infos
+        ]
 
         return pages
+
 
 # Global instance
 try:
     grobid_service = GrobidService()
 except Exception as e:  # pragma: no cover
-    logger.error("Failed to initialize GrobidService: %s", e)
+    logger.error('Failed to initialize GrobidService: %s', e)
     grobid_service = GrobidService.__new__(GrobidService)  # type: ignore
     grobid_service.grobid_client = None  # type: ignore

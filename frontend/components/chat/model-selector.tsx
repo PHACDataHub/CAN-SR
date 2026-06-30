@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Select,
   SelectContent,
@@ -22,37 +22,106 @@ export interface ModelInfo {
   recommended?: boolean
 }
 
+interface BackendModelCatalogItem {
+  display_name?: string
+  deployment?: string
+  api_version?: string
+}
+
 interface ModelSelectorProps {
   selectedModel: string
   onModelChange: (model: string) => void
+}
+
+function matchesDefaultModel(args: {
+  defaultChatModel?: string
+  defaultChatDeployment?: string
+  deployment: string
+  displayName: string
+}): boolean {
+  const normalizedDeployment = args.deployment.trim().toLowerCase()
+  const normalizedName = args.displayName.trim().toLowerCase()
+  const normalizedDefaultModel = String(args.defaultChatModel || '').trim().toLowerCase()
+  const normalizedDefaultDeployment = String(args.defaultChatDeployment || '').trim().toLowerCase()
+
+  return (
+    (!!normalizedDefaultDeployment && normalizedDefaultDeployment === normalizedDeployment) ||
+    (!!normalizedDefaultModel && (
+      normalizedDefaultModel === normalizedName ||
+      normalizedDefaultModel === normalizedDeployment
+    ))
+  )
+}
+
+function humanizeModelIdentifier(value: string): string {
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase()
+      if (lower === 'gpt') return 'GPT'
+      if (lower === 'mini') return 'Mini'
+      if (lower === 'nano') return 'Nano'
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+function buildBackendDescription(deployment: string, apiVersion?: string): string {
+  const lower = deployment.toLowerCase()
+  const tier = lower.includes('nano')
+    ? 'Fast lightweight GPT model'
+    : lower.includes('mini')
+      ? 'Compact GPT model'
+      : 'Configured GPT model'
+
+  return apiVersion ? `${tier} • ${apiVersion}` : tier
 }
 
 export function ModelSelector({
   selectedModel,
   onModelChange,
 }: ModelSelectorProps) {
-
   const dict = useDictionary()
 
-  // Azure OpenAI model configurations with descriptions
-  const modelInfo: Record<string, ModelInfo> = {
-    'gpt-5-mini': {
-      id: 'gpt-5-mini',
-      name: 'GPT-5 mini',
+  const fallbackModels = useMemo<ModelInfo[]>(() => [
+    {
+      id: 'gpt-5.4-mini',
+      name: 'GPT-5.4-Mini',
       description: dict.cansr.modelDescription1,
-      recommended: true,
     },
-    'gpt-4.1-mini': {
-      id: 'gpt-4.1-mini',
-      name: 'GPT-4.1 mini',
+    {
+      id: 'gpt-5.4-nano',
+      name: 'GPT-5.4-Nano',
       description: dict.cansr.modelDescription2,
     },
-  }
+  ], [dict.cansr.modelDescription1, dict.cansr.modelDescription2])
 
-  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([
-    modelInfo['gpt-5-mini'],
-    modelInfo['gpt-4.1-mini'],
+  const descriptionOverrides = useMemo<Record<string, string>>(
+    () => ({
+      'gpt-5-mini': dict.cansr.modelDescription1,
+      'gpt-5.4-mini': dict.cansr.modelDescription1,
+      'gpt-5.4': dict.cansr.modelDescription1,
+      'gpt-5.4-nano': dict.cansr.modelDescription2,
+      'gpt-4.1-mini': dict.cansr.modelDescription2,
+    }),
+    [dict.cansr.modelDescription1, dict.cansr.modelDescription2],
+  )
+
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>(() => [
+    ...fallbackModels,
   ])
+
+  useEffect(() => {
+    setAvailableModels((current) =>
+      current.length > 0
+        ? current.map((model) => ({
+            ...model,
+            description: descriptionOverrides[model.id.toLowerCase()] ?? model.description,
+          }))
+        : [...fallbackModels],
+    )
+  }, [descriptionOverrides, fallbackModels])
 
   useEffect(() => {
     async function loadModels() {
@@ -69,42 +138,112 @@ export function ModelSelector({
           throw new Error('Failed to fetch models')
         }
 
-        const {config} = await response.json()
-        // Backend may return either:
-        // - available_deployments: ["gpt-5-mini", ...] (preferred)
-        // - available_models: ["GPT-5-Mini", ...] (models.yaml display keys)
-        // We normalize both to our UI ids (deployment ids).
-        const rawIds: string[] = Array.isArray(config?.available_deployments)
+        const { config } = await response.json()
+        const defaultChatModel =
+          typeof config?.default_chat_model === 'string' ? config.default_chat_model : ''
+        const defaultChatDeployment =
+          typeof config?.default_chat_deployment === 'string'
+            ? config.default_chat_deployment
+            : ''
+
+        const catalog: BackendModelCatalogItem[] = Array.isArray(config?.available_model_catalog)
+          ? config.available_model_catalog
+          : []
+
+        const catalogModels = catalog
+          .map((item): ModelInfo | null => {
+            const deployment = String(item?.deployment || '').trim()
+            if (!deployment) {
+              return null
+            }
+
+            const name = String(item?.display_name || deployment).trim()
+            const apiVersion = String(item?.api_version || '').trim()
+            return {
+              id: deployment,
+              name,
+              description:
+                descriptionOverrides[deployment.toLowerCase()] ??
+                buildBackendDescription(deployment, apiVersion),
+              recommended: matchesDefaultModel({
+                defaultChatModel,
+                defaultChatDeployment,
+                deployment,
+                displayName: name,
+              }),
+            }
+          })
+          .filter((model): model is ModelInfo => Boolean(model))
+
+        if (catalogModels.length > 0) {
+          setAvailableModels(catalogModels)
+          return
+        }
+
+        const deploymentIds: string[] = Array.isArray(config?.available_deployments)
           ? config.available_deployments
-          : Array.isArray(config?.available_models)
-            ? config.available_models
-            : []
+              .map((id: unknown) => String(id || '').trim())
+              .filter(Boolean)
+          : []
 
-        const modelIds = rawIds.map((id: string) => String(id).toLowerCase())
+        if (deploymentIds.length > 0) {
+          const normalizedModels = deploymentIds.map((deployment) => ({
+            id: deployment,
+            name: humanizeModelIdentifier(deployment),
+            description:
+              descriptionOverrides[deployment.toLowerCase()] ??
+              buildBackendDescription(deployment),
+            recommended: matchesDefaultModel({
+              defaultChatModel,
+              defaultChatDeployment,
+              deployment,
+              displayName: humanizeModelIdentifier(deployment),
+            }),
+          }))
 
-        // Filter to only show models we have info for (your configured Azure OpenAI models)
-        const filteredModels = modelIds
-          .filter((id: string) => modelInfo[id])
-          .map((id: string) => modelInfo[id])
+          setAvailableModels(normalizedModels)
+          return
+        }
 
-        if (filteredModels.length > 0) {
-          setAvailableModels(filteredModels)
+        const displayModels: string[] = Array.isArray(config?.available_models)
+          ? config.available_models.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+          : []
+
+        if (displayModels.length > 0) {
+          setAvailableModels(
+            displayModels.map((name) => ({
+              id: name,
+              name,
+              description: 'Configured in backend model catalog',
+              recommended: matchesDefaultModel({
+                defaultChatModel,
+                defaultChatDeployment,
+                deployment: name,
+                displayName: name,
+              }),
+            })),
+          )
         }
       } catch (error) {
         console.error('Error fetching models:', error)
-        // Keep using the default models
+        setAvailableModels([...fallbackModels])
       }
     }
 
-    const timeoutId = setTimeout(loadModels, 100)
-    return () => clearTimeout(timeoutId)
-  }, [])
+    void loadModels()
+  }, [descriptionOverrides, fallbackModels])
 
   // Ensure selected model is valid
   useEffect(() => {
     const modelIds = availableModels.map((m) => m.id)
+    const recommendedModel = availableModels.find((model) => model.recommended)?.id
+
+    if (!selectedModel && !recommendedModel) {
+      return
+    }
+
     if (modelIds.length > 0 && !modelIds.includes(selectedModel)) {
-      const defaultModel = modelIds.includes('gpt-5-mini') ? 'gpt-5-mini' : modelIds[0]
+      const defaultModel = recommendedModel || modelIds[0]
       onModelChange(defaultModel)
     }
   }, [availableModels, selectedModel, onModelChange])

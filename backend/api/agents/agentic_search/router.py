@@ -1,29 +1,33 @@
 """
 Agentic Search API Router
 """
+from __future__ import annotations
 
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
 import asyncio
 import json
 import time
+from typing import Any
+from typing import Dict
+
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import status
+from fastapi.responses import StreamingResponse
 
 from ...core.security import get_current_active_user
 from ...services.agents.search.agentic_search_service import AgenticSearchService
-from .models import (
-    AgenticSearchRequest,
-    AgenticSearchResponse,
-    AgenticSearchStreamResponse,
-)
+from .models import AgenticSearchRequest
+from .models import AgenticSearchResponse
+from .models import AgenticSearchStreamResponse
 
 router = APIRouter()
 
 
-@router.post("/research", response_model=AgenticSearchResponse)
+@router.post('/research', response_model=AgenticSearchResponse)
 async def agentic_research(
     request: AgenticSearchRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Perform agentic research using Google's sample agent approach
@@ -47,7 +51,7 @@ async def agentic_research(
             include_citations=request.include_citations,
             search_depth=request.search_depth,
             custom_instructions=request.custom_instructions,
-            user_id=current_user.get("user_id"),
+            user_id=current_user.get('user_id'),
         )
 
         return result
@@ -59,10 +63,10 @@ async def agentic_research(
         )
 
 
-@router.post("/research/stream")
+@router.post('/research/stream')
 async def agentic_research_stream(
     request: AgenticSearchRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
     Streaming agentic research with real-time updates (Google sample approach)
@@ -88,85 +92,85 @@ async def agentic_research_stream(
                 include_citations=request.include_citations,
                 search_depth=request.search_depth,
                 custom_instructions=request.custom_instructions,
-                user_id=current_user.get("user_id"),
+                user_id=current_user.get('user_id'),
             ):
                 # Format event as server-sent event
                 event_data = AgenticSearchStreamResponse(
-                    event_type=event["type"],
-                    data=event["data"],
-                    timestamp=event["timestamp"],
+                    event_type=event['type'],
+                    data=event['data'],
+                    timestamp=event['timestamp'],
                 )
 
                 yield f"data: {event_data.model_dump_json()}\n\n"
 
         except Exception as e:
             error_event = AgenticSearchStreamResponse(
-                event_type="error", data={"error": str(e)}, timestamp=str(time.time())
+                event_type='error', data={'error': str(e)}, timestamp=str(time.time()),
             )
             yield f"data: {error_event.model_dump_json()}\n\n"
 
     return StreamingResponse(
         generate_stream(),
-        media_type="text/plain",
+        media_type='text/plain',
         headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/event-stream",
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Content-Type': 'text/event-stream',
         },
     )
 
 
-@router.get("/capabilities")
+@router.get('/capabilities')
 async def get_agent_capabilities():
     """
     Get information about available search agent capabilities
     """
     return {
-        "available_agents": [
+        'available_agents': [
             {
-                "type": "google",
-                "description": "Google's sample agent - Pure Gemini with native Google search",
-                "strengths": [
-                    "Real-time information",
-                    "Automatic grounding metadata",
-                    "Rich citation tracking",
-                    "Current events",
-                    "Breaking news",
-                    "Elegant simplicity",
+                'type': 'google',
+                'description': "Google's sample agent - Pure Gemini with native Google search",
+                'strengths': [
+                    'Real-time information',
+                    'Automatic grounding metadata',
+                    'Rich citation tracking',
+                    'Current events',
+                    'Breaking news',
+                    'Elegant simplicity',
                 ],
             },
         ],
-        "note_important": "Following Google's sample exactly - ONLY Google search via Gemini native tool. No Wikipedia, no OpenAI.",
-        "recommendations": {
-            "google": "Google's sample agent with pure Gemini approach and native Google search"
+        'note_important': "Following Google's sample exactly - ONLY Google search via Gemini native tool. No Wikipedia, no OpenAI.",
+        'recommendations': {
+            'google': "Google's sample agent with pure Gemini approach and native Google search",
         },
-        "note": "Pure Google sample implementation - only Gemini with native Google search tool. Requires GEMINI_API_KEY only.",
-        "search_depths": {
-            "quick": "1-2 iterations, fast results",
-            "standard": "2-3 iterations, balanced approach",
-            "deep": "3-5 iterations, comprehensive research",
+        'note': 'Pure Google sample implementation - only Gemini with native Google search tool. Requires GEMINI_API_KEY only.',
+        'search_depths': {
+            'quick': '1-2 iterations, fast results',
+            'standard': '2-3 iterations, balanced approach',
+            'deep': '3-5 iterations, comprehensive research',
         },
-        "features": [
+        'features': [
             "Pure Gemini pipeline (following Google's sample exactly)",
-            "Native Google search tool with automatic grounding",
-            "Structured output with Pydantic models",
-            "Iterative reflection and knowledge gap detection",
-            "Rich citation tracking with grounding chunks",
-            "Parallel query execution",
-            "Real-time web information",
-            "Elegant and simple architecture",
+            'Native Google search tool with automatic grounding',
+            'Structured output with Pydantic models',
+            'Iterative reflection and knowledge gap detection',
+            'Rich citation tracking with grounding chunks',
+            'Parallel query execution',
+            'Real-time web information',
+            'Elegant and simple architecture',
         ],
-        "models": {
-            "query_generation": "gemini-2.0-flash",
-            "search": "gemini-2.0-flash (with native google_search tool)",
-            "reflection": "gemini-2.5-flash",
-            "answer_synthesis": "gemini-2.0-flash (streaming)",
+        'models': {
+            'query_generation': 'gemini-2.0-flash',
+            'search': 'gemini-2.0-flash (with native google_search tool)',
+            'reflection': 'gemini-2.5-flash',
+            'answer_synthesis': 'gemini-2.0-flash (streaming)',
         },
-        "approach": "Google Sample - Pure Gemini (no OpenAI, no Wikipedia)",
+        'approach': 'Google Sample - Pure Gemini (no OpenAI, no Wikipedia)',
     }
 
 
-@router.get("/health")
+@router.get('/health')
 async def agent_health_check():
     """
     Health check for agentic search services
@@ -176,12 +180,12 @@ async def agent_health_check():
         health_status = await service.health_check()
 
         return {
-            "status": health_status.get("status", "unknown"),
-            "gemini_configured": health_status.get("gemini_configured", False),
-            "models": health_status.get("models", {}),
-            "service": health_status.get("service", "agentic_search_service"),
-            "timestamp": time.time(),
+            'status': health_status.get('status', 'unknown'),
+            'gemini_configured': health_status.get('gemini_configured', False),
+            'models': health_status.get('models', {}),
+            'service': health_status.get('service', 'agentic_search_service'),
+            'timestamp': time.time(),
         }
 
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e), "timestamp": time.time()}
+        return {'status': 'unhealthy', 'error': str(e), 'timestamp': time.time()}

@@ -24,4 +24,4 @@ dmypy.json
 deploy.sh
 *.sh
 !entrypoint.sh
-*.pem 
+*.pem

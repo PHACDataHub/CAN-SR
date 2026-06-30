@@ -54,7 +54,7 @@ export function GCHeader() {
             >
               {dict.common.signOut}
             </InteractiveHoverButton>
-            
+
             <Link
               href={{
                 pathname: nextLangPath,

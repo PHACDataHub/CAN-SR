@@ -6,7 +6,7 @@ This directory contains all deployment-related files and scripts for CAN-SR.
 
 ### 📜 Scripts
 - **`update-frontend.sh`** - Updates frontend code and restarts PM2
-- **`update-backend.sh`** - Updates backend code and restarts Docker containers  
+- **`update-backend.sh`** - Updates backend code and restarts Docker containers
 - **`update-all.sh`** - Updates both frontend and backend
 
 ### 📋 Documentation

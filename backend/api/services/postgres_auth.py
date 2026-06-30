@@ -20,18 +20,22 @@ Behavior:
 Notes:
 * POSTGRES_URI is deprecated and intentionally not used.
 """
+from __future__ import annotations
 
+import datetime
+import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional, Dict, Any
+from typing import Any
+from typing import Dict
+from typing import Optional
 
 import psycopg
-import psycopg2
 import psycopg2.extensions
 from psycopg.rows import dict_row
+
 from ..core.config import settings
-import logging
-import datetime
 
 try:
     from azure.identity import DefaultAzureCredential
@@ -44,13 +48,13 @@ logger = logging.getLogger(__name__)
 class PostgresServer:
     """Manages a persistent PostgreSQL connection with automatic Azure token refresh."""
 
-    _AZURE_POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
+    _AZURE_POSTGRES_SCOPE = 'https://ossrdbms-aad.database.windows.net/.default'
     _TOKEN_REFRESH_BUFFER_SECONDS = 60
 
     def __init__(self):
         self._verify_config()
-        self._credential = DefaultAzureCredential() if self._mode() == "azure" else None
-        self._token: Optional[str] = None
+        self._credential = DefaultAzureCredential() if self._mode() == 'azure' else None
+        self._token: str | None = None
         self._token_expiration: int = 0
         self._conn = None
 
@@ -61,8 +65,8 @@ class PostgresServer:
             self._conn = self._connect()
 
         # Azure token refresh handling
-        if self._mode() == "azure" and self._is_token_expired():
-            logger.info("Azure token expired — reconnecting to PostgreSQL")
+        if self._mode() == 'azure' and self._is_token_expired():
+            logger.info('Azure token expired — reconnecting to PostgreSQL')
             self.close()
             self._conn = self._connect()
 
@@ -72,7 +76,9 @@ class PostgresServer:
         # Heal it proactively so one bad request cannot poison the process.
         try:
             if self._conn and self._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
-                logger.warning("Postgres connection in aborted transaction; rolling back")
+                logger.warning(
+                    'Postgres connection in aborted transaction; rolling back',
+                )
                 self._conn.rollback()
         except Exception:
             # If rollback fails, reconnect.
@@ -89,15 +95,19 @@ class PostgresServer:
             try:
                 self._conn.close()
             except Exception:
-                logger.warning("Failed to close PostgreSQL connection", exc_info=True)
+                logger.warning(
+                    'Failed to close PostgreSQL connection', exc_info=True,
+                )
         self._conn = None
 
     @staticmethod
     def _verify_config():
         """Validate that all required PostgreSQL settings are present."""
-        mode = (settings.POSTGRES_MODE or "").lower().strip()
-        if mode not in {"local", "docker", "azure"}:
-            raise RuntimeError("POSTGRES_MODE must be one of: local, docker, azure")
+        mode = (settings.POSTGRES_MODE or '').lower().strip()
+        if mode not in {'local', 'docker', 'azure'}:
+            raise RuntimeError(
+                'POSTGRES_MODE must be one of: local, docker, azure',
+            )
 
         # Validate selected profile minimally; the rest is validated when building kwargs.
         try:
@@ -105,11 +115,13 @@ class PostgresServer:
         except Exception as e:
             raise RuntimeError(str(e))
 
-        required = [prof.get("host"), prof.get("database"), prof.get("user")]
+        required = [prof.get('host'), prof.get('database'), prof.get('user')]
         if not all(required):
-            raise RuntimeError(f"{mode} profile requires host, database and user")
+            raise RuntimeError(
+                f"{mode} profile requires host, database and user",
+            )
 
-        if mode in {"docker", "local"} and not prof.get("password"):
+        if mode in {'docker', 'local'} and not prof.get('password'):
             raise RuntimeError(f"{mode} mode requires POSTGRES_PASSWORD")
 
     def _is_token_expired(self) -> bool:
@@ -120,11 +132,11 @@ class PostgresServer:
     def _refresh_azure_token(self) -> str:
         """Return a valid Azure token, fetching a new one only if expired."""
         if self._is_token_expired():
-            logger.info("Fetching fresh Azure PostgreSQL token")
+            logger.info('Fetching fresh Azure PostgreSQL token')
             if not self._credential:
                 raise RuntimeError(
-                    "Azure credential is not configured. Ensure POSTGRES_MODE=azure and that "
-                    "DefaultAzureCredential can authenticate in this environment."
+                    'Azure credential is not configured. Ensure POSTGRES_MODE=azure and that '
+                    'DefaultAzureCredential can authenticate in this environment.',
                 )
             token = self._credential.get_token(self._AZURE_POSTGRES_SCOPE)
             self._token = token.token
@@ -133,46 +145,50 @@ class PostgresServer:
 
     @staticmethod
     def _mode() -> str:
-        return (settings.POSTGRES_MODE or "docker").lower().strip()
+        return (settings.POSTGRES_MODE or 'docker').lower().strip()
 
     @staticmethod
     def _has_local_fallback() -> bool:
         return False
 
-    def _candidate_kwargs(self, mode: str, psycopg3: bool = False) -> Dict[str, Any]:
+    def _candidate_kwargs(self, mode: str, psycopg3: bool = False) -> dict[str, Any]:
         """Build connect kwargs for a given mode based on POSTGRES_* env vars.
 
         If psycopg3=True, renames 'database' -> 'dbname' for psycopg3 compatibility.
         """
         prof = settings.postgres_profile(mode)
 
-        kwargs: Dict[str, Any] = {
-            "host": prof.get("host"),
-            "database": prof.get("database"),
-            "user": prof.get("user"),
-            "port": int(prof.get("port") or 5432),
+        kwargs: dict[str, Any] = {
+            'host': prof.get('host'),
+            'database': prof.get('database'),
+            'user': prof.get('user'),
+            'port': int(prof.get('port') or 5432),
             # Fail fast so connection errors surface quickly
-            "connect_timeout": int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "3")),
+            'connect_timeout': int(os.getenv('POSTGRES_CONNECT_TIMEOUT', '3')),
         }
 
-        sslmode = prof.get("sslmode")
+        sslmode = prof.get('sslmode')
         if sslmode:
-            kwargs["sslmode"] = sslmode
+            kwargs['sslmode'] = sslmode
 
-        if prof.get("mode") == "azure":
-            kwargs["password"] = self._refresh_azure_token()
+        if prof.get('mode') == 'azure':
+            kwargs['password'] = self._refresh_azure_token()
         else:
-            if not prof.get("password"):
+            if not prof.get('password'):
                 raise RuntimeError(f"{mode} profile requires password")
-            kwargs["password"] = prof.get("password")
+            kwargs['password'] = prof.get('password')
 
         # Sanity checks
-        required = [kwargs.get("host"), kwargs.get("database"), kwargs.get("user"), kwargs.get("port")]
+        required = [
+            kwargs.get('host'), kwargs.get(
+                'database',
+            ), kwargs.get('user'), kwargs.get('port'),
+        ]
         if not all(required):
             raise RuntimeError(f"Incomplete Postgres config for mode={mode}")
 
         if psycopg3:
-            kwargs["dbname"] = kwargs.pop("database")
+            kwargs['dbname'] = kwargs.pop('database')
 
         return kwargs
 
@@ -183,15 +199,18 @@ class PostgresServer:
         template where the token is injected per-connection (azure mode).
         """
         kw = self._candidate_kwargs(self._mode(), psycopg3=True)
-        kw.pop("connect_timeout", None)
+        kw.pop('connect_timeout', None)
         if not include_password:
-            kw.pop("password", None)
-        return " ".join(f"{k}={v}" for k, v in kw.items() if v is not None)
+            kw.pop('password', None)
+        return ' '.join(f"{k}={v}" for k, v in kw.items() if v is not None)
 
     def _connect_with_mode(self, mode: str):
         kwargs = self._candidate_kwargs(mode)
-        safe_kwargs = {k: ("***" if k == "password" else v) for k, v in kwargs.items()}
-        logger.info("Connecting to Postgres (mode=%s) %s", mode, safe_kwargs)
+        safe_kwargs = {
+            k: ('***' if k == 'password' else v)
+            for k, v in kwargs.items()
+        }
+        logger.info('Connecting to Postgres (mode=%s) %s', mode, safe_kwargs)
         return psycopg2.connect(**kwargs)
 
     def _connect(self):
@@ -200,9 +219,12 @@ class PostgresServer:
         try:
             return self._connect_with_mode(primary_mode)
         except Exception as e:
-            logger.error("Postgres connect failed (mode=%s): %s", primary_mode, e, exc_info=True)
+            logger.error(
+                'Postgres connect failed (mode=%s): %s',
+                primary_mode, e, exc_info=True,
+            )
             raise psycopg2.OperationalError(
-                f"Could not connect to Postgres for mode={primary_mode}"
+                f"Could not connect to Postgres for mode={primary_mode}",
             )
 
     @asynccontextmanager
@@ -216,9 +238,10 @@ class PostgresServer:
             yield conn
 
     def __repr__(self) -> str:
-        status = "open" if self._conn and not self._conn.closed else "closed"
+        status = 'open' if self._conn and not self._conn.closed else 'closed'
         return (
             f"<PostgresServer mode={settings.POSTGRES_MODE} conn={status}>"
         )
+
 
 postgres_server = PostgresServer()

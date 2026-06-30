@@ -13,20 +13,23 @@ We normalize by:
 This is best-effort and is intended for highlighting tables/figures similar
 to sentence highlighting.
 """
-
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 
 
-def _page_meta_by_number(pages_meta: Any) -> Dict[int, Dict[str, Any]]:
-    out: Dict[int, Dict[str, Any]] = {}
+def _page_meta_by_number(pages_meta: Any) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
     if not isinstance(pages_meta, list):
         return out
     for p in pages_meta:
         if not isinstance(p, dict):
             continue
-        num = p.get("pageNumber") or p.get("page_number")
+        num = p.get('pageNumber') or p.get('page_number')
         try:
             num_i = int(num)
         except Exception:
@@ -35,7 +38,7 @@ def _page_meta_by_number(pages_meta: Any) -> Dict[int, Dict[str, Any]]:
     return out
 
 
-def _unit_to_scale(unit: Optional[str]) -> float:
+def _unit_to_scale(unit: str | None) -> float:
     """Return multiplier to convert unit coordinates into ~PDF pixels.
 
     Azure DI commonly reports:
@@ -49,15 +52,15 @@ def _unit_to_scale(unit: Optional[str]) -> float:
     if not unit:
         return 1.0
     u = str(unit).strip().lower()
-    if u in ("pixel", "pixels", "px"):
+    if u in ('pixel', 'pixels', 'px'):
         return 1.0
-    if u in ("inch", "in"):
+    if u in ('inch', 'in'):
         return 72.0
     # Unknown units: do not scale.
     return 1.0
 
 
-def polygon_to_bbox(polygon: Any) -> Optional[Tuple[float, float, float, float]]:
+def polygon_to_bbox(polygon: Any) -> tuple[float, float, float, float] | None:
     """Convert Azure polygon [x1,y1,x2,y2,...] to (minx, miny, maxx, maxy)."""
     if not isinstance(polygon, list) or len(polygon) < 8:
         return None
@@ -72,14 +75,14 @@ def polygon_to_bbox(polygon: Any) -> Optional[Tuple[float, float, float, float]]
 def normalize_bounding_regions_to_boxes(
     bounding_regions: Any,
     pages_meta: Any,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Normalize Azure boundingRegions -> list of {page,x,y,width,height}.
 
     bounding_regions supports either:
       - [{'pageNumber'|'page_number': 1, 'polygon': [...]}, ...]
       - [{'page_number': 1, 'polygon': [...]}, ...]
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     if not isinstance(bounding_regions, list):
         return out
 
@@ -89,22 +92,22 @@ def normalize_bounding_regions_to_boxes(
         if not isinstance(region, dict):
             continue
 
-        page = region.get("pageNumber")
+        page = region.get('pageNumber')
         if page is None:
-            page = region.get("page_number")
+            page = region.get('page_number')
         try:
             page_i = int(page)
         except Exception:
             continue
 
-        poly = region.get("polygon")
+        poly = region.get('polygon')
         bbox = polygon_to_bbox(poly)
         if not bbox:
             continue
 
         unit = None
         if page_i in pm:
-            unit = pm[page_i].get("unit")
+            unit = pm[page_i].get('unit')
 
         s = _unit_to_scale(unit)
         minx, miny, maxx, maxy = bbox
@@ -115,12 +118,12 @@ def normalize_bounding_regions_to_boxes(
 
         out.append(
             {
-                "page": page_i,
-                "x": minx,
-                "y": miny,
-                "width": max(0.0, maxx - minx),
-                "height": max(0.0, maxy - miny),
-            }
+                'page': page_i,
+                'x': minx,
+                'y': miny,
+                'width': max(0.0, maxx - minx),
+                'height': max(0.0, maxy - miny),
+            },
         )
 
     return out

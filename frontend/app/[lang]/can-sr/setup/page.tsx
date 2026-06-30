@@ -1,11 +1,20 @@
 'use client'
 
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
 import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Settings } from 'lucide-react'
 import { useDictionary } from '../../DictionaryProvider'
 
@@ -33,9 +42,14 @@ export default function CanSrSetupPage() {
   const [yamlLoading, setYamlLoading] = useState(false)
   const [yamlSaving, setYamlSaving] = useState(false)
   const [yamlSaveMessage, setYamlSaveMessage] = useState<string | null>(null)
+  const [confirmOverwriteOpen, setConfirmOverwriteOpen] = useState(false)
+  const [overwriteConfirmMessage, setOverwriteConfirmMessage] = useState(
+    'This SR already has screening data. Updating criteria may invalidate existing screening results.',
+  )
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const yamlInputRef = useRef<HTMLInputElement | null>(null)
+  const yamlSaveMessageTimeoutRef = useRef<number | null>(null)
 
   // auth headers and SR state for Manage Users popup (mirrors sr/page.tsx)
   const token = getAuthToken()
@@ -46,29 +60,83 @@ export default function CanSrSetupPage() {
   const [, setSrLoading] = useState<boolean>(true)
   const [, setSrError] = useState<string | null>(null)
 
+  const loadSr = useCallback(async () => {
+    if (!srId) return null
+
+    setSrLoading(true)
+    setSrError(null)
+    try {
+      const res = await authenticatedFetch(
+        `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+      )
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(errBody?.detail || errBody?.error || `Failed to fetch SR (${res.status})`)
+      }
+
+      const data = await res.json().catch(() => ({}))
+      setSr(data)
+      return data
+    } catch (err: any) {
+      console.error('Error fetching SR:', err)
+      setSrError(err?.message || 'Unable to load review')
+      return null
+    } finally {
+      setSrLoading(false)
+    }
+  }, [srId])
+
   useEffect(() => {
     if (!srId) return
-    const fetchSr = async () => {
-      setSrLoading(true)
-      setSrError(null)
-      try {
-        const res = await authenticatedFetch(
-          `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
-        )
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({}))
-          throw new Error(errBody?.detail || errBody?.error || `Failed to fetch SR (${res.status})`)
-        }
-        const data = await res.json().catch(() => ({}))
-        setSr(data)
-      } catch (err: any) {
-        console.error('Error fetching SR:', err)
-        setSrError(err?.message || 'Unable to load review')
-      } finally {
-        setSrLoading(false)
-      }
+    void loadSr()
+  }, [loadSr, srId])
+
+  const clearYamlSaveMessageTimeout = useCallback(() => {
+    if (yamlSaveMessageTimeoutRef.current !== null) {
+      window.clearTimeout(yamlSaveMessageTimeoutRef.current)
+      yamlSaveMessageTimeoutRef.current = null
     }
-    fetchSr()
+  }, [])
+
+  const showYamlSaveMessage = useCallback(
+    (message: string | null, autoClear = false) => {
+      clearYamlSaveMessageTimeout()
+      setYamlSaveMessage(message)
+
+      if (message && autoClear) {
+        yamlSaveMessageTimeoutRef.current = window.setTimeout(() => {
+          setYamlSaveMessage(null)
+          yamlSaveMessageTimeoutRef.current = null
+        }, 3500)
+      }
+    },
+    [clearYamlSaveMessageTimeout],
+  )
+
+  useEffect(() => {
+    return () => {
+      clearYamlSaveMessageTimeout()
+    }
+  }, [clearYamlSaveMessageTimeout])
+
+  const normalizeYaml = useCallback((value: string | null | undefined) => {
+    return (value || '').replace(/\r\n/g, '\n').trim()
+  }, [])
+
+  const getLastSavedYaml = useCallback(async () => {
+    if (!srId) return SAMPLE_YAML
+
+    const res = await authenticatedFetch(
+      `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+    )
+    const data = await res.json().catch(() => ({}))
+    const criteria_yaml = data.criteria_yaml
+
+    if (!criteria_yaml) {
+      return SAMPLE_YAML
+    }
+
+    return criteria_yaml
   }, [srId])
 
   useEffect(() => {
@@ -88,7 +156,7 @@ export default function CanSrSetupPage() {
     }
 
     loadLastSavedYaml()
-  }, [srId, router])
+  }, [getLastSavedYaml, router, srId])
 
   // read selected file
   const handleFileSelected = async (f: File | null) => {
@@ -101,7 +169,7 @@ export default function CanSrSetupPage() {
   const handleYamlSelected = async (f: File | null) => {
     if (!f) return
     setYamlLoading(true)
-    setYamlSaveMessage(null)
+    showYamlSaveMessage(null)
     try {
       const text = await f.text()
       setYamlText(text)
@@ -114,7 +182,7 @@ export default function CanSrSetupPage() {
         }
       }
     } catch {
-      setYamlSaveMessage('Failed to read YAML file')
+      showYamlSaveMessage('Failed to read YAML file')
     } finally {
       setYamlLoading(false)
     }
@@ -155,6 +223,7 @@ export default function CanSrSetupPage() {
         setUploadError(errMsg)
       } else {
         setUploadResult(data)
+        void loadSr()
       }
     } catch (err: any) {
       console.error('Upload error', err)
@@ -164,71 +233,100 @@ export default function CanSrSetupPage() {
     }
   }
 
-  const saveYaml = async (forceUpdate = false) => {
+  const hasExistingScreeningData = Boolean((sr?.screening_db || {}).table_name)
+
+  const persistYaml = useCallback(async (forceUpdate = false) => {
     if (!srId) {
-      setYamlSaveMessage('Missing review id')
-      return
+      showYamlSaveMessage('Missing review id')
+      return false
     }
+
     setYamlSaving(true)
-    setYamlSaveMessage(null)
+    showYamlSaveMessage(null)
+    const submittedYaml = yamlText || ''
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    const timeoutId = window.setTimeout(() => {
+      controller?.abort()
+    }, 15000)
+
     try {
-      // Send as form-data so backend receives criteria_file/criteria_yaml properly
-      const fd = new FormData()
-      fd.append('criteria_yaml', yamlText || '')
+      const body = new URLSearchParams()
+      body.set('criteria_yaml', submittedYaml)
       if (forceUpdate) {
-        fd.append('force', 'true')
+        body.set('force', 'true')
       }
 
       const headers = getAuthHeaders()
-      // Do NOT set Content-Type so browser adds multipart/form-data boundary
       const res = await fetch(`/api/can-sr/reviews/edit?sr_id=${encodeURIComponent(srId)}`, {
         method: 'PUT',
-        headers,
-        body: fd as any,
+        headers: {
+          ...headers,
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        },
+        body: body.toString(),
+        signal: controller?.signal,
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        // If 409 conflict (screening data exists), ask for confirmation
-        if (res.status === 409) {
-          const confirmMsg = (data?.detail || 'This SR already has screening data. Updating criteria may invalidate existing results.') + '\n\nAre you sure you want to proceed?'
-          if (window.confirm(confirmMsg)) {
-            // Retry with force=true
-            setYamlSaving(false)
-            return saveYaml(true)
-          } else {
-            setYamlSaveMessage('Update canceled')
-            return
-          }
-        }
-        setYamlSaveMessage((data && (data.error || data.detail)) || `Save failed (${res.status})`)
-      } else {
-        setYamlSaveMessage('Saved successfully')
+      if (res.status === 409 && !forceUpdate) {
+        const data = await res.json().catch(() => ({}))
+        setOverwriteConfirmMessage(
+          data?.detail ||
+            'This SR already has screening data. Updating criteria may invalidate existing screening results.',
+        )
+        setConfirmOverwriteOpen(true)
+        return false
       }
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        showYamlSaveMessage(
+          (data && (data.error || data.detail)) || `Save failed (${res.status})`,
+        )
+        return false
+      }
+
+      void loadSr()
+      showYamlSaveMessage('Saved successfully', true)
+      return true
     } catch (err: any) {
-      setYamlSaveMessage(err?.message || 'Network error while saving')
+      const refreshedSr = await loadSr().catch(() => null)
+      if (normalizeYaml(refreshedSr?.criteria_yaml) === normalizeYaml(submittedYaml)) {
+        showYamlSaveMessage('Saved successfully', true)
+        return true
+      }
+
+      if (err?.name === 'AbortError') {
+        showYamlSaveMessage('Save timed out while waiting for the response. Please try again.')
+        return false
+      }
+
+      showYamlSaveMessage(err?.message || 'Network error while saving')
+      return false
     } finally {
+      window.clearTimeout(timeoutId)
       setYamlSaving(false)
-      // hide success message after a short time
-      setTimeout(() => {
-        setYamlSaveMessage(null)
-      }, 3500)
     }
-  }
+  }, [loadSr, normalizeYaml, showYamlSaveMessage, srId, yamlText])
 
-  const getLastSavedYaml = async () => {
-    if (!srId) return SAMPLE_YAML
+  const saveYaml = useCallback(() => {
+    if (yamlSaving) {
+      return
+    }
 
-    const res = await authenticatedFetch(
-      `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}`,
+    if (!hasExistingScreeningData) {
+      void persistYaml(false)
+      return
+    }
+
+    setOverwriteConfirmMessage(
+      'This SR already has screening data. Updating criteria may invalidate existing screening results. Do you want to overwrite the existing configuration?',
     )
-    const data = await res.json().catch(() => ({}))
-    const criteria_yaml = data.criteria_yaml
-    if(!criteria_yaml) {
-      return SAMPLE_YAML
-    } else {
-      return criteria_yaml
-    }
-  }
+    setConfirmOverwriteOpen(true)
+  }, [hasExistingScreeningData, persistYaml, yamlSaving])
+
+  const confirmOverwriteAndSave = useCallback(async () => {
+    setConfirmOverwriteOpen(false)
+    await persistYaml(true)
+  }, [persistYaml])
 
   const reloadLastSave = async () => {
     setYamlLoading(true)
@@ -244,7 +342,7 @@ export default function CanSrSetupPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
 
-      <SRHeader 
+      <SRHeader
         title={dict.setup.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={
@@ -384,7 +482,7 @@ export default function CanSrSetupPage() {
                 </button>
 
                 <button
-                  onClick={() => saveYaml()}
+                  onClick={() => void saveYaml()}
                   disabled={yamlSaving}
                   className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                 >
@@ -407,6 +505,35 @@ export default function CanSrSetupPage() {
 
         </div>
       </main>
+      <AlertDialog open={confirmOverwriteOpen} onOpenChange={setConfirmOverwriteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Overwrite existing screening configuration?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {overwriteConfirmMessage}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                showYamlSaveMessage('Update canceled', true)
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <button
+              type="button"
+              onClick={() => {
+                void confirmOverwriteAndSave()
+              }}
+              disabled={yamlSaving}
+              className={`rounded-md px-3 py-2 text-sm font-medium text-white ${yamlSaving ? 'bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+            >
+              {yamlSaving ? dict.setup.saving : 'Overwrite and save'}
+            </button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <ManageUsersPopup
           open={manageOpen}
           onClose={() => setManageOpen(false)}
