@@ -54,6 +54,8 @@ class SystematicReviewRead(BaseModel):
     criteria_yaml: str | None = None
     # convenience structured metadata extracted from criteria (l1, l2, parameters)
     criteria_parsed: dict[str, Any] | None = None
+    # screening table metadata used by the setup page to detect existing imported citations
+    screening_db: dict[str, Any] | None = None
 
     # Per-step, per-criterion thresholds (SR-scoped). Example:
     # {
@@ -158,6 +160,7 @@ async def create_systematic_review(
         criteria=sr_doc.get('criteria'),
         criteria_yaml=sr_doc.get('criteria_yaml'),
         criteria_parsed=sr_doc.get('criteria_parsed'),
+        screening_db=sr_doc.get('screening_db'),
         screening_thresholds=sr_doc.get('screening_thresholds'),
         critical_prompt_additions=sr_doc.get('critical_prompt_additions'),
     )
@@ -305,7 +308,9 @@ async def list_systematic_reviews_for_user(
                 criteria=doc.get('criteria'),
                 criteria_yaml=doc.get('criteria_yaml'),
                 criteria_parsed=doc.get('criteria_parsed'),
+                screening_db=doc.get('screening_db'),
                 screening_thresholds=doc.get('screening_thresholds'),
+                critical_prompt_additions=doc.get('critical_prompt_additions'),
             ),
         )
 
@@ -341,7 +346,9 @@ async def get_systematic_review(sr_id: str, current_user: dict[str, Any] = Depen
         criteria=doc.get('criteria'),
         criteria_yaml=doc.get('criteria_yaml'),
         criteria_parsed=doc.get('criteria_parsed'),
+        screening_db=doc.get('screening_db'),
         screening_thresholds=doc.get('screening_thresholds'),
+        critical_prompt_additions=doc.get('critical_prompt_additions'),
     )
 
 
@@ -469,7 +476,9 @@ async def update_systematic_review_criteria(
         criteria=doc.get('criteria'),
         criteria_yaml=doc.get('criteria_yaml'),
         criteria_parsed=doc.get('criteria_parsed'),
+        screening_db=doc.get('screening_db'),
         screening_thresholds=doc.get('screening_thresholds'),
+        critical_prompt_additions=doc.get('critical_prompt_additions'),
     )
 
 

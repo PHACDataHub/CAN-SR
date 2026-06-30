@@ -1437,11 +1437,16 @@ class CitsDPService:
             core = snake_case(q, max_len=56)
             return f"human_{core}" if core else 'human_col'
 
+        def _llm_col(q: str) -> str:
+            core = snake_case(q, max_len=56)
+            return f"llm_{core}" if core else 'llm_col'
+
         needed_cols: list[str] = []
         for q in list(l2_union_qs):
             if not isinstance(q, str) or not q.strip():
                 continue
             needed_cols.append(_human_col(q))
+            needed_cols.append(_llm_col(q))
         # stable unique
         seen = set()
         uniq_cols = []
@@ -1461,14 +1466,14 @@ class CitsDPService:
         except Exception:
             existing_cols = set()
 
-        existing_human_cols = [c for c in uniq_cols if c in existing_cols]
+        existing_answer_cols = [c for c in uniq_cols if c in existing_cols]
 
         conn = None
         try:
             conn = postgres_server.conn
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-            select_cols = ['id'] + existing_human_cols
+            select_cols = ['id'] + existing_answer_cols
             sql_cols = ', '.join([f'"{c}"' for c in select_cols])
             cur.execute(f'SELECT {sql_cols} FROM "{table_name}" ORDER BY id')
             rows = cur.fetchall() or []
@@ -1488,22 +1493,30 @@ class CitsDPService:
                             return {}
                 return {}
 
+            def _selected_from_row(row: dict[str, Any], q: str) -> str | None:
+                human_col = _human_col(q)
+                llm_col = _llm_col(q)
+
+                for col in [human_col, llm_col]:
+                    if col not in existing_cols:
+                        continue
+                    obj = _parse_jsonb(row.get(col))
+                    selected = obj.get('selected')
+                    if isinstance(selected, str):
+                        selected = selected.strip()
+                    if selected:
+                        return str(selected)
+                return None
+
             def _compute(step_qs: list[str], row: dict[str, Any]) -> str:
                 if not step_qs:
                     return 'undecided'
                 for q in step_qs:
-                    col = _human_col(q)
-                    # Column not present => no human answer recorded => undecided
-                    if col not in existing_cols:
-                        return 'undecided'
-                    hval = row.get(col)
-                    if hval is None:
-                        return 'undecided'
-                    hobj = _parse_jsonb(hval)
-                    selected = hobj.get('selected')
-                    # Treat empty/whitespace as unanswered (UI shows "-- select --")
-                    if selected is None or (isinstance(selected, str) and selected.strip() == ''):
-                        return 'undecided'
+                    # Eligibility precedence:
+                    #   human answer > llm answer > no answer (exclude)
+                    selected = _selected_from_row(row, q)
+                    if selected is None:
+                        return 'exclude'
                     if 'exclude' in str(selected).lower():
                         return 'exclude'
                 return 'include'

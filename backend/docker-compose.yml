@@ -30,7 +30,7 @@ services:
   # GROBID SERVICE - PDF Parsing for Full-Text Extraction
   # =============================================================================
   grobid-service:
-    image: grobid/grobid:0.8.2-crf
+    image: grobid/grobid:0.8.2.1-crf
     container_name: grobid-service
     ports:
       - "8070:8070"

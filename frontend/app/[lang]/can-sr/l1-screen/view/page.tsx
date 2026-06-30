@@ -122,7 +122,7 @@ export default function CanSrL1ScreenPage() {
   const filterMode = searchParams?.get('filter') || 'all'
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
-  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const [selectedModel, setSelectedModel] = useState('')
   const dict = useDictionary()
 
   // Data states

@@ -36,7 +36,7 @@ export default function CanSrL2ScreenPage() {
   const citationId = searchParams?.get('citation_id')
   // Get current language to keep language when navigating (must be unconditional hook call)
   const { lang } = useParams<{ lang: string }>()
-  const [selectedModel, setSelectedModel] = useState('gpt-5-mini')
+  const [selectedModel, setSelectedModel] = useState('')
   const dict = useDictionary()
 
   // Navigation list (Extract is filtered by L2 pass)

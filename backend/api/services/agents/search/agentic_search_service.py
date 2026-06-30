@@ -905,11 +905,10 @@ Summaries:
             final_answer = ''.join(final_answer_parts)
             for i, source in enumerate(sources):
                 if source.get('url'):
+                    source_title = source.get('title') or f'Source {i + 1}'
                     final_answer = final_answer.replace(
                         f"[source title]({source.get('url')})",
-                        f"[{
-                            source.get('title', f'Source {i+1}')
-                        }]({source.get('url')})",
+                        f"[{source_title}]({source.get('url')})",
                     )
 
         except Exception as e:
@@ -917,9 +916,11 @@ Summaries:
             if sources:
                 fallback_answer = f"Based on my research about '{research_topic}', I found {len(sources)} relevant sources:\n\n"
                 for i, source in enumerate(sources[:MAX_FALLBACK_SOURCES], 1):
-                    fallback_answer += f"{i}. **{source.get('title', f'Source {i}')}**: {
-                        source.get('snippet', 'Information found')
-                    }\n"
+                    source_title = source.get('title') or f'Source {i}'
+                    fallback_answer += (
+                        f"{i}. **{source_title}**: "
+                        f"{source.get('snippet', 'Information found')}\n"
+                    )
                     if source.get('url'):
                         fallback_answer += f"   Source: {source['url']}\n"
                 yield fallback_answer
@@ -944,11 +945,10 @@ Summaries:
             final_answer = result.content
             for i, source in enumerate(sources):
                 if source.get('url'):
+                    source_title = source.get('title') or f'Source {i + 1}'
                     final_answer = final_answer.replace(
                         f"[source title]({source.get('url')})",
-                        f"[{
-                            source.get('title', f'Source {i+1}')
-                        }]({source.get('url')})",
+                        f"[{source_title}]({source.get('url')})",
                     )
 
             return final_answer
@@ -958,9 +958,11 @@ Summaries:
             if sources:
                 answer = f"Based on my research about '{research_topic}', I found {len(sources)} relevant sources:\n\n"
                 for i, source in enumerate(sources[:MAX_FALLBACK_SOURCES], 1):
-                    answer += f"{i}. **{source.get('title', f'Source {i}')}**: {
-                        source.get('snippet', 'Information found')
-                    }\n"
+                    source_title = source.get('title') or f'Source {i}'
+                    answer += (
+                        f"{i}. **{source_title}**: "
+                        f"{source.get('snippet', 'Information found')}\n"
+                    )
                     if source.get('url'):
                         answer += f"   Source: {source['url']}\n"
                 return answer

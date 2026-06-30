@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     AZURE_DOC_INT_API_KEY: str | None = os.getenv('AZURE_DOC_INT_API_KEY')
 
     # Default model to use
-    DEFAULT_CHAT_MODEL: str = os.getenv('DEFAULT_CHAT_MODEL', 'gpt-5-mini')
+    DEFAULT_CHAT_MODEL: str = os.getenv('DEFAULT_CHAT_MODEL', '')
 
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv('RATE_LIMIT_PER_MINUTE', '60'))

@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -97,7 +98,13 @@ class AzureOpenAIClient:
                     ),
                 )
 
-        self.model_configs = self._load_model_configs()
+        self._disabled_deployments: set[str] = set()
+
+        self._models_yaml = self._load_models_yaml()
+        self._catalog_default_model = self._load_catalog_default_model(
+            self._models_yaml,
+        )
+        self.model_configs = self._load_model_configs(self._models_yaml)
         self.default_model = self._resolve_default_model(self.default_model)
 
         # Cache official clients by (endpoint, api_version, auth_type)
@@ -159,9 +166,28 @@ class AzureOpenAIClient:
             )
             return {}
 
-    def _load_model_configs(self) -> dict[str, dict[str, str]]:
+    def _load_catalog_default_model(self, data: dict[str, Any]) -> str | None:
+        """Return the configured default model key from models.yaml if present."""
+        value = data.get('default_model') if isinstance(data, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def _extract_models_mapping(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Support both legacy flat YAML and structured YAML with `models:`."""
+        if not isinstance(data, dict):
+            return {}
+        models = data.get('models')
+        if isinstance(models, dict):
+            return models
+        return data
+
+    def _load_model_configs(
+        self,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, str]]:
         """Build model configs keyed by UI/display name."""
-        models = self._load_models_yaml()
+        models = self._extract_models_mapping(data or {})
         cfg: dict[str, dict[str, str]] = {}
         for display_name, meta in models.items():
             if not isinstance(meta, dict):
@@ -182,12 +208,44 @@ class AzureOpenAIClient:
         return {}
 
     def _resolve_default_model(self, desired: str) -> str:
-        if desired in self.model_configs:
+        yaml_default = (self._catalog_default_model or '').strip()
+        desired = (yaml_default or desired or '').strip()
+        desired_l = desired.lower()
+
+        if (
+            desired in self.model_configs
+            and self._is_model_config_available(self.model_configs[desired])
+        ):
             return desired
+
+        for key, cfg in self._iter_available_model_configs():
+            if str(key).lower() == desired_l and desired_l:
+                return str(key)
+            if str(cfg.get('deployment') or '').lower() == desired_l and desired_l:
+                return str(key)
+
         # If configured default doesn't exist, fall back to first configured model
-        for k in self.model_configs.keys():
+        for k, _cfg in self._iter_available_model_configs():
             return k
         return desired
+
+    def _is_model_config_available(self, config: dict[str, str] | None) -> bool:
+        if not config:
+            return False
+        endpoint = str(config.get('endpoint') or '').strip()
+        deployment = str(config.get('deployment') or '').strip()
+        api_version = str(config.get('api_version') or '').strip()
+        if not endpoint or not deployment or not api_version:
+            return False
+        if deployment in self._disabled_deployments:
+            return False
+        return True
+
+    def _iter_available_model_configs(self):
+        for model, config in self.model_configs.items():
+            if not self._is_model_config_available(config):
+                continue
+            yield model, config
 
     def _get_model_config(self, model: str) -> dict[str, str]:
         """Get configuration for a specific model.
@@ -199,7 +257,7 @@ class AzureOpenAIClient:
         """
 
         # Exact match on display key
-        if model in self.model_configs:
+        if model in self.model_configs and self._is_model_config_available(self.model_configs[model]):
             return self.model_configs[model]
 
         desired = (model or '').strip()
@@ -207,16 +265,20 @@ class AzureOpenAIClient:
 
         # Case-insensitive match on display key
         for k, cfg in self.model_configs.items():
+            if not self._is_model_config_available(cfg):
+                continue
             if str(k).lower() == desired_l and desired_l:
                 return cfg
 
         # Match by deployment name (common when UI stores deployment id)
         for _k, cfg in self.model_configs.items():
+            if not self._is_model_config_available(cfg):
+                continue
             if str(cfg.get('deployment') or '').lower() == desired_l and desired_l:
                 return cfg
 
         # fallback to first configured model
-        for _, cfg in self.model_configs.items():
+        for _, cfg in self._iter_available_model_configs():
             return cfg
         raise ValueError('No Azure OpenAI models are configured')
 
@@ -339,6 +401,147 @@ class AzureOpenAIClient:
         messages.append({'role': 'user', 'content': user_message})
         return messages
 
+    @staticmethod
+    def _is_gpt5_family(deployment: str | None) -> bool:
+        dep = str(deployment or '').strip().lower()
+        return dep.startswith('gpt-5')
+
+    def _build_chat_request_kwargs(
+        self,
+        *,
+        deployment: str,
+        messages: list[dict[str, Any]],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        frequency_penalty: float,
+        presence_penalty: float,
+        stream: bool,
+    ) -> dict[str, Any]:
+        """Build Azure OpenAI request kwargs with GPT-family compatibility.
+
+        GPT-5 family deployments use `max_completion_tokens` instead of the
+        legacy `max_tokens` parameter. Some previews are also stricter about
+        sampling parameters, so we avoid forcing temperature there unless a
+        future deployment explicitly requires it.
+        """
+        request_kwargs: dict[str, Any] = {
+            'model': deployment,
+            'messages': messages,
+            'top_p': top_p,
+            'frequency_penalty': frequency_penalty,
+            'presence_penalty': presence_penalty,
+            'stream': stream,
+        }
+
+        if self._is_gpt5_family(deployment):
+            request_kwargs['max_completion_tokens'] = max_tokens
+        else:
+            request_kwargs['max_tokens'] = max_tokens
+            request_kwargs['temperature'] = temperature
+
+        return request_kwargs
+
+    @staticmethod
+    def _extract_unsupported_parameter_name(error: Exception) -> str | None:
+        text = str(error)
+        patterns = [
+            r"Unsupported parameter:\s*'([^']+)'",
+            r'"param":\s*"([^"]+)"',
+            r"'param':\s*'([^']+)'",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return str(match.group(1)).strip()
+        return None
+
+    @staticmethod
+    def _is_deployment_not_found_error(error: Exception) -> bool:
+        text = str(error)
+        return 'DeploymentNotFound' in text or 'deployment for this resource does not exist' in text.lower()
+
+    def _disable_deployment(self, deployment: str, reason: Exception | str) -> None:
+        dep = str(deployment or '').strip()
+        if not dep or dep in self._disabled_deployments:
+            return
+        self._disabled_deployments.add(dep)
+        logger.warning('Disabling Azure OpenAI deployment %s after failure: %s', dep, reason)
+
+    def _get_retry_model_key(self, current_deployment: str) -> str | None:
+        preferred_keys: list[str] = []
+        if self.default_model:
+            preferred_keys.append(self.default_model)
+        preferred_keys.extend([str(k) for k in self.model_configs.keys()])
+
+        seen: set[str] = set()
+        for key in preferred_keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            cfg = self.model_configs.get(key)
+            if not self._is_model_config_available(cfg):
+                continue
+            dep = str((cfg or {}).get('deployment') or '').strip()
+            if not dep or dep == current_deployment:
+                continue
+            return key
+
+        return None
+
+    async def _create_chat_completion_request(
+        self,
+        *,
+        model: str,
+        request_kwargs: dict[str, Any],
+    ):
+        current_model = model
+        current_request = dict(request_kwargs)
+        attempted_deployments: set[str] = set()
+
+        while True:
+            deployment = str(current_request.get('model') or '').strip()
+            attempted_deployments.add(deployment)
+            try:
+                if AsyncAzureOpenAI is not None:
+                    client = self._get_official_async_client(current_model)
+                    return await client.chat.completions.create(**current_request)
+
+                client = self._get_official_client(current_model)
+
+                def _call_sync():
+                    return client.chat.completions.create(**current_request)
+
+                return await run_in_threadpool(_call_sync)
+            except Exception as e:
+                unsupported_param = self._extract_unsupported_parameter_name(e)
+                if unsupported_param and unsupported_param in current_request:
+                    logger.warning(
+                        'Retrying Azure OpenAI request for deployment %s without unsupported parameter %s',
+                        deployment,
+                        unsupported_param,
+                    )
+                    current_request.pop(unsupported_param, None)
+                    continue
+
+                if self._is_deployment_not_found_error(e):
+                    self._disable_deployment(deployment, e)
+                    retry_model = self._get_retry_model_key(deployment)
+                    if retry_model:
+                        retry_config = self.model_configs.get(retry_model) or {}
+                        retry_deployment = str(retry_config.get('deployment') or '').strip()
+                        if retry_deployment and retry_deployment not in attempted_deployments:
+                            logger.warning(
+                                'Retrying Azure OpenAI request with fallback deployment %s after %s was not found',
+                                retry_deployment,
+                                deployment,
+                            )
+                            current_model = retry_model
+                            current_request = {**current_request, 'model': retry_deployment}
+                            continue
+
+                raise
+
     async def chat_completion(
         self,
         messages: list[dict[str, Any]],
@@ -373,31 +576,20 @@ class AzureOpenAIClient:
         try:
             # Prefer true async client when available; otherwise offload the sync
             # network call to a threadpool to avoid blocking the event loop.
-            request_kwargs = {
-                'model': deployment,
-                'messages': messages,
-                'top_p': top_p,
-                'frequency_penalty': frequency_penalty,
-                'presence_penalty': presence_penalty,
-                'stream': stream,
-            }
-
-            # gpt-5 deployments may reject temperature/max_tokens in some previews.
-            # We gate this by the *deployment* name because the UI key can differ.
-            if deployment != 'gpt-5-mini':
-                request_kwargs['max_tokens'] = max_tokens
-                request_kwargs['temperature'] = temperature
-
-            if AsyncAzureOpenAI is not None:
-                client = self._get_official_async_client(model)
-                response = await client.chat.completions.create(**request_kwargs)
-            else:
-                client = self._get_official_client(model)
-
-                def _call_sync():
-                    return client.chat.completions.create(**request_kwargs)
-
-                response = await run_in_threadpool(_call_sync)
+            request_kwargs = self._build_chat_request_kwargs(
+                deployment=deployment,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stream=stream,
+            )
+            response = await self._create_chat_completion_request(
+                model=model,
+                request_kwargs=request_kwargs,
+            )
 
             if stream:
                 return response
@@ -520,23 +712,24 @@ class AzureOpenAIClient:
             model = model or self.default_model
             deployment = self._get_model_config(model)['deployment']
 
-            request_kwargs: dict[str, Any] = {
-                'stream': True,
-                'messages': messages,
-                'top_p': top_p,
-                'frequency_penalty': 0.0,
-                'presence_penalty': 0.0,
-                'model': deployment,
-            }
-            if deployment != 'gpt-5-mini':
-                request_kwargs['max_tokens'] = max_tokens
-                request_kwargs['temperature'] = temperature
+            request_kwargs = self._build_chat_request_kwargs(
+                deployment=deployment,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                stream=True,
+            )
 
             # Use async streaming when available. Otherwise, move the entire
             # blocking streaming loop into a worker thread and forward chunks.
             if AsyncAzureOpenAI is not None:
-                client = self._get_official_async_client(model)
-                response = await client.chat.completions.create(**request_kwargs)
+                response = await self._create_chat_completion_request(
+                    model=model,
+                    request_kwargs=request_kwargs,
+                )
                 async for update in response:
                     if update.choices:
                         content = update.choices[0].delta.content or ''
@@ -679,9 +872,7 @@ Guidelines:
     def get_available_models(self) -> list[str]:
         """Get list of available models that are properly configured"""
         out: list[str] = []
-        for model, config in self.model_configs.items():
-            if not config.get('endpoint') or not config.get('deployment') or not config.get('api_version'):
-                continue
+        for model, _config in self._iter_available_model_configs():
             out.append(model)
         return out
 
@@ -693,9 +884,7 @@ Guidelines:
         """
         out: list[str] = []
         seen: set[str] = set()
-        for _model, config in self.model_configs.items():
-            if not config.get('endpoint') or not config.get('deployment') or not config.get('api_version'):
-                continue
+        for _model, config in self._iter_available_model_configs():
             dep = str(config.get('deployment') or '').strip()
             if not dep:
                 continue
@@ -704,6 +893,49 @@ Guidelines:
             seen.add(dep)
             out.append(dep)
         return out
+
+    def get_available_model_catalog(self) -> list[dict[str, str]]:
+        """Return UI-safe model metadata derived from models.yaml.
+
+        Each item includes the models.yaml display key and deployment id so
+        frontend selectors can render labels from backend config without
+        hardcoding GPT options.
+        """
+        out: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for model, config in self._iter_available_model_configs():
+            display_name = str(model).strip()
+            deployment = str(config.get('deployment') or '').strip()
+            api_version = str(config.get('api_version') or '').strip()
+            if not display_name or not deployment or not api_version:
+                continue
+
+            key = (display_name, deployment)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            out.append({
+                'display_name': display_name,
+                'deployment': deployment,
+                'api_version': api_version,
+            })
+
+        return out
+
+    def get_default_model_key(self) -> str:
+        """Return the resolved default models.yaml display key."""
+        return self._resolve_default_model(self.default_model)
+
+    def get_default_deployment(self) -> str | None:
+        """Return the resolved default deployment id for the active catalog."""
+        try:
+            config = self._get_model_config(self.get_default_model_key())
+            deployment = str(config.get('deployment') or '').strip()
+            return deployment or None
+        except Exception:
+            return None
 
     def is_configured(self) -> bool:
         """Check if Azure OpenAI is properly configured"""
@@ -733,6 +965,18 @@ except Exception as e:  # pragma: no cover
             return False
 
         def get_available_models(self) -> list[str]:
+            return []
+
+        def get_default_model_key(self) -> str:
+            return ''
+
+        def get_default_deployment(self) -> str | None:
+            return None
+
+        def get_available_deployments(self) -> list[str]:
+            return []
+
+        def get_available_model_catalog(self) -> list[dict[str, str]]:
             return []
 
     azure_openai_client = _DisabledAzureOpenAIClient()  # type: ignore

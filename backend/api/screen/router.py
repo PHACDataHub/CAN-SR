@@ -3380,7 +3380,7 @@ async def update_inclusion_decision(
             Priority rules:
             1. Human-set values have highest priority (include/exclude)
             2. If no human answer exists, fall back to AI/LLM answer
-            3. If neither human nor AI answer exists, don't pass (undecided)
+            3. If neither human nor AI answer exists, treat as exclude
 
             Scope:
             - human_l1_decision is derived ONLY from L1 questions.
@@ -3451,9 +3451,9 @@ async def update_inclusion_decision(
                 if selected is not None and isinstance(selected, str) and selected.strip() == '':
                     selected = None
 
-                # Priority 3: Neither exists -> undecided
+                # Priority 3: Neither exists -> exclude
                 if selected is None:
-                    return 'undecided'
+                    return 'exclude'
 
                 if 'exclude' in str(selected).lower():
                     return 'exclude'

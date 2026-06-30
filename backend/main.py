@@ -192,9 +192,11 @@ async def health_check():
         'postgres_mode': settings.POSTGRES_MODE,
         'storage_mode': settings.STORAGE_MODE,
         'azure_openai_configured': azure_openai_client.is_configured(),
-        'default_chat_model': settings.DEFAULT_CHAT_MODEL,
+        'default_chat_model': azure_openai_client.get_default_model_key(),
+        'default_chat_deployment': azure_openai_client.get_default_deployment(),
         'available_models': azure_openai_client.get_available_models(),
         'available_deployments': azure_openai_client.get_available_deployments(),
+        'available_model_catalog': azure_openai_client.get_available_model_catalog(),
     }
 
 

@@ -1,7 +1,14 @@
-GPT-4.1-Mini:
-  deployment: gpt-4.1-mini
-  api_version: 2025-01-01-preview
+default_model: GPT-5.4-Mini
 
-GPT-5-Mini:
-  deployment: gpt-5-mini
-  api_version: 2025-04-01-preview
+models:
+  GPT-5.4:
+    deployment: gpt-5.4
+    api_version: 2025-04-01-preview
+
+  GPT-5.4-Nano:
+    deployment: gpt-5.4-nano
+    api_version: 2025-04-01-preview
+
+  GPT-5.4-Mini:
+    deployment: gpt-5.4-mini
+    api_version: 2025-04-01-preview
