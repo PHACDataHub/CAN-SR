@@ -1,6 +1,10 @@
-default_model: GPT-5.4-Mini
+default_model: GPT-5-mini
 
 models:
+  GPT-5-mini:
+    deployment: gpt-5-mini
+    api_version: 2025-04-01-preview
+
   GPT-5.4:
     deployment: gpt-5.4
     api_version: 2025-04-01-preview
