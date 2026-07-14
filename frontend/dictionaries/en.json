@@ -216,6 +216,11 @@
     "fullText": "Full text",
     "showEvidenceHighlights": "Show Evidence Highlights",
     "loadingPDF": "Loading PDF...",
+    "noPDF": "No PDF available",
+    "noPDFDescription": "Upload the full-text PDF to view and screen this citation.",
+    "uploadPDF": "Upload PDF",
+    "uploadingPDF": "Uploading...",
+    "uploadFailed": "Failed to upload PDF",
     "fit": "Fit",
     "keyboardHint": "Keyboard: ← → Home/End"
   },

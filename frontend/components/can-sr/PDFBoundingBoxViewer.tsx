@@ -103,6 +103,10 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   const [fitToWidth, setFitToWidth] = useState(!!defaultFitToWidth)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [pdfMissing, setPdfMissing] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const pageRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
   const containerRef = useRef<HTMLDivElement | null>(null)
   const wrapperRefs = useRef<Record<number, HTMLDivElement | null>>({})
@@ -205,7 +209,15 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
 
   // Fetch PDF using the frontend proxy
   useEffect(() => {
+    let objectUrl: string | null = null
+    let cancelled = false
     const fetchPDF = async () => {
+      setLoading(true)
+      setError(null)
+      setPdfMissing(false)
+      setPdfDocument(null)
+      setTotalPages(0)
+      setPdfUrl(null)
       try {
         const token = getAuthToken()
         const tokenType = getTokenType()
@@ -217,28 +229,65 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
         )}`
 
         const res = await fetch(url, { headers })
+        if (res.status === 404) {
+          if (!cancelled) setPdfMissing(true)
+          return
+        }
         if (!res.ok) {
           throw new Error(`Failed to fetch PDF (${res.status})`)
         }
         const blob = await res.blob()
-        const objectUrl = URL.createObjectURL(blob)
-        setPdfUrl(objectUrl)
+        objectUrl = URL.createObjectURL(blob)
+        if (!cancelled) setPdfUrl(objectUrl)
       } catch (err: any) {
+        if (cancelled) return
         console.error('Error fetching PDF:', err)
         setError(err?.message || 'Failed to load PDF')
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     fetchPDF()
     return () => {
-      if (pdfUrl) {
-        URL.revokeObjectURL(pdfUrl)
-      }
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srId, citationId])
+  }, [srId, citationId, reloadKey])
+
+  const uploadPDF = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setError(dict.common.invalidPDF)
+      return
+    }
+
+    setUploading(true)
+    setError(null)
+    try {
+      const token = getAuthToken()
+      const tokenType = getTokenType()
+      const headers: Record<string, string> = {}
+      if (token) headers.Authorization = `${tokenType} ${token}`
+      const body = new FormData()
+      body.append('file', file)
+      const res = await fetch(
+        `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
+        { method: 'POST', headers, body },
+      )
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload?.detail || payload?.error || `${dict.pdf.uploadFailed} (${res.status})`)
+      }
+      setReloadKey((value) => value + 1)
+    } catch (err: any) {
+      setError(err?.message || dict.pdf.uploadFailed)
+    } finally {
+      setUploading(false)
+    }
+  }
 
   // Load PDF document via pdf.js
   useEffect(() => {
@@ -612,7 +661,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           <div className="text-xs text-gray-600">Citation #{citationId}</div>
           <div className="text-lg font-semibold text-gray-900">{fileName || dict.pdf.fullText}</div>
         </div>
-        <div className="flex items-center gap-3">
+        {!pdfMissing && !error ? <div className="flex items-center gap-3">
           <label className="flex items-center text-sm">
             <input
               type="checkbox"
@@ -623,11 +672,11 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
             {dict.pdf.showEvidenceHighlights}
           </label>
           <div className="ml-3 text-xs text-gray-500">{Math.round(scale * 100)}%</div>
-        </div>
+        </div> : null}
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
+        {!pdfMissing && !error ? <div className="flex items-center gap-3">
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={() => {
@@ -660,7 +709,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
               {dict.pdf.fit}
             </button>
           </div>
-        </div>
+        </div> : null}
 
         <div className="relative">
           <div
@@ -669,6 +718,29 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           >
             {loading ? (
               <div className="text-sm text-gray-600">{dict.pdf.loadingPDF}</div>
+            ) : pdfMissing ? (
+              <div className="flex min-h-[600px] w-full items-center justify-center">
+                <div className="w-full max-w-md rounded-lg border-2 border-dashed border-gray-300 bg-white p-10 text-center shadow-sm">
+                  <div className="text-lg font-semibold text-gray-900">{dict.pdf.noPDF}</div>
+                  <p className="mt-2 text-sm text-gray-600">{dict.pdf.noPDFDescription}</p>
+                  {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => uploadInputRef.current?.click()}
+                    className="mt-5 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                  >
+                    {uploading ? dict.pdf.uploadingPDF : dict.pdf.uploadPDF}
+                  </button>
+                  <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    onChange={uploadPDF}
+                    className="hidden"
+                  />
+                </div>
+              </div>
             ) : error ? (
               <div className="text-sm text-red-600">{error}</div>
             ) : (
@@ -714,7 +786,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
 
         <div className="flex items-center justify-between">
           <div className="text-xs text-gray-500">{fileName}</div>
-          <div className="text-xs text-gray-400">{dict.pdf.keyboardHint}</div>
+          {!pdfMissing && !error ? <div className="text-xs text-gray-400">{dict.pdf.keyboardHint}</div> : null}
         </div>
       </div>
     </div>

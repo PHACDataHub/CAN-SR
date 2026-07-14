@@ -1673,6 +1673,169 @@ class CitsDPService:
             _safe_rollback(conn)
             raise
 
+    def attach_fulltext_atomic(
+        self,
+        citation_id: int,
+        azure_path: str,
+        file_md5: str,
+        *,
+        source: str,
+        source_url: str | None = None,
+        replace: bool = False,
+        table_name: str = 'citations',
+    ) -> dict[str, Any]:
+        """Lock, re-check, and atomically attach a staged full-text document."""
+        table_name = _validate_ident(table_name, kind='table_name')
+        self.ensure_pdf_linkage_columns(table_name)
+        self.create_column('fulltext_url', 'TEXT', table_name=table_name)
+        self.create_column('fulltext_md5', 'TEXT', table_name=table_name)
+        conn = postgres_server.conn
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f'''SELECT fulltext_url, fulltext_md5 FROM "{table_name}"
+                    WHERE id=%s FOR UPDATE''',
+                (int(citation_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                return {'attached': False, 'reason': 'citation_not_found'}
+            old_url, old_md5 = row[0] or '', row[1] or ''
+            if old_url and not replace:
+                conn.rollback()
+                return {
+                    'attached': False,
+                    'reason': 'concurrent_fulltext',
+                    'old_url': old_url,
+                }
+            changed = bool(old_url and (not old_md5 or old_md5 != file_md5))
+            if changed:
+                # Derived full-text artifacts and extraction outputs cannot be
+                # retained when manual replacement changes the source PDF.
+                cur.execute(
+                    """SELECT column_name FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name=%s
+                         AND (column_name IN (
+                           'fulltext','fulltext_coords','fulltext_pages',
+                           'fulltext_figures','fulltext_tables',
+                           'llm_l2_decision','human_l2_decision'
+                         ) OR column_name LIKE 'llm_param_%'
+                            OR column_name LIKE 'human_param_%')""",
+                    (table_name,),
+                )
+                clear_columns = [str(item[0]) for item in (cur.fetchall() or [])]
+                if clear_columns:
+                    assignments = ', '.join(f'"{name}"=NULL' for name in clear_columns)
+                    cur.execute(
+                        f'UPDATE "{table_name}" SET {assignments} WHERE id=%s',
+                        (int(citation_id),),
+                    )
+            cur.execute(
+                f'''UPDATE "{table_name}" SET
+                    fulltext_url=%s, fulltext_md5=%s,
+                    pdf_link_status='linked', pdf_link_reason=NULL,
+                    pdf_link_source=%s, pdf_link_url=%s,
+                    pdf_link_error=NULL, pdf_link_last_checked_at=now()
+                    WHERE id=%s''',
+                (azure_path, file_md5, source, source_url, int(citation_id)),
+            )
+            conn.commit()
+            return {
+                'attached': True,
+                'reason': 'linked',
+                'old_url': old_url or None,
+                'changed': changed,
+            }
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def ensure_pdf_linkage_columns(self, table_name: str = 'citations') -> None:
+        """Apply the idempotent PDF-linkage schema to a dynamic citation table."""
+        table_name = _validate_ident(table_name, kind='table_name')
+        for name, data_type in (
+            ('pdf_link_status', 'TEXT'),
+            ('pdf_link_reason', 'TEXT'),
+            ('pdf_link_source', 'TEXT'),
+            ('pdf_link_url', 'TEXT'),
+            ('pdf_link_last_checked_at', 'TIMESTAMPTZ'),
+            ('pdf_link_error', 'TEXT'),
+            ('pdf_link_doi_source', 'TEXT'),
+        ):
+            self.create_column(name, data_type, table_name=table_name)
+
+    def save_recovered_doi(
+        self, citation_id: int, doi: str, *, source: str,
+        table_name: str = 'citations',
+    ) -> bool:
+        """Persist a recovered DOI without overwriting DOI data written concurrently."""
+        table_name = _validate_ident(table_name, kind='table_name')
+        self.ensure_pdf_linkage_columns(table_name)
+        self.create_column('doi', 'TEXT', table_name=table_name)
+        conn = postgres_server.conn
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f'''UPDATE "{table_name}" SET doi=%s, pdf_link_doi_source=%s
+                    WHERE id=%s AND NULLIF(BTRIM(doi), '') IS NULL''',
+                (doi, source, int(citation_id)),
+            )
+            changed = bool(cur.rowcount)
+            conn.commit()
+            return changed
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def list_pdf_linkage_ids(self, table_name: str = 'citations') -> list[int]:
+        table_name = _validate_ident(table_name, kind='table_name')
+        self.ensure_pdf_linkage_columns(table_name)
+        self.create_column('human_l1_decision', 'TEXT', table_name=table_name)
+        conn = postgres_server.conn
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f'''SELECT id FROM "{table_name}"
+                    WHERE COALESCE(fulltext_url, '') = ''
+                      AND COALESCE(human_l1_decision, '') = 'include'
+                    ORDER BY id''',
+            )
+            return [int(row[0]) for row in (cur.fetchall() or [])]
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def update_pdf_linkage_outcome(
+        self,
+        citation_id: int,
+        *,
+        status: str,
+        reason: str | None = None,
+        source: str | None = None,
+        url: str | None = None,
+        error: str | None = None,
+        table_name: str = 'citations',
+    ) -> int:
+        table_name = _validate_ident(table_name, kind='table_name')
+        self.ensure_pdf_linkage_columns(table_name)
+        conn = postgres_server.conn
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f'''UPDATE "{table_name}" SET
+                    pdf_link_status=%s, pdf_link_reason=%s, pdf_link_source=%s,
+                    pdf_link_url=%s, pdf_link_error=%s,
+                    pdf_link_last_checked_at=now() WHERE id=%s''',
+                (status, reason, source, url, (error or '')[:2000] or None, int(citation_id)),
+            )
+            rows = cur.rowcount
+            conn.commit()
+            return rows
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
     # -----------------------
     # Column get/set helpers
     # -----------------------
@@ -1731,10 +1894,10 @@ class CitsDPService:
         conn = None
         try:
             conn = postgres_server.conn
-            conn.autocommit = True
             cur = conn.cursor()
             cas = ' CASCADE' if cascade else ''
             cur.execute(f'DROP TABLE IF EXISTS "{table_name}"{cas}')
+            conn.commit()
         except Exception:
             _safe_rollback(conn)
             raise
@@ -1770,6 +1933,13 @@ class CitsDPService:
             col_defs.append('"fulltext_url" TEXT')
             col_defs.append('"fulltext" TEXT')
             col_defs.append('"fulltext_md5" TEXT')
+            col_defs.append('"pdf_link_status" TEXT')
+            col_defs.append('"pdf_link_reason" TEXT')
+            col_defs.append('"pdf_link_source" TEXT')
+            col_defs.append('"pdf_link_url" TEXT')
+            col_defs.append('"pdf_link_last_checked_at" TIMESTAMP WITH TIME ZONE')
+            col_defs.append('"pdf_link_error" TEXT')
+            col_defs.append('"pdf_link_doi_source" TEXT')
 
             # Step-level validation fields (agentic screening plan)
             col_defs.append('"l1_validated_by" TEXT')

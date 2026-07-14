@@ -216,6 +216,11 @@
     "fullText": "Texte intégral",
     "showEvidenceHighlights": "Afficher les preuves en surbrillance",
     "loadingPDF": "Chargement du PDF...",
+    "noPDF": "Aucun PDF disponible",
+    "noPDFDescription": "Téléversez le PDF en texte intégral pour consulter et évaluer cette citation.",
+    "uploadPDF": "Téléverser le PDF",
+    "uploadingPDF": "Téléversement...",
+    "uploadFailed": "Échec du téléversement du PDF",
     "fit": "Ajuster",
     "keyboardHint": "Clavier : ← → Début/Fin"
   },

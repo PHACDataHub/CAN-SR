@@ -82,7 +82,6 @@ async def startup_event():
             await PROCRASTINATE_APP.open_async()
             await ensure_procrastinate_schema()
             await run_in_threadpool(run_all_repo.ensure_tables)
-            print('✓ Job tables initialized', flush=True)
 
             # Optional dev cleanup: clear out leftover queued/doing tasks from previous runs.
             # Controlled by PROCRASTINATE_CLEAR_ON_START (defaults to true if unset).
@@ -96,6 +95,14 @@ async def startup_event():
                     print(
                         f"⚠️ Failed to clear pending Procrastinate jobs: {e}", flush=True,
                     )
+
+            # Recovery must happen after optional queue cleanup, otherwise the
+            # replacement tasks would immediately be deleted.
+            from api.jobs.run_all_tasks import recover_and_enqueue_stale_chunks
+            recovered = await recover_and_enqueue_stale_chunks(10)
+            if recovered:
+                print(f'♻️ Recovered {recovered} stale job chunks', flush=True)
+            print('✓ Job tables initialized', flush=True)
 
             if workers_enabled():
                 # Run a worker loop inside the API process (dev/quick deploy).
@@ -111,6 +118,11 @@ async def startup_event():
                     await _asyncio.sleep(300)  # every 5 minutes
                     try:
                         from fastapi.concurrency import run_in_threadpool as _ritp
+                        recovered = await recover_and_enqueue_stale_chunks(10)
+                        if recovered:
+                            print(
+                                f"♻️ Stale job reaper: recovered {recovered} chunks", flush=True,
+                            )
                         stale = await _ritp(run_all_repo.fail_stale_jobs, 30)
                         if stale:
                             print(
@@ -121,6 +133,10 @@ async def startup_event():
                             print(
                                 f"🧹 Stale job reaper: purged {purged} old terminal jobs", flush=True,
                             )
+                        from api.services.fulltext_attachment_service import reconcile_pending_blob_cleanup
+                        cleaned = await reconcile_pending_blob_cleanup()
+                        if cleaned:
+                            print(f'🧹 Removed {cleaned} orphaned full-text blobs', flush=True)
                     except Exception as reaper_err:
                         print(
                             f"⚠️ Stale job reaper error: {reaper_err}", flush=True,

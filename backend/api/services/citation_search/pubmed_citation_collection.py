@@ -125,7 +125,7 @@ class PubMedCitationCollector:
         """Main method to collect citations from PubMed"""
 
         Entrez.email = ENTREZ_EMAIL
-        Entrez.api_key = ENTREZ_API_KEY
+        Entrez.api_key = ENTREZ_API_KEY or None
 
         logger.info('Starting PubMed citation collection')
         logger.info(f"Search term: {search_term[:100]}...")
@@ -230,7 +230,7 @@ class PubMedCitationCollector:
             return []
 
         Entrez.email = ENTREZ_EMAIL
-        Entrez.api_key = ENTREZ_API_KEY
+        Entrez.api_key = ENTREZ_API_KEY or None
 
         all_results = []
         print(id_list)
