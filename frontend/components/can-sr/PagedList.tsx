@@ -28,6 +28,8 @@ type CitationInfo = {
     validated: number
     unvalidated: number
   }) => void
+  pdfLinkageActive?: boolean
+  refreshKey?: number
 }
 
 type LatestAgentRun = {
@@ -90,6 +92,8 @@ export default function PagedList({
   onThresholdChange,
   onFilterModeChange,
   onStatsChange,
+  pdfLinkageActive = false,
+  refreshKey = 0,
 }: CitationInfo) {
   const router = useRouter()
   const { lang } = useParams<{ lang: string }>()
@@ -153,7 +157,7 @@ export default function PagedList({
         return
       }
 
-      const pageKey = `${srId}|${screeningStep}|${page}|${pageSize}|${pageIds.join(',')}`
+      const pageKey = `${srId}|${screeningStep}|${page}|${pageSize}|${pageIds.join(',')}|${refreshKey}`
       if (batchKeyRef.current === pageKey) {
         // Already fetched for this exact page selection.
       } else {
@@ -246,8 +250,11 @@ export default function PagedList({
         // best-effort
       }
     }
-    fetchCitations()
-  }, [citationIds, page, pageSize, questions, srId, screeningStep])
+    void fetchCitations().catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      console.error('Failed to fetch citation page', error)
+    })
+  }, [citationIds, page, pageSize, questions, srId, screeningStep, refreshKey])
 
   // Cleanup any in-flight requests on unmount
   useEffect(() => {
@@ -502,6 +509,7 @@ export default function PagedList({
   }
 
   const onChooseFile = (id: number) => {
+    if (pdfLinkageActive) return
     fileInputRefs.current[id]?.click()
   }
 
@@ -605,6 +613,12 @@ export default function PagedList({
               <p className="line-clamp-5 overflow-hidden text-ellipsis text-sm text-gray-800">
                 {dict.common.abstract}: {data.abstract}
               </p>
+              {screeningStep !== 'l1' && !data.fulltext_url ? (
+                <div className="text-xs text-amber-700">
+                  <span className="font-medium">PDF required</span>
+                  {data.pdf_link_reason ? ` · ${String(data.pdf_link_reason).replaceAll('_', ' ')}` : ''}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-col items-center justify-center space-y-3">
@@ -622,8 +636,10 @@ export default function PagedList({
               {screeningStep !== 'l1' ? (
                 <>
                   <button
-                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
+                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                     onClick={() => onChooseFile(data.id)}
+                    disabled={pdfLinkageActive}
+                    title={pdfLinkageActive ? 'Upload is disabled while PDF linkage is active' : undefined}
                   >
                     {dict.common.upload}
                   </button>

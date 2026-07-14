@@ -15,7 +15,6 @@ We intentionally avoid creating a new Postgres database per upload.
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import os
 import re
@@ -918,6 +917,29 @@ async def upload_citation_fulltext(
     file: UploadFile = File(...),
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
+    # The backend is authoritative: a PDF-linkage worker and manual upload must
+    # never compete for an SR. A final conditional worker update remains the
+    # race-safe fallback for uploads that began just before job creation.
+    try:
+        from ..jobs.run_all_repo import run_all_repo
+        await run_in_threadpool(run_all_repo.ensure_tables)
+        active_job = await run_in_threadpool(run_all_repo.get_active_job_for_sr, sr_id)
+        if active_job and active_job.get('pipeline_key') == 'pdf_linkage':
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    'message': 'PDF linkage is active; cancel or wait before uploading',
+                    'job_id': active_job.get('job_id'),
+                    'pipeline_key': active_job.get('pipeline_key'),
+                    'status': active_job.get('status'),
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Do not turn a scheduler availability problem into loss of the existing
+        # manual-upload fallback.
+        pass
     """
     Upload a full-text PDF for a specific citation and attach the storage path to the citation row.
 
@@ -954,7 +976,6 @@ async def upload_citation_fulltext(
         )
 
     content = await file.read()
-    new_md5 = hashlib.md5(content).hexdigest() if content is not None else ''
     # Verify citation exists BEFORE uploading blob to storage
     table_name = (screening or {}).get('table_name') or 'citations'
 
@@ -975,128 +996,25 @@ async def upload_citation_fulltext(
             status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
         )
 
-    # If the PDF changed (md5 differs), clear L2 screening answers + parameter extractions + fulltext artifacts.
-    # (Do NOT clear L1 answers.)
     try:
-        existing_md5 = (existing_row or {}).get('fulltext_md5') or ''
-        existing_url = (existing_row or {}).get('fulltext_url') or ''
-
-        pdf_changed = False
-        if existing_md5 and new_md5 and existing_md5 != new_md5:
-            pdf_changed = True
-        # Legacy: if we had a PDF but no md5 recorded, treat upload as replacement.
-        if not existing_md5 and existing_url:
-            pdf_changed = True
-
-        if pdf_changed:
-            # Clear fulltext extraction columns (they will be regenerated later)
-            await run_in_threadpool(
-                cits_dp_service.clear_columns,
-                citation_id,
-                [
-                    'fulltext',
-                    'fulltext_coords',
-                    'fulltext_pages',
-                    'fulltext_figures',
-                    'fulltext_tables',
-                    'fulltext_md5',
-                ],
-                table_name,
-            )
-
-            # Clear all parameter extraction columns
-            await run_in_threadpool(
-                cits_dp_service.clear_columns_by_prefix,
-                citation_id,
-                ['llm_param_', 'human_param_'],
-                table_name,
-            )
-
-            # Clear L2 screening columns only
-            # NOTE (validation): we do not use l2_screen for filtering; keep it untouched/non-authoritative.
-            cols_to_clear = ['llm_l2_decision', 'human_l2_decision']
-            try:
-                cp = (sr or {}).get('criteria_parsed') or (
-                    sr or {}
-                ).get('criteria') or {}
-                l2 = cp.get('l2') if isinstance(cp, dict) else None
-                l2_questions = (l2 or {}).get(
-                    'questions',
-                ) if isinstance(l2, dict) else None
-                if isinstance(l2_questions, list):
-                    for q in l2_questions:
-                        try:
-                            llm_col = snake_case_column(q)
-                        except Exception:
-                            llm_col = None
-                        try:
-                            core = snake_case(q, max_len=56)
-                            human_col = f"human_{core}" if core else 'human_col'
-                        except Exception:
-                            human_col = None
-
-                        if llm_col:
-                            cols_to_clear.append(llm_col)
-                        if human_col:
-                            cols_to_clear.append(human_col)
-            except Exception:
-                # best-effort
-                pass
-
-            await run_in_threadpool(cits_dp_service.clear_columns, citation_id, cols_to_clear, table_name)
-    except Exception:
-        # Best-effort; do not block upload.
-        pass
-
-    # Upload to storage service (reuse storage logic from files.router)
-    try:
-        from ..services.storage import storage_service
-    except Exception:
-        storage_service = None
-
-    if not storage_service:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail='Storage service not available',
+        from ..services.fulltext_attachment_service import attach_fulltext_document
+        result = await attach_fulltext_document(
+            citation_id=citation_id,
+            table_name=table_name,
+            user_id=str(current_user['id']),
+            filename=file.filename,
+            content=content,
+            source='manual',
+            replace=True,
         )
-
-    # Upload file for the current user
-    document_id = await storage_service.upload_user_document(
-        user_id=current_user['id'],
-        filename=file.filename,
-        file_content=content,
-    )
-
-    if not document_id:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to upload file to storage service',
-        )
-    # Build storage path (container + blob name) so it can be stored in Postgres
-    # Note: storage.py stores blobs at users/{user_id}/documents/{doc_id}_{filename}
-    blob_name = f"users/{current_user['id']}/documents/{document_id}_{file.filename}"
-    container = storage_service.container_name
-    storage_path = f"{container}/{blob_name}"
-
-    # Update citation row in Postgres
-    try:
-        updated = await run_in_threadpool(cits_dp_service.attach_fulltext, citation_id, storage_path, content, table_name)
-    except RuntimeError as rexc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
-        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update citation row: {e}",
+            detail=f"Failed to attach full text: {e}",
         )
-    if not updated:
-        # If the citation id doesn't exist, consider rolling back the uploaded file (best effort)
-        # Attempt to delete the uploaded blob (best-effort; not fatal if it fails)
-        try:
-            await storage_service.delete_user_document(current_user['id'], document_id, file.filename)
-        except Exception:
-            pass
+    if not result.attached:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Citation not found to attach fulltext file',
@@ -1105,8 +1023,8 @@ async def upload_citation_fulltext(
         'status': 'success',
         'sr_id': sr_id,
         'citation_id': citation_id,
-        'storage_path': storage_path,
-        'document_id': document_id,
+        'storage_path': result.storage_path,
+        'document_id': result.document_id,
     }
 
 

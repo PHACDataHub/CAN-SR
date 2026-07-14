@@ -1,3 +1,20 @@
+# PDF linkage configuration
+
+The PDF-linkage scheduler uses the following optional environment variables:
+
+- `OA_API_BASE_URL`: OA resolver endpoint (default Open Access Button availability API)
+- `OA_API_CONTACT`: contact/application identifier included in the User-Agent
+- `PDF_LINKAGE_MAX_BYTES`: maximum streamed PDF size (default 50 MiB)
+- `PDF_LINKAGE_MAX_RETRIES`: bounded retry count for timeout, 429, and 5xx responses
+- `PDF_LINKAGE_MAX_CONCURRENCY`: process-wide OA lookup/download concurrency (default 4)
+- `ENTREZ_EMAIL`: identifying contact for PubMed DOI fallback requests (recommended)
+- `ENTREZ_API_KEY`: optional NCBI key; fallback works without it at the lower request rate
+
+Production deployments should set `OA_API_CONTACT`, use a dedicated worker,
+disable `PROCRASTINATE_CLEAR_ON_START`, and restrict worker network egress. Job
+logs record citation IDs and stable outcomes but do not log DOI values or PDF
+content.
+
 # CAN-SR Backend
 
 FastAPI backend for the Canadian Systematic Review (CAN-SR) Platform - an AI-powered systematic review platform for the Government of Canada.

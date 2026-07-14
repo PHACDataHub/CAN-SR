@@ -188,6 +188,9 @@ export default function CitationsListPage({
   const [runAllJobId, setRunAllJobId] = useState<string | null>(null)
   const [runAllJob, setRunAllJob] = useState<any | null>(null)
   const [runAllStarting, setRunAllStarting] = useState<boolean>(false)
+  const [pdfLinkStarting, setPdfLinkStarting] = useState<boolean>(false)
+  const [pdfLinkageActive, setPdfLinkageActive] = useState<boolean>(false)
+  const [citationRefreshKey, setCitationRefreshKey] = useState<number>(0)
 
   const runAllStorageKey = useMemo(() => {
     if (!srId) return null
@@ -203,6 +206,37 @@ export default function CitationsListPage({
     setRunAllJobId(null)
     setRunAllJob(null)
   }, [runAllStorageKey])
+
+  useEffect(() => {
+    if (!srId) return
+    let alive = true
+    let wasActive = false
+    const refreshJobs = async () => {
+      const res = await fetch('/api/can-sr/jobs/active', { headers: getAuthHeaders() })
+      const data = await res.json().catch(() => ({}))
+      if (!alive || !res.ok) return
+      const matching = (Array.isArray(data?.jobs) ? data.jobs : []).find(
+        (job: any) => String(job?.sr_id) === String(srId) && job?.pipeline_key === 'pdf_linkage',
+      )
+      const active = Boolean(
+        matching && ['queued', 'running', 'paused'].includes(String(matching.status).toLowerCase()),
+      )
+      if (wasActive && !active) setCitationRefreshKey((value) => value + 1)
+      wasActive = active
+      setPdfLinkageActive(active)
+    }
+    const changed = () => void refreshJobs()
+    void refreshJobs()
+    window.addEventListener('jobs:changed', changed)
+    window.addEventListener('run-all:changed', changed)
+    const timer = window.setInterval(refreshJobs, 5000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      window.removeEventListener('jobs:changed', changed)
+      window.removeEventListener('run-all:changed', changed)
+    }
+  }, [srId])
 
   const displayMap: Record<string, string> = {
     l1: dict.screening.titleAbstract,
@@ -554,6 +588,26 @@ export default function CitationsListPage({
     }
   }
 
+  const startPdfLinkage = async () => {
+    if (!srId || pdfLinkStarting) return
+    setPdfLinkStarting(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/can-sr/jobs/pdf-linkage/start?sr_id=${encodeURIComponent(srId)}`, {
+        method: 'POST', headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' }, body: '{}',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || data?.error || `Start failed (${res.status})`)
+      setPdfLinkageActive(true)
+      window.dispatchEvent(new Event('jobs:changed'))
+      toast.success('PDF linkage started')
+    } catch (e: any) {
+      setError(e?.message || 'Failed to start PDF linkage')
+    } finally {
+      setPdfLinkStarting(false)
+    }
+  }
+
   const canRunAllServerSide = useMemo(() => {
     if (!srId) return false
     if (loading) return false
@@ -705,6 +759,17 @@ export default function CitationsListPage({
                 </div>
 
                 <div className="flex items-center gap-3">
+                  {screeningStep === 'l2' ? (
+                    <button
+                      type="button"
+                      disabled={!srId || pdfLinkStarting || hasActiveRunAll}
+                      onClick={() => void startPdfLinkage()}
+                      className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:bg-gray-100 disabled:text-gray-400"
+                      title="Find openly available PDFs for citations without full text"
+                    >
+                      {pdfLinkStarting ? 'Starting…' : 'Find PDFs'}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     disabled={!canRunAllServerSide || hasActiveRunAll}
@@ -835,6 +900,8 @@ export default function CitationsListPage({
                       }
                       filterMode={filterMode}
                       serverFiltered={screeningStep === 'l1' || screeningStep === 'l2'}
+                      pdfLinkageActive={pdfLinkageActive}
+                      refreshKey={citationRefreshKey}
                       onThresholdChange={setThreshold}
                       onFilterModeChange={setFilterMode}
                       onStatsChange={(s) => {

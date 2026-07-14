@@ -54,6 +54,27 @@ class RunAllRepo:
                 )
                 """,
             )
+            # Additive scheduler migration for existing deployments. ``step`` is
+            # retained for the screening compatibility API.
+            cur.execute(
+                """
+                ALTER TABLE run_all_jobs
+                ADD COLUMN IF NOT EXISTS pipeline_key TEXT
+                """,
+            )
+            cur.execute(
+                """
+                UPDATE run_all_jobs
+                SET pipeline_key = 'screening'
+                WHERE pipeline_key IS NULL OR pipeline_key = ''
+                """,
+            )
+            cur.execute(
+                """
+                ALTER TABLE run_all_jobs
+                ALTER COLUMN pipeline_key SET DEFAULT 'screening'
+                """,
+            )
 
             # Migration safety: older deployments may have allowed multiple active
             # jobs per SR. Creating the partial unique index would fail if such
@@ -216,10 +237,16 @@ class RunAllRepo:
             # simultaneously observe the same doing-count and over-claim.
             # (Row-level locking on the parent job is cheap and safe.)
             cur.execute(
-                'SELECT 1 FROM run_all_jobs WHERE id = %s FOR UPDATE', (
+                'SELECT status FROM run_all_jobs WHERE id = %s FOR UPDATE', (
                     job_id,
                 ),
             )
+            parent = cur.fetchone()
+            if not parent or str(parent[0]).lower() not in {
+                'queued', 'running',
+            }:
+                conn.commit()
+                return None
 
             # Enforce prefetch limit: claim a todo chunk only if currently
             # doing_count < pf.
@@ -269,8 +296,28 @@ class RunAllRepo:
                 SET status = 'done',
                     finished_at = COALESCE(finished_at, now())
                 WHERE id = %s
+                  AND status = 'doing'
                 """,
                 (int(chunk_id),),
+            )
+            conn.commit()
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def release_chunk_claim(self, chunk_id: int, *, error: str) -> None:
+        """Release an unstarted claim after queue submission fails."""
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE run_all_job_chunks
+                SET status = 'todo', started_at = NULL, error = %s
+                WHERE id = %s AND status = 'doing'
+                """,
+                (str(error)[:8000], int(chunk_id)),
             )
             conn.commit()
         except Exception:
@@ -289,6 +336,7 @@ class RunAllRepo:
                     finished_at = COALESCE(finished_at, now()),
                     error = %s
                 WHERE id = %s
+                  AND status = 'doing'
                 """,
                 (str(error)[:8000], int(chunk_id)),
             )
@@ -296,6 +344,98 @@ class RunAllRepo:
         except Exception:
             _safe_rollback(conn)
             raise
+
+    def recover_stale_chunks(self, timeout_minutes: int = 30) -> int:
+        """Return stale in-flight chunks to ``todo`` for active jobs.
+
+        Work items are required to be idempotent. Chunks belonging to terminal
+        jobs remain untouched and cannot be claimed by the guarded claim query.
+        """
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE run_all_job_chunks c
+                SET status = 'todo',
+                    started_at = NULL,
+                    error = 'Recovered stale in-flight chunk'
+                FROM run_all_jobs j
+                WHERE c.job_id = j.id
+                  AND c.status = 'doing'
+                  AND j.status IN ('queued', 'running', 'paused')
+                  AND c.started_at < (now() - make_interval(mins := %s))
+                """,
+                (max(1, int(timeout_minutes)),),
+            )
+            count = cur.rowcount
+            conn.commit()
+            return count
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def recover_stale_chunk_ids(self, timeout_minutes: int = 30) -> list[tuple[str, int]]:
+        """Recover stale claims and return work whose queue task must be replaced.
+
+        Paused jobs remain untouched; resume claims their ``todo`` work. Recovered
+        active chunks stay ``doing`` so concurrent reapers cannot enqueue them
+        twice. The caller must release a claim if queue submission fails.
+        """
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            # A crashed worker cannot keep a paused job's claim alive. Release
+            # it without enqueueing; resume will claim it under the normal
+            # per-job prefetch guard.
+            cur.execute(
+                """
+                UPDATE run_all_job_chunks c
+                SET status = 'todo',
+                    started_at = NULL,
+                    error = 'Recovered stale paused chunk'
+                FROM run_all_jobs j
+                WHERE c.job_id = j.id
+                  AND c.status = 'doing'
+                  AND j.status = 'paused'
+                  AND c.started_at < (now() - make_interval(mins := %s))
+                """,
+                (max(1, int(timeout_minutes)),),
+            )
+            cur.execute(
+                """
+                UPDATE run_all_job_chunks c
+                SET status = 'doing',
+                    started_at = now(),
+                    finished_at = NULL,
+                    error = 'Recovered stale in-flight chunk'
+                FROM run_all_jobs j
+                WHERE c.job_id = j.id
+                  AND c.status = 'doing'
+                  AND j.status IN ('queued', 'running')
+                  AND c.started_at < (now() - make_interval(mins := %s))
+                RETURNING c.job_id, c.id
+                """,
+                (max(1, int(timeout_minutes)),),
+            )
+            rows = [(str(row[0]), int(row[1])) for row in (cur.fetchall() or [])]
+            conn.commit()
+            return rows
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def claim_available_chunks(self, job_id: str, *, prefetch: int = 2) -> list[int]:
+        """Claim up to the fair-share limit for enqueue after resume."""
+        claimed: list[int] = []
+        for _ in range(max(1, int(prefetch or 1))):
+            chunk_id = self.claim_next_todo_chunk(job_id, prefetch=prefetch)
+            if chunk_id is None:
+                break
+            claimed.append(chunk_id)
+        return claimed
 
     def get_active_job_for_sr(self, sr_id: str) -> dict[str, Any] | None:
         """Return the active job (queued/running/paused) for an SR if it exists."""
@@ -366,7 +506,7 @@ class RunAllRepo:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT id, sr_id, step, created_by, model, status, total, done, skipped, failed,
+                SELECT id, sr_id, step, pipeline_key, created_by, model, status, total, done, skipped, failed,
                        phase, error, meta, created_at, started_at, finished_at
                 FROM run_all_jobs
                 WHERE sr_id = ANY(%s)
@@ -435,6 +575,7 @@ class RunAllRepo:
         model: str | None,
         meta: dict[str, Any],
         total: int,
+        pipeline_key: str = 'screening',
     ) -> str:
         conn = None
         jid = uuid.uuid4()
@@ -443,13 +584,14 @@ class RunAllRepo:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO run_all_jobs (id, sr_id, step, created_by, model, status, total, meta)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                INSERT INTO run_all_jobs (id, sr_id, step, pipeline_key, created_by, model, status, total, meta)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 """,
                 (
                     str(jid),
                     sr_id,
                     step,
+                    pipeline_key,
                     created_by,
                     model,
                     'queued',
@@ -470,7 +612,7 @@ class RunAllRepo:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT id, sr_id, step, created_by, model, status, total, done, skipped, failed,
+                SELECT id, sr_id, step, pipeline_key, created_by, model, status, total, done, skipped, failed,
                        phase, error, meta, created_at, started_at, finished_at
                 FROM run_all_jobs
                 WHERE id = %s
@@ -502,6 +644,16 @@ class RunAllRepo:
             raise
 
     def set_status(self, job_id: str, status: str, *, error: str | None = None) -> None:
+        allowed_from = {
+            'running': ('queued', 'paused'),
+            'paused': ('queued', 'running'),
+            'finished': ('queued', 'running', 'paused'),
+            'failed': ('queued', 'running', 'paused'),
+            'canceled': ('queued', 'running', 'paused'),
+            'done': ('finished', 'failed'),
+        }
+        if status not in allowed_from:
+            raise ValueError(f'Unsupported scheduler status: {status}')
         conn = None
         try:
             conn = postgres_server.conn
@@ -512,23 +664,23 @@ class RunAllRepo:
                     """
                     UPDATE run_all_jobs
                     SET status = %s, started_at = COALESCE(started_at, %s), error = %s
-                    WHERE id = %s
+                    WHERE id = %s AND status = ANY(%s)
                     """,
-                    (status, now, error, job_id),
+                    (status, now, error, job_id, list(allowed_from[status])),
                 )
             elif status in ('done', 'finished', 'failed', 'canceled'):
                 cur.execute(
                     """
                     UPDATE run_all_jobs
                     SET status = %s, finished_at = COALESCE(finished_at, %s), error = %s
-                    WHERE id = %s
+                    WHERE id = %s AND status = ANY(%s)
                     """,
-                    (status, now, error, job_id),
+                    (status, now, error, job_id, list(allowed_from[status])),
                 )
             else:
                 cur.execute(
-                    'UPDATE run_all_jobs SET status = %s, error = %s WHERE id = %s',
-                    (status, error, job_id),
+                    'UPDATE run_all_jobs SET status = %s, error = %s WHERE id = %s AND status = ANY(%s)',
+                    (status, error, job_id, list(allowed_from[status])),
                 )
             conn.commit()
         except Exception:

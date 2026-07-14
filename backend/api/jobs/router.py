@@ -25,6 +25,9 @@ from .procrastinate_app import worker_concurrency
 from .run_all_repo import run_all_repo
 from .run_all_tasks import run_all_chunk
 from .run_all_tasks import run_all_start
+from .run_all_tasks import enqueue_available_chunks
+from .scheduler_service import InvalidJobTransition
+from .scheduler_service import SchedulerService
 # Import task objects so we can enqueue via Task.defer_async (Procrastinate 3.2.x)
 # Import tasks so Procrastinate can discover them.
 
@@ -33,30 +36,14 @@ router = APIRouter()
 
 
 def _compute_run_all_prefetch() -> int:
-    """Compute fair-share prefetch.
-
-    W = Procrastinate worker concurrency.
-    J = number of active run-all jobs.
-
-    Prefetch is capped to ensure a single job doesn't monopolize the global queue.
-    """
-    w = int(worker_concurrency() or 1)
-    try:
-        j = int(run_all_repo.count_active_jobs() or 0)
-    except Exception:
-        j = 0
-    j = max(1, j)
-    # Fair share: split workers across active jobs.
-    pf = max(1, w // j)
-    # Safety clamp
-    return min(20, pf)
+    """Compatibility wrapper around generic scheduler fair sharing."""
+    return SchedulerService(
+        run_all_repo, worker_count=worker_concurrency(),
+    ).compute_prefetch()
 
 
 def _build_chunks(ids: list[int], chunk_size: int) -> list[list[int]]:
-    if not ids:
-        return []
-    cs = max(1, int(chunk_size or 1))
-    return [ids[i: i + cs] for i in range(0, len(ids), cs)]
+    return SchedulerService.build_chunks(ids, chunk_size)
 
 
 def _is_unique_violation(exc: BaseException) -> bool:
@@ -87,7 +74,13 @@ class RunAllStartRequest(BaseModel):
     )
 
 
+class JobStartRequest(BaseModel):
+    pipeline_key: str
+    citation_ids: list[int] | None = None
+
+
 @router.get('/run-all/active')
+@router.get('/active')
 async def list_active_run_all(
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
@@ -187,21 +180,7 @@ async def start_run_all(
         }
 
     # Optional: caller provides explicit ids (single-request UI)
-    raw_ids = payload.citation_ids or None
-    sanitized_ids: list[int] | None = None
-    if raw_ids is not None:
-        seen: set[int] = set()
-        tmp: list[int] = []
-        for v in raw_ids:
-            try:
-                i = int(v)
-            except Exception:
-                continue
-            if i in seen:
-                continue
-            seen.add(i)
-            tmp.append(i)
-        sanitized_ids = tmp
+    sanitized_ids = SchedulerService.sanitize_item_ids(payload.citation_ids)
 
     # Create job in queued state.
     # Option A semantics: total is the number of IDs requested.
@@ -285,6 +264,43 @@ async def start_run_all(
     return {'job_id': job_id, 'already_running': False, 'existing': False}
 
 
+@router.post('/pdf-linkage/start')
+async def start_job(
+    sr_id: str,
+    payload: JobStartRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Start a generalized scheduler pipeline (currently PDF linkage)."""
+    if payload.pipeline_key != 'pdf_linkage':
+        raise HTTPException(status_code=400, detail='Unsupported pipeline_key')
+    if not jobs_enabled():
+        raise HTTPException(status_code=503, detail='Background jobs are disabled')
+    await load_sr_and_check(sr_id, current_user, srdb_service)
+    await run_in_threadpool(run_all_repo.ensure_tables)
+    existing = await run_in_threadpool(run_all_repo.get_active_job_for_sr, sr_id)
+    if existing:
+        return {'job_id': existing.get('job_id'), 'already_running': True, 'job': existing}
+    try:
+        job_id = await run_in_threadpool(
+            run_all_repo.create_job,
+            sr_id=sr_id,
+            step='pdf_linkage',
+            pipeline_key='pdf_linkage',
+            created_by=str(current_user.get('id') or ''),
+            model=None,
+            meta={'citation_ids': payload.citation_ids},
+            total=0,
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            existing = await run_in_threadpool(run_all_repo.get_active_job_for_sr, sr_id)
+            if existing:
+                return {'job_id': existing.get('job_id'), 'already_running': True, 'job': existing}
+        raise
+    await run_all_start.defer_async(job_id=job_id)
+    return {'job_id': job_id, 'already_running': False}
+
+
 @router.get('/run-all/status')
 async def run_all_status(
     job_id: str,
@@ -302,6 +318,7 @@ async def run_all_status(
 
 
 @router.post('/run-all/cancel')
+@router.post('/cancel')
 async def run_all_cancel(
     job_id: str,
     current_user: dict[str, Any] = Depends(get_current_active_user),
@@ -313,16 +330,20 @@ async def run_all_cancel(
     sr_id = str(job.get('sr_id'))
     await load_sr_and_check(sr_id, current_user, srdb_service)
 
-    await run_in_threadpool(run_all_repo.mark_canceled, job_id)
+    scheduler = SchedulerService(run_all_repo)
+    new_status = await run_in_threadpool(scheduler.cancel, job_id)
     # Best-effort: remove enqueued (todo) chunk jobs from the queue so cancel is fast.
-    try:
-        deleted = await cancel_enqueued_jobs_for_run_all(job_id)
-    except Exception:
-        deleted = 0
-    return {'status': 'canceled', 'job_id': job_id, 'queue_deleted': deleted}
+    deleted = 0
+    if new_status == 'canceled':
+        try:
+            deleted = await cancel_enqueued_jobs_for_run_all(job_id)
+        except Exception:
+            pass
+    return {'status': new_status, 'job_id': job_id, 'queue_deleted': deleted}
 
 
 @router.post('/run-all/pause')
+@router.post('/pause')
 async def run_all_pause(
     job_id: str,
     current_user: dict[str, Any] = Depends(get_current_active_user),
@@ -334,16 +355,16 @@ async def run_all_pause(
     sr_id = str(job.get('sr_id'))
     await load_sr_and_check(sr_id, current_user, srdb_service)
 
-    # Only pause if running/queued
-    st = str(job.get('status') or '').lower()
-    if st in {'done', 'finished', 'failed', 'canceled'}:
-        return {'status': st, 'job_id': job_id}
-
-    await run_in_threadpool(run_all_repo.set_paused, job_id, True)
-    return {'status': 'paused', 'job_id': job_id}
+    scheduler = SchedulerService(run_all_repo)
+    try:
+        new_status = await run_in_threadpool(scheduler.pause, job_id)
+    except InvalidJobTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'status': new_status, 'job_id': job_id}
 
 
 @router.post('/run-all/resume')
+@router.post('/resume')
 async def run_all_resume(
     job_id: str,
     current_user: dict[str, Any] = Depends(get_current_active_user),
@@ -355,15 +376,17 @@ async def run_all_resume(
     sr_id = str(job.get('sr_id'))
     await load_sr_and_check(sr_id, current_user, srdb_service)
 
-    st = str(job.get('status') or '').lower()
-    if st in {'done', 'finished', 'failed', 'canceled'}:
-        return {'status': st, 'job_id': job_id}
-
-    await run_in_threadpool(run_all_repo.set_paused, job_id, False)
-    return {'status': 'running', 'job_id': job_id}
+    scheduler = SchedulerService(run_all_repo)
+    try:
+        new_status = await run_in_threadpool(scheduler.resume, job_id)
+    except InvalidJobTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    enqueued = await enqueue_available_chunks(job_id) if new_status == 'running' else 0
+    return {'status': new_status, 'job_id': job_id, 'queue_enqueued': enqueued}
 
 
 @router.post('/run-all/dismiss')
+@router.post('/dismiss')
 async def run_all_dismiss(
     job_id: str,
     current_user: dict[str, Any] = Depends(get_current_active_user),
@@ -385,11 +408,9 @@ async def run_all_dismiss(
     sr_id = str(job.get('sr_id'))
     await load_sr_and_check(sr_id, current_user, srdb_service)
 
-    st = str(job.get('status') or '').lower()
-    if st not in {'finished', 'failed'}:
-        raise HTTPException(
-            status_code=400, detail='Only finished/failed jobs can be dismissed',
-        )
-
-    await run_in_threadpool(run_all_repo.set_status, job_id, 'done')
-    return {'status': 'done', 'job_id': job_id}
+    scheduler = SchedulerService(run_all_repo)
+    try:
+        new_status = await run_in_threadpool(scheduler.dismiss, job_id)
+    except InvalidJobTransition as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'status': new_status, 'job_id': job_id}

@@ -12,6 +12,7 @@ type RunAllJob = {
   sr_id: string
   sr_name?: string
   step: 'l1' | 'l2' | 'extract' | string
+  pipeline_key?: string
   status: string
   total: number
   done: number
@@ -57,7 +58,7 @@ export default function RunAllFloatingPanel() {
         return
       }
 
-      const res = await fetch('/api/can-sr/jobs/run-all/active', {
+      const res = await fetch('/api/can-sr/jobs/active', {
         method: 'GET',
         headers,
       })
@@ -93,9 +94,10 @@ export default function RunAllFloatingPanel() {
 
   const ensurePolling = useCallback(() => {
     if (hide) return
-    if (intervalRef.current) return
-    // fetch immediately so UI updates without waiting for the first interval tick
+    // Always refresh immediately. An existing interval must not suppress the
+    // jobs:changed refresh fired just after a job is created or controlled.
     void fetchJobs()
+    if (intervalRef.current) return
     intervalRef.current = window.setInterval(() => {
       void fetchJobs()
     }, 5000)
@@ -118,11 +120,14 @@ export default function RunAllFloatingPanel() {
     if (hide) return
     const handler = () => {
       ensurePolling()
-      void fetchJobs()
     }
+    window.addEventListener('jobs:changed', handler)
     window.addEventListener('run-all:changed', handler)
-    return () => window.removeEventListener('run-all:changed', handler)
-  }, [ensurePolling, fetchJobs, hide])
+    return () => {
+      window.removeEventListener('jobs:changed', handler)
+      window.removeEventListener('run-all:changed', handler)
+    }
+  }, [ensurePolling, hide])
 
   const togglePause = async (job: RunAllJob) => {
     try {
@@ -132,7 +137,7 @@ export default function RunAllFloatingPanel() {
       const headers = getAuthHeaders()
       const st = String(job.status || '').toLowerCase()
       const next = st === 'paused' ? 'resume' : 'pause'
-      await fetch(`/api/can-sr/jobs/run-all/${next}?job_id=${encodeURIComponent(job.job_id)}`,
+      await fetch(`/api/can-sr/jobs/${next}?job_id=${encodeURIComponent(job.job_id)}`,
         {
           method: 'POST',
           headers,
@@ -144,6 +149,7 @@ export default function RunAllFloatingPanel() {
       } catch {
         // ignore
       }
+      await fetchJobs()
     } finally {
       setActingJobId(null)
     }
@@ -154,7 +160,7 @@ export default function RunAllFloatingPanel() {
       setActingJobId(job.job_id)
       ensurePolling()
       const headers = getAuthHeaders()
-      await fetch(`/api/can-sr/jobs/run-all/cancel?job_id=${encodeURIComponent(job.job_id)}`,
+      await fetch(`/api/can-sr/jobs/cancel?job_id=${encodeURIComponent(job.job_id)}`,
         {
           method: 'POST',
           headers,
@@ -166,6 +172,7 @@ export default function RunAllFloatingPanel() {
       } catch {
         // ignore
       }
+      await fetchJobs()
     } finally {
       setActingJobId(null)
     }
@@ -176,7 +183,7 @@ export default function RunAllFloatingPanel() {
       setActingJobId(job.job_id)
       const headers = getAuthHeaders()
       await fetch(
-        `/api/can-sr/jobs/run-all/dismiss?job_id=${encodeURIComponent(job.job_id)}`,
+        `/api/can-sr/jobs/dismiss?job_id=${encodeURIComponent(job.job_id)}`,
         {
           method: 'POST',
           headers,
@@ -211,7 +218,9 @@ export default function RunAllFloatingPanel() {
         const st = String(job.status || '').toLowerCase()
         const isFinished = st === 'finished'
         const isFailed = st === 'failed'
-        const stepLabel =
+        const stepLabel = job.pipeline_key === 'pdf_linkage'
+          ? 'PDF linkage'
+          :
           job.step === 'l1'
             ? dict?.screening?.titleAbstract || 'Title/Abstract'
             : job.step === 'l2'
@@ -229,7 +238,7 @@ export default function RunAllFloatingPanel() {
                   {job.sr_name || job.sr_id}
                 </div>
                 <div className="mt-0.5 text-xs text-gray-600">
-                  {dict?.screening?.runAllAI || 'Run all AI'} · {stepLabel}
+                  {job.pipeline_key === 'pdf_linkage' ? 'Background job' : (dict?.screening?.runAllAI || 'Run all AI')} · {stepLabel}
                   {st === 'paused' ? ` · ${dict?.screening?.paused || 'Paused'}` : ''}
                   {st === 'finished' ? ` · ${dict?.common?.done || 'Done'}` : ''}
                   {st === 'failed' ? ' · Failed' : ''}

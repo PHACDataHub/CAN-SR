@@ -136,6 +136,17 @@ class Settings(BaseSettings):
     # Run-All job chunk size: citations per Procrastinate chunk task.
     # Larger values reduce overhead but can reduce fairness/responsiveness.
     RUN_ALL_CHUNK_SIZE: int = int(os.getenv('RUN_ALL_CHUNK_SIZE', '1'))
+    PDF_LINKAGE_MAX_BYTES: int = int(
+        os.getenv('PDF_LINKAGE_MAX_BYTES', str(50 * 1024 * 1024)),
+    )
+    PDF_LINKAGE_MAX_RETRIES: int = int(os.getenv('PDF_LINKAGE_MAX_RETRIES', '3'))
+    PDF_LINKAGE_MAX_CONCURRENCY: int = int(
+        os.getenv('PDF_LINKAGE_MAX_CONCURRENCY', '4'),
+    )
+    OA_API_BASE_URL: str = os.getenv(
+        'OA_API_BASE_URL', 'https://api.openaccessbutton.org/availability',
+    )
+    OA_API_CONTACT: str = os.getenv('OA_API_CONTACT', 'CAN-SR')
 
     # Additional settings
     ALLOW_USER_REGISTRATION: bool = (
@@ -209,8 +220,8 @@ class Settings(BaseSettings):
     JOB_ID_SCOPUS: str = os.getenv('JOB_ID_SCOPUS', '')
 
     # search function
-    ENTREZ_EMAIL: str = os.getenv('ENTREZ_EMAIL')
-    ENTREZ_API_KEY: str = os.getenv('ENTREZ_API_KEY')
+    ENTREZ_EMAIL: str = os.getenv('ENTREZ_EMAIL', '')
+    ENTREZ_API_KEY: str = os.getenv('ENTREZ_API_KEY', '')
 
     AZURE_STORAGE_CONNECTION_STRING: str = os.getenv(
         'AZURE_STORAGE_CONNECTION_STRING',
