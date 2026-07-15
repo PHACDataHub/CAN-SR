@@ -20,7 +20,9 @@ DEFAULT_CHAT_MODEL must be one of those keys.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+from collections import deque
 import json
 import logging
 import re
@@ -52,6 +54,59 @@ logger = logging.getLogger(__name__)
 
 # Token cache TTL in seconds (9 minutes)
 TOKEN_CACHE_TTL = 9 * 60
+
+
+class DeploymentRateLimiter:
+    """In-process rolling-window limiter for one Azure deployment."""
+
+    def __init__(self, requests_per_minute: int, tokens_per_minute: int):
+        self.requests_per_minute = max(0, int(requests_per_minute))
+        self.tokens_per_minute = max(0, int(tokens_per_minute))
+        self._requests: deque[float] = deque()
+        self._tokens: deque[tuple[float, int]] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, estimated_tokens: int) -> None:
+        """Wait until both configured budgets have room, then reserve them."""
+        estimated_tokens = max(1, int(estimated_tokens))
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                cutoff = now - 60.0
+                while self._requests and self._requests[0] <= cutoff:
+                    self._requests.popleft()
+                while self._tokens and self._tokens[0][0] <= cutoff:
+                    self._tokens.popleft()
+
+                request_ok = (
+                    self.requests_per_minute <= 0
+                    or len(self._requests) < self.requests_per_minute
+                )
+                used_tokens = sum(tokens for _, tokens in self._tokens)
+                token_ok = (
+                    self.tokens_per_minute <= 0
+                    or used_tokens + estimated_tokens <= self.tokens_per_minute
+                )
+                # A single oversized request must be allowed eventually rather than
+                # waiting forever. It consumes the whole token window by itself.
+                if (
+                    self.tokens_per_minute > 0
+                    and estimated_tokens > self.tokens_per_minute
+                ):
+                    token_ok = not self._tokens
+
+                if request_ok and token_ok:
+                    self._requests.append(now)
+                    self._tokens.append((now, estimated_tokens))
+                    return
+
+                waits: list[float] = []
+                if not request_ok and self._requests:
+                    waits.append(self._requests[0] + 60.0 - now)
+                if not token_ok and self._tokens:
+                    waits.append(self._tokens[0][0] + 60.0 - now)
+                delay = max(0.01, min(waits) if waits else 0.1)
+            await asyncio.sleep(delay)
 
 
 class CachedTokenProvider:
@@ -106,6 +161,7 @@ class AzureOpenAIClient:
         )
         self.model_configs = self._load_model_configs(self._models_yaml)
         self.default_model = self._resolve_default_model(self.default_model)
+        self._rate_limiters: dict[str, DeploymentRateLimiter] = {}
 
         # Cache official clients by (endpoint, api_version, auth_type)
         self._official_clients: dict[tuple[str, str, str], AzureOpenAI] = {}
@@ -185,10 +241,10 @@ class AzureOpenAIClient:
     def _load_model_configs(
         self,
         data: dict[str, Any] | None = None,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         """Build model configs keyed by UI/display name."""
         models = self._extract_models_mapping(data or {})
-        cfg: dict[str, dict[str, str]] = {}
+        cfg: dict[str, dict[str, Any]] = {}
         for display_name, meta in models.items():
             if not isinstance(meta, dict):
                 continue
@@ -196,10 +252,25 @@ class AzureOpenAIClient:
             api_version = meta.get('api_version')
             if not deployment or not api_version:
                 continue
+            try:
+                requests_per_minute = max(
+                    0, int(meta.get('requests_per_minute', 0) or 0),
+                )
+                tokens_per_minute = max(
+                    0, int(meta.get('tokens_per_minute', 0) or 0),
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    'Ignoring invalid rate limits for model %s', display_name,
+                )
+                requests_per_minute = 0
+                tokens_per_minute = 0
             cfg[str(display_name)] = {
                 'endpoint': self._endpoint or '',
                 'deployment': str(deployment),
                 'api_version': str(api_version),
+                'requests_per_minute': requests_per_minute,
+                'tokens_per_minute': tokens_per_minute,
             }
 
         if cfg:
@@ -489,6 +560,69 @@ class AzureOpenAIClient:
 
         return None
 
+    @staticmethod
+    def _estimate_request_tokens(request_kwargs: dict[str, Any]) -> int:
+        """Conservatively estimate input plus maximum output tokens."""
+        chars = 0
+        image_count = 0
+        for message in request_kwargs.get('messages') or []:
+            content = message.get('content', '') if isinstance(message, dict) else ''
+            if isinstance(content, str):
+                chars += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get('type') == 'text':
+                        chars += len(str(part.get('text') or ''))
+                    elif part.get('type') == 'image_url':
+                        image_count += 1
+        output_tokens = int(
+            request_kwargs.get('max_completion_tokens')
+            or request_kwargs.get('max_tokens')
+            or 0
+        )
+        return max(1, (chars + 3) // 4 + image_count * 1000 + output_tokens)
+
+    def _get_rate_limiter(self, deployment: str) -> DeploymentRateLimiter | None:
+        config = next(
+            (
+                cfg for cfg in self.model_configs.values()
+                if str(cfg.get('deployment') or '') == deployment
+            ),
+            None,
+        )
+        if not config:
+            return None
+        rpm = int(config.get('requests_per_minute') or 0)
+        tpm = int(config.get('tokens_per_minute') or 0)
+        if rpm <= 0 and tpm <= 0:
+            return None
+        limiter = self._rate_limiters.get(deployment)
+        if limiter is None:
+            limiter = DeploymentRateLimiter(rpm, tpm)
+            self._rate_limiters[deployment] = limiter
+        return limiter
+
+    @staticmethod
+    def _retry_after_seconds(error: Exception) -> float | None:
+        error_text = str(error).lower()
+        if (
+            getattr(error, 'status_code', None) != 429
+            and 'rate limit' not in error_text
+            and 'rate_limit' not in error_text
+        ):
+            return None
+        headers = getattr(error, 'headers', None) or {}
+        try:
+            if headers.get('retry-after-ms') is not None:
+                return max(0.0, float(headers['retry-after-ms']) / 1000.0)
+            if headers.get('retry-after') is not None:
+                return max(0.0, float(headers['retry-after']))
+        except (TypeError, ValueError):
+            pass
+        return 1.0
+
     async def _create_chat_completion_request(
         self,
         *,
@@ -498,11 +632,15 @@ class AzureOpenAIClient:
         current_model = model
         current_request = dict(request_kwargs)
         attempted_deployments: set[str] = set()
+        rate_limit_retries = 0
 
         while True:
             deployment = str(current_request.get('model') or '').strip()
             attempted_deployments.add(deployment)
             try:
+                limiter = self._get_rate_limiter(deployment)
+                if limiter is not None:
+                    await limiter.acquire(self._estimate_request_tokens(current_request))
                 if AsyncAzureOpenAI is not None:
                     client = self._get_official_async_client(current_model)
                     return await client.chat.completions.create(**current_request)
@@ -514,6 +652,15 @@ class AzureOpenAIClient:
 
                 return await run_in_threadpool(_call_sync)
             except Exception as e:
+                retry_after = self._retry_after_seconds(e)
+                if retry_after is not None and rate_limit_retries < 3:
+                    rate_limit_retries += 1
+                    logger.warning(
+                        'Azure OpenAI rate limit for deployment %s; retrying in %.2fs (%s/3)',
+                        deployment, retry_after, rate_limit_retries,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
                 unsupported_param = self._extract_unsupported_parameter_name(e)
                 if unsupported_param and unsupported_param in current_request:
                     logger.warning(
@@ -736,8 +883,6 @@ class AzureOpenAIClient:
                         if content:
                             yield content
             else:
-                import asyncio
-
                 client = self._get_official_client(model)
                 loop = asyncio.get_running_loop()
                 q: asyncio.Queue[object] = asyncio.Queue()
@@ -763,6 +908,9 @@ class AzureOpenAIClient:
                             q.put(_DONE), loop,
                         ).result()
 
+                limiter = self._get_rate_limiter(deployment)
+                if limiter is not None:
+                    await limiter.acquire(self._estimate_request_tokens(request_kwargs))
                 await run_in_threadpool(_worker)
 
                 while True:

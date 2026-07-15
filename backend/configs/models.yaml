@@ -4,15 +4,23 @@ models:
   GPT-5-mini:
     deployment: gpt-5-mini
     api_version: 2025-04-01-preview
+    requests_per_minute: 1000
+    tokens_per_minute: 1000000
 
   GPT-5.4:
     deployment: gpt-5.4
     api_version: 2025-04-01-preview
+    requests_per_minute: 1000
+    tokens_per_minute: 1000000
 
   GPT-5.4-Nano:
     deployment: gpt-5.4-nano
     api_version: 2025-04-01-preview
+    requests_per_minute: 1000
+    tokens_per_minute: 1000000
 
   GPT-5.4-Mini:
     deployment: gpt-5.4-mini
     api_version: 2025-04-01-preview
+    requests_per_minute: 1000
+    tokens_per_minute: 1000000

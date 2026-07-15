@@ -868,14 +868,18 @@ export default function CanSrL1ScreenPage() {
 	                                {hasAgentic && crit ? (
 	                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
 	                                    <div className="mt-1 font-semibold text-gray-800">
-	                                      Critical agent{' '}
 	                                      {critDisagrees ? (
-	                                        <span className="text-amber-700">disagrees</span>
+	                                        <span className="text-amber-700">
+	                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
+	                                        </span>
 	                                      ) : (
-	                                        <span className="text-emerald-700">agrees</span>
+	                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
 	                                      )}
 	                                    </div>
-	                                    <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
+	                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
+	                                    {(crit as any)?.rationale ? (
+	                                      <div className="mt-1">Reason: {String((crit as any).rationale)}</div>
+	                                    ) : null}
 	                                  </div>
 	                                ) : null}
                               </div>
