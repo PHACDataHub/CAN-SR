@@ -990,6 +990,7 @@ async def classify_citation(
         'evidence_tables': evidence_tables,
         'evidence_figures': evidence_figures,
         'llm_raw': llm_response,  # raw response for audit
+        'pipeline': 'fulltext' if (payload.screening_step or '').lower() == 'l2' else 'title_abstract',
     }
 
     # Persist into Postgres under a dynamic column name derived from question
@@ -1101,6 +1102,8 @@ async def human_classify_citation(
         'reviewer': payload.reviewer,
         'citation_text': (citation_text or ''),
         'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'screening_step': (payload.screening_step or '').lower(),
+        'pipeline': 'fulltext' if (payload.screening_step or '').lower() == 'l2' else 'title_abstract',
     }
 
     # Persist into Postgres under a dynamic column name derived from question
@@ -1395,6 +1398,7 @@ async def run_title_abstract_agentic(
                 'evidence_tables': [],
                 'evidence_figures': [],
                 'source': 'agentic',
+                'pipeline': 'title_abstract',
             }
             await run_in_threadpool(
                 cits_dp_service.update_jsonb_column,
@@ -1626,6 +1630,15 @@ async def run_fulltext_agentic(
 
         row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
 
+    # Never silently downgrade a Full Text run to Title/Abstract input. Doing so
+    # creates a persisted `pipeline=fulltext` answer even when no PDF exists,
+    # which then looks like a previous Full Text review in the UI.
+    if not (row or {}).get('fulltext') or not (row or {}).get('fulltext_md5'):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='A processed full-text PDF is required before running Full Text AI',
+        )
+
     include_cols = []
     try:
         include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
@@ -1638,7 +1651,8 @@ async def run_fulltext_agentic(
     citation_text = citations_router._build_combined_citation_from_row(
         row or {}, include_cols,
     )
-    fulltext = (row or {}).get('fulltext') or citation_text
+    fulltext = str((row or {}).get('fulltext') or '')
+    fulltext_md5 = str((row or {}).get('fulltext_md5') or '')
 
     # Tables/Figures context from row
     tables_md_lines: list[str] = []
@@ -1849,7 +1863,10 @@ async def run_fulltext_agentic(
                     'confidence': screening_parsed.confidence,
                     'rationale': screening_parsed.rationale,
                     'raw_response': screening_raw,
-                    'guardrails': _build_guardrails(screening_parsed, raw_text=screening_raw, stage='screening'),
+                    'guardrails': {
+                        **_build_guardrails(screening_parsed, raw_text=screening_raw, stage='screening'),
+                        'fulltext_md5': fulltext_md5,
+                    },
                     'model': payload.model,
                     'prompt_version': payload.prompt_version,
                     'temperature': payload.temperature,
@@ -1928,7 +1945,10 @@ async def run_fulltext_agentic(
                     'confidence': critical_parsed.confidence,
                     'rationale': critical_parsed.rationale,
                     'raw_response': critical_raw,
-                    'guardrails': _build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
+                    'guardrails': {
+                        **_build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
+                        'fulltext_md5': fulltext_md5,
+                    },
                     'model': payload.model,
                     'prompt_version': payload.prompt_version,
                     'temperature': payload.temperature,
@@ -1961,6 +1981,8 @@ async def run_fulltext_agentic(
                 'evidence_tables': screening_parsed.evidence_tables or [],
                 'evidence_figures': screening_parsed.evidence_figures or [],
                 'source': 'agentic',
+                'pipeline': 'fulltext',
+                'fulltext_md5': fulltext_md5,
             }
             await run_in_threadpool(
                 cits_dp_service.update_jsonb_column,

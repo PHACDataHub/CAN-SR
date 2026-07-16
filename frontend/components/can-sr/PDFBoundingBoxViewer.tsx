@@ -115,6 +115,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   const [pageViewports, setPageViewports] = useState<Record<number, { width: number; height: number }>>({})
   const renderTasksRef = useRef<Record<number, any>>({})
   const renderTokenRef = useRef(0)
+  const documentTokenRef = useRef(0)
   const [hoverInfo, setHoverInfo] = useState<{ page: number; left: number; top: number; content: string } | null>(null)
   // Explicitly selected box (e.g., when user clicks an evidence chip). This is drawn
   // regardless of whether the LLM evidence panels contain that coordinate.
@@ -228,7 +229,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           String(citationId),
         )}`
 
-        const res = await fetch(url, { headers })
+        const res = await fetch(url, { headers, cache: 'no-store' })
         if (res.status === 404) {
           if (!cancelled) setPdfMissing(true)
           return
@@ -254,6 +255,27 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [srId, citationId, reloadKey])
+
+  // All viewer state is citation-scoped. Invalidate document/render work and
+  // remove coordinates, canvases, and scroll state before the next PDF arrives.
+  useEffect(() => {
+    documentTokenRef.current += 1
+    renderTokenRef.current += 1
+    Object.values(renderTasksRef.current).forEach((task: any) => {
+      if (task && typeof task.cancel === 'function') task.cancel()
+    })
+    renderTasksRef.current = {}
+    pageRefs.current = {}
+    wrapperRefs.current = {}
+    setPdfDocument(null)
+    setPdfUrl(null)
+    setTotalPages(0)
+    setCurrentPage(1)
+    setPageViewports({})
+    setSelectedCoord(null)
+    setHoverInfo(null)
+    if (containerRef.current) containerRef.current.scrollTop = 0
+  }, [srId, citationId])
 
   const uploadPDF = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -291,19 +313,37 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
 
   // Load PDF document via pdf.js
   useEffect(() => {
+    const token = ++documentTokenRef.current
+    let cancelled = false
+    let loadingTask: any = null
+    let loadedDocument: any = null
     const loadPDF = async () => {
       if (!pdfUrl || !window.pdfjsLib) return
       try {
-        const loadingTask = window.pdfjsLib.getDocument(pdfUrl)
+        loadingTask = window.pdfjsLib.getDocument(pdfUrl)
         const pdf = await loadingTask.promise
+        loadedDocument = pdf
+        if (cancelled || token !== documentTokenRef.current) {
+          if (typeof pdf.destroy === 'function') await Promise.resolve(pdf.destroy()).catch(() => undefined)
+          return
+        }
         setPdfDocument(pdf)
         setTotalPages(pdf.numPages || 0)
       } catch (err) {
+        if (cancelled || token !== documentTokenRef.current) return
         console.error('Error loading PDF:', err)
         setError('Failed to load PDF document')
       }
     }
     loadPDF()
+    return () => {
+      cancelled = true
+      if (loadingTask && typeof loadingTask.destroy === 'function') {
+        void Promise.resolve(loadingTask.destroy()).catch(() => undefined)
+      } else if (loadedDocument && typeof loadedDocument.destroy === 'function') {
+        void Promise.resolve(loadedDocument.destroy()).catch(() => undefined)
+      }
+    }
   }, [pdfUrl])
 
   // Fit-to-width calculation (use first page to compute scale)
