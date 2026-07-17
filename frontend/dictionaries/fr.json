@@ -1,4 +1,23 @@
 {
+  "citationExport": {
+    "title": "Exporter les citations",
+    "description": "Choisissez uniquement les données bibliographiques et de sélection nécessaires. Les champs internes et les anciennes questions ne peuvent jamais être exportés.",
+    "loading": "Chargement des options d’exportation sécurisées…",
+    "loadError": "Impossible de charger les options d’exportation.",
+    "exportError": "Impossible de préparer le fichier CSV.",
+    "retry": "Réessayer",
+    "rows": "Lignes à inclure",
+    "all": "Toutes les citations",
+    "l1Included": "Incluses au niveau 1",
+    "l2Included": "Incluses au niveau 2",
+    "currentView": "Vue filtrée actuelle",
+    "unavailable": "indisponible ou plus de 500 citations",
+    "noneAvailable": "Aucun champ sécurisé n’est disponible dans ce groupe.",
+    "selected": "{count} colonnes sélectionnées",
+    "cancel": "Annuler",
+    "preparing": "Préparation du CSV…",
+    "exportCsv": "Exporter le CSV"
+  },
   "common": {
     "languageSwitch": "English",
     "governmentOfCanada": "Gouvernement du Canada",

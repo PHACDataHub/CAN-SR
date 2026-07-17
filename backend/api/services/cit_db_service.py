@@ -1400,6 +1400,58 @@ class CitsDPService:
             if conn:
                 pass
 
+    def fetch_export_rows(
+        self,
+        table_name: str,
+        columns: list[str],
+        scope_kind: str = 'all',
+        citation_ids: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch allowlisted citation columns for a validated export scope.
+
+        The export service derives ``columns`` from live table metadata. This
+        method validates them again at the database boundary and always selects
+        ``id`` so citation-id ownership can be checked before returning a file.
+        """
+        table_name = _validate_ident(table_name, kind='table_name')
+        self._require_psycopg2()
+        existing = {
+            str(column.get('column_name'))
+            for column in self.get_table_columns(table_name)
+            if column.get('column_name')
+        }
+        requested = list(dict.fromkeys(['id', *columns]))
+        if any(column not in existing for column in requested):
+            raise ValueError('Export contains a column that is not present in the citation table')
+
+        predicates: dict[str, tuple[str, tuple[Any, ...]]] = {
+            'all': ('', ()),
+            'l1_included': (" WHERE COALESCE(human_l1_decision, '') = 'include'", ()),
+            'l2_included': (" WHERE COALESCE(human_l2_decision, '') = 'include'", ()),
+            'citation_ids': (' WHERE id = ANY(%s)', (citation_ids or [],)),
+        }
+        if scope_kind not in predicates:
+            raise ValueError(f'Unsupported export row scope: {scope_kind}')
+        if scope_kind in ('l1_included', 'l2_included'):
+            decision_column = f"human_{scope_kind.removesuffix('_included')}_decision"
+            if decision_column not in existing:
+                return []
+
+        where_sql, params = predicates[scope_kind]
+        select_sql = ', '.join(f'"{column}"' for column in requested)
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f'SELECT {select_sql} FROM "{table_name}"{where_sql} ORDER BY id',
+                params,
+            )
+            return [dict(row) for row in (cur.fetchall() or []) if row]
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
     def backfill_human_decisions(self, criteria_parsed: dict[str, Any], table_name: str = 'citations') -> int:
         """Recompute and persist human_l1_decision / human_l2_decision for all rows.
 
