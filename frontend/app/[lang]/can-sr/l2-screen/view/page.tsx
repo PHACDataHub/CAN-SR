@@ -167,7 +167,7 @@ export default function CanSrL2ScreenViewPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
   // Per-criterion AI status (keyed by question index)
-  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'running' | 'done' | 'error'>>({})
+  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'queued' | 'running' | 'done' | 'error'>>({})
   // Run-all progress
   const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
   const [runningAll, setRunningAll] = useState(false)
@@ -803,55 +803,19 @@ export default function CanSrL2ScreenViewPage() {
     setRunningAll(true)
     setRunAllProgress({ done: 0, total })
     setRunAllError(null)
-    setCriterionStatus(Object.fromEntries(context.questions.map((_, index) => [index, 'running'])))
+    setCriterionStatus(Object.fromEntries(context.questions.map((_, index) => [index, 'queued'])))
     try {
-      // The backend endpoint natively runs every criterion when criterion_key is
-      // omitted. Use that bulk mode so full text, tables, and figures are loaded
-      // once rather than repeating the expensive setup for every criterion.
-      const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
-      const res = await fetch('/api/can-sr/screen/fulltext/run', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          sr_id: context.srId,
-          citation_id: Number(context.citationId),
-          model: context.model,
-          temperature: 0.0,
-          max_tokens: 2000,
-          prompt_version: 'v1',
-        }),
-      })
-      const runData = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(runData?.detail || runData?.error || `Run All AI failed (${res.status})`)
-      if (String(runData?.citation_id ?? context.citationId) !== context.citationId) {
-        throw new Error('Run All AI response did not match the requested citation')
+      const failures: number[] = []
+      for (let index = 0; index < context.questions.length; index++) {
+        if (currentCitationKeyRef.current !== requestKey) break
+        const ok = await classifyQuestion(index, context)
+        if (!ok) failures.push(index)
+        if (currentCitationKeyRef.current !== requestKey) break
+        setRunAllProgress({ done: index + 1, total })
       }
-      if (currentCitationKeyRef.current !== requestKey) return
-
-      const completedKeys = new Set(
-        (Array.isArray(runData?.criteria) ? runData.criteria : [])
-          .filter((item: any) => !item?.error)
-          .map((item: any) => String(item?.criterion_key || '')),
-      )
-      const nextStatus: Record<number, 'done' | 'error'> = {}
-      context.questions.forEach((question, index) => {
-        const key = question.trim().toLowerCase().replace(/[^\w]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 56)
-        nextStatus[index] = completedKeys.has(key) ? 'done' : 'error'
-      })
-      setCriterionStatus(nextStatus)
-      setRunAllProgress({ done: completedKeys.size, total })
-
-      // Refresh the citation metadata/evidence once after the bulk run. Panels
-      // become visible from the authoritative fingerprinted fulltext runs below.
-      const citRes = await fetch(
-        `/api/can-sr/citations/get?sr_id=${encodeURIComponent(context.srId)}&citation_id=${encodeURIComponent(context.citationId)}`,
-        { method: 'GET', headers: getAuthHeaders() },
-      )
-      const citData = await citRes.json().catch(() => ({}))
-      if (currentCitationKeyRef.current !== requestKey) return
-      if (!citRes.ok) throw new Error(citData?.detail || citData?.error || 'AI completed, but results could not be refreshed')
-      setCitation(citData)
-      await loadRuns({ srId: context.srId, citationId: context.citationId })
+      if (failures.length) {
+        setRunAllError(`${failures.length} of ${total} questions failed.`)
+      }
     } finally {
       if (currentCitationKeyRef.current === requestKey) setRunningAll(false)
     }
@@ -1143,8 +1107,10 @@ export default function CanSrL2ScreenViewPage() {
 
                               {criterionStatus[idx] === 'running' ? (
                                 <span className="text-[10px] text-blue-600">Running…</span>
+                              ) : criterionStatus[idx] === 'queued' ? (
+                                <span className="text-[10px] text-gray-500">Queued</span>
                               ) : criterionStatus[idx] === 'done' ? (
-                                <span className="text-[10px] text-emerald-600">Done</span>
+                                <span className="text-[10px] text-emerald-600">Completed</span>
                               ) : criterionStatus[idx] === 'error' ? (
                                 <span className="text-[10px] text-red-600">Error</span>
                               ) : saveStatus[idx] === 'saving' ? (

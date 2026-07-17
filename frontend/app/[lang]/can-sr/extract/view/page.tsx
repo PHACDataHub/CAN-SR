@@ -86,7 +86,7 @@ export default function CanSrL2ScreenPage() {
     setDescOpen((prev) => ({ ...prev, [name]: !prev[name] }))
 
   const [paramFound, setParamFound] = useState<Record<string, boolean>>({})
-  const [aiStatus, setAiStatus] = useState<Record<string, string>>({})
+  const [aiStatus, setAiStatus] = useState<Record<string, 'queued' | 'extracting' | 'suggesting' | 'suggested' | 'error'>>({})
   const [aiPanels, setAiPanels] = useState<Record<string, any>>({})
   const [panelOpen, setPanelOpen] = useState<Record<string, boolean>>({})
   const [fulltextCoords, setFulltextCoords] = useState<any[] | null>(null)
@@ -278,6 +278,7 @@ export default function CanSrL2ScreenPage() {
     setRunningAllAI(true)
     setRunAllProgress({ done: 0, total: params.length })
     setRunAllError(null)
+    setAiStatus(Object.fromEntries(params.map(({ name }) => [name, 'queued'])))
     try {
       // Resolve full text exactly once and reuse it for every parameter request.
       context.fullText = await ensureFullText()
@@ -660,18 +661,20 @@ export default function CanSrL2ScreenPage() {
                                       {saveStatus[paramName] === 'saved'
                                         ? dict.extract.saved
                                         : saveStatus[paramName] === 'error'
-                                        ? dict.extract.error
+                                        ? dict.common.error
                                         : saveStatus[paramName] === 'saving'
                                         ? dict.extract.saving
                                         : ''}
                                     </span>
                                     <span className="text-xs text-gray-500">
-                                      {aiStatus[paramName] === 'extracting'
+                                      {aiStatus[paramName] === 'queued'
+                                        ? 'Queued'
+                                        : aiStatus[paramName] === 'extracting'
                                         ? dict.extract.extractingFullText
-                                        : aiStatus[paramName] === 'suggesting' || aiStatus[paramName] === 'loading'
+                                        : aiStatus[paramName] === 'suggesting'
                                         ? dict.extract.suggesting
                                         : aiStatus[paramName] === 'suggested'
-                                        ? dict.extract.finished
+                                        ? 'Completed'
                                         : aiStatus[paramName] === 'error'
                                         ? dict.extract.aiError
                                         : ''}
@@ -680,7 +683,6 @@ export default function CanSrL2ScreenPage() {
                                       onClick={() => suggestParam(paramName, cleanDesc)}
                                       disabled={
                                         runningAllAI ||
-                                        aiStatus[paramName] === 'loading' ||
                                         aiStatus[paramName] === 'extracting' ||
                                         aiStatus[paramName] === 'suggesting'
                                       }

@@ -156,7 +156,7 @@ export default function CanSrL1ScreenPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
   // Per-criterion AI status (keyed by question index)
-  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'running' | 'done' | 'error'>>({})
+  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'queued' | 'running' | 'done' | 'error'>>({})
   // Run-all progress
   const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
   const [runningAll, setRunningAll] = useState(false)
@@ -635,8 +635,9 @@ export default function CanSrL1ScreenPage() {
     const total = context.questions.length
     setRunningAll(true)
     setRunAllProgress({ done: 0, total })
+    setCriterionStatus(Object.fromEntries(context.questions.map((_, index) => [index, 'queued'])))
     try {
-      for (let i = 0; i < criteriaData.questions.length; i++) {
+      for (let i = 0; i < context.questions.length; i++) {
         if (currentCitationKeyRef.current !== requestKey) break
         await classifyQuestion(i, context)
         if (currentCitationKeyRef.current !== requestKey) break
@@ -854,8 +855,10 @@ export default function CanSrL1ScreenPage() {
 
                             {criterionStatus[idx] === 'running' ? (
                               <span className="text-[10px] text-blue-600">Running…</span>
+                            ) : criterionStatus[idx] === 'queued' ? (
+                              <span className="text-[10px] text-gray-500">Queued</span>
                             ) : criterionStatus[idx] === 'done' ? (
-                              <span className="text-[10px] text-emerald-600">Done</span>
+                              <span className="text-[10px] text-emerald-600">Completed</span>
                             ) : criterionStatus[idx] === 'error' ? (
                               <span className="text-[10px] text-red-600">Error</span>
                             ) : saveStatus[idx] === 'saving' ? (
