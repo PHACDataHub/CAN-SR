@@ -112,6 +112,32 @@ export default function CanSrL2ScreenPage() {
 
   const [runningAllAI, setRunningAllAI] = useState(false)
   const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
+  const [runAllError, setRunAllError] = useState<string | null>(null)
+  const citationKey = `${srId || ''}:${citationId || ''}`
+  const currentCitationKeyRef = useRef(citationKey)
+  currentCitationKeyRef.current = citationKey
+
+  // Extraction is citation-scoped too. Clear all row/PDF state synchronously
+  // when the URL changes so missing fields cannot inherit the previous row.
+  useEffect(() => {
+    setParamValues({})
+    setParamFound({})
+    setAiPanels({})
+    setPanelOpen({})
+    setAiStatus({})
+    setSaveStatus({})
+    setDescOpen({})
+    setFulltextStr(null)
+    setFulltextCoords(null)
+    setFulltextPages(null)
+    setFulltextTables(null)
+    setFulltextFigures(null)
+    setRunAllProgress(null)
+    setRunAllError(null)
+    setRunningAllAI(false)
+    fullTextCacheRef.current = null
+    fullTextInFlightRef.current = null
+  }, [citationKey])
 
   // Cache full text so single-param and run-all don’t repeatedly trigger extraction/DB reads
   const fullTextCacheRef = useRef<string | null>(null)
@@ -119,6 +145,10 @@ export default function CanSrL2ScreenPage() {
 
   const ensureFullText = async (): Promise<string | null> => {
     if (!citationId || !srId) return null
+    if (fulltextStr) {
+      fullTextCacheRef.current = fulltextStr
+      return fulltextStr
+    }
     if (fullTextCacheRef.current) return fullTextCacheRef.current
     if (fullTextInFlightRef.current) return fullTextInFlightRef.current
 
@@ -173,17 +203,28 @@ export default function CanSrL2ScreenPage() {
     }
   }
 
-  const suggestParam = async (name: string, description: string) => {
-    if (!citationId || !srId) return
+  const suggestParam = async (
+    name: string,
+    description: string,
+    context?: { srId: string; citationId: string; model: string; fullText?: string | null },
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const runContext = context || (citationId && srId
+      ? { srId, citationId, model: selectedModel }
+      : null)
+    if (!runContext) return { ok: false, error: 'Missing citation context' }
+    const requestKey = `${runContext.srId}:${runContext.citationId}`
+    if (currentCitationKeyRef.current !== requestKey) return { ok: false, error: 'Citation changed' }
     setAiStatus(prev => ({ ...prev, [name]: 'extracting' }))
     try {
       const headers = getAuthHeaders()
-      const fullText = await ensureFullText()
+      const fullText = context && 'fullText' in context ? context.fullText : await ensureFullText()
+      if (!fullText) throw new Error('Full text is not available for this citation')
+      if (currentCitationKeyRef.current !== requestKey) return { ok: false, error: 'Citation changed' }
       setAiStatus(prev => ({ ...prev, [name]: 'suggesting' }))
       const res = await fetch(
         `/api/can-sr/extract?action=extract-parameter&sr_id=${encodeURIComponent(
-          srId || '',
-        )}&citation_id=${encodeURIComponent(String(citationId || ''))}`,
+          runContext.srId,
+        )}&citation_id=${encodeURIComponent(runContext.citationId)}`,
         {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
@@ -191,13 +232,14 @@ export default function CanSrL2ScreenPage() {
             fulltext: fullText ?? undefined,
             parameter_name: name,
             parameter_description: description || name,
-            model: selectedModel,
+            model: runContext.model,
             temperature: 0.0,
             max_tokens: 512,
           }),
         },
       )
       const data = await res.json().catch(() => ({}))
+      if (currentCitationKeyRef.current !== requestKey) return { ok: false, error: 'Citation changed' }
       const ext = data?.extraction || data
       if (res.ok && ext) {
         setParamValues(prev => ({ ...prev, [name]: ext?.value ?? '' }))
@@ -205,16 +247,21 @@ export default function CanSrL2ScreenPage() {
         setAiPanels(prev => ({ ...prev, [name]: ext }))
         setPanelOpen(prev => ({ ...prev, [name]: false }))
         setAiStatus(prev => ({ ...prev, [name]: 'suggested' }))
+        return { ok: true }
       } else {
         setAiStatus(prev => ({ ...prev, [name]: 'error' }))
+        return { ok: false, error: data?.detail || data?.error || `Request failed (${res.status})` }
       }
-    } catch {
-      setAiStatus(prev => ({ ...prev, [name]: 'error' }))
+    } catch (err: any) {
+      if (currentCitationKeyRef.current === requestKey) setAiStatus(prev => ({ ...prev, [name]: 'error' }))
+      return { ok: false, error: err?.message || 'Parameter extraction failed' }
     }
   }
 
   const runAllAI = async () => {
-    if (!parametersParsed || runningAllAI) return
+    if (!parametersParsed || runningAllAI || !srId || !citationId) return
+    const requestKey = `${srId}:${citationId}`
+    const context = { srId, citationId, model: selectedModel, fullText: null as string | null }
 
     // Flatten rendered parameters with their descriptions
     const params: Array<{ name: string; description: string }> = []
@@ -230,17 +277,28 @@ export default function CanSrL2ScreenPage() {
 
     setRunningAllAI(true)
     setRunAllProgress({ done: 0, total: params.length })
+    setRunAllError(null)
     try {
-      // Warm fulltext cache once
-      await ensureFullText()
+      // Resolve full text exactly once and reuse it for every parameter request.
+      context.fullText = await ensureFullText()
+      if (!context.fullText) throw new Error('Full text is not available for this citation')
 
+      const failures: string[] = []
       for (let idx = 0; idx < params.length; idx++) {
+        if (currentCitationKeyRef.current !== requestKey) break
         const p = params[idx]
-        await suggestParam(p.name, p.description)
+        const result = await suggestParam(p.name, p.description, context)
+        if (!result.ok && result.error !== 'Citation changed') failures.push(`${p.name}: ${result.error || 'failed'}`)
+        if (currentCitationKeyRef.current !== requestKey) break
         setRunAllProgress({ done: idx + 1, total: params.length })
       }
+      if (failures.length) {
+        setRunAllError(`${failures.length} of ${params.length} parameters failed. ${failures[0]}`)
+      }
+    } catch (err: any) {
+      if (currentCitationKeyRef.current === requestKey) setRunAllError(err?.message || 'Run All AI failed')
     } finally {
-      setRunningAllAI(false)
+      if (currentCitationKeyRef.current === requestKey) setRunningAllAI(false)
       // keep progress around as “done”; user can see it completed
     }
   }
@@ -283,6 +341,8 @@ export default function CanSrL2ScreenPage() {
   // Prefill parameter values from citation row (human_param_* preferred, llm_param_* as fallback suggestion)
   useEffect(() => {
     if (!srId || !citationId || !parametersParsed) return
+    const requestKey = `${srId}:${citationId}`
+    const controller = new AbortController()
     const headers = getAuthHeaders()
     ;(async () => {
       try {
@@ -290,9 +350,10 @@ export default function CanSrL2ScreenPage() {
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
             String(citationId),
           )}`,
-          { headers },
+          { headers, signal: controller.signal },
         )
         const row = await res.json().catch(() => ({}))
+        if (currentCitationKeyRef.current !== requestKey) return
         if (!res.ok || !row || typeof row !== 'object') return
 
         const nextFound: Record<string, boolean> = {}
@@ -331,40 +392,39 @@ export default function CanSrL2ScreenPage() {
           })
         })
 
-        if (Object.keys(nextFound).length) {
-          setParamFound(prev => ({ ...prev, ...nextFound }))
-        }
-        if (Object.keys(nextValues).length) {
-          setParamValues(prev => ({ ...prev, ...nextValues }))
-        }
-        if (Object.keys(nextAIPanels).length) {
-          setAiPanels(prev => ({ ...prev, ...nextAIPanels }))
-        }
+        setParamFound(nextFound)
+        setParamValues(nextValues)
+        setAiPanels(nextAIPanels)
 
         // extract coords/pages/fulltext and artifacts for PDF overlay
         const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
-        if (ft) setFulltextStr(ft)
+        setFulltextStr(ft)
+        fullTextCacheRef.current = ft
 
         const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
-        if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
+        setFulltextTables(Array.isArray(tablesAny) ? tablesAny : null)
 
         const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
-        if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
+        setFulltextFigures(Array.isArray(figsAny) ? figsAny : null)
 
         const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
-        if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
+        setFulltextCoords(Array.isArray(coordsAny) ? coordsAny : null)
 
         const pagesAny = parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
-        if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
-      } catch (err) {
+        setFulltextPages(Array.isArray(pagesAny) ? pagesAny : null)
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
         console.warn('Failed to prefill citation params', err)
       }
     })()
+    return () => controller.abort()
   }, [srId, citationId, parametersParsed])
 
   // Always fetch citation row to populate PDF overlay data (independent of parameters)
   useEffect(() => {
     if (!srId || !citationId) return
+    const requestKey = `${srId}:${citationId}`
+    const controller = new AbortController()
     const headers = getAuthHeaders()
     ;(async () => {
       try {
@@ -372,9 +432,10 @@ export default function CanSrL2ScreenPage() {
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
             String(citationId),
           )}`,
-          { headers },
+          { headers, signal: controller.signal },
         )
         const row = await res.json().catch(() => ({}))
+        if (currentCitationKeyRef.current !== requestKey) return
         if (!res.ok || !row || typeof row !== 'object') return
 
         const parseJson = (v: any) => {
@@ -387,19 +448,20 @@ export default function CanSrL2ScreenPage() {
         }
 
         const ft = typeof (row as any).fulltext === 'string' ? (row as any).fulltext : null
-        if (ft) setFulltextStr(ft)
+        setFulltextStr(ft)
+        fullTextCacheRef.current = ft
 
         const tablesAny = parseJson((row as any).fulltext_tables) ?? (row as any).fulltext_tables
-        if (tablesAny && Array.isArray(tablesAny)) setFulltextTables(tablesAny)
+        setFulltextTables(Array.isArray(tablesAny) ? tablesAny : null)
 
         const figsAny = parseJson((row as any).fulltext_figures) ?? (row as any).fulltext_figures
-        if (figsAny && Array.isArray(figsAny)) setFulltextFigures(figsAny)
+        setFulltextFigures(Array.isArray(figsAny) ? figsAny : null)
 
         const coordsAny = parseJson((row as any).fulltext_coords) ?? (row as any).fulltext_coords
-        if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
+        setFulltextCoords(Array.isArray(coordsAny) ? coordsAny : null)
 
         const pagesAny = parseJson((row as any).fulltext_pages) ?? (row as any).fulltext_pages
-        if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
+        setFulltextPages(Array.isArray(pagesAny) ? pagesAny : null)
 
         // If coords/pages are missing, trigger backend extraction to populate them, then refetch
         const needExtract =
@@ -411,34 +473,39 @@ export default function CanSrL2ScreenPage() {
               `/api/can-sr/citations/full-text?action=extract&sr_id=${encodeURIComponent(
                 srId || '',
               )}&citation_id=${encodeURIComponent(String(citationId || ''))}`,
-              { method: 'POST', headers },
+              { method: 'POST', headers, signal: controller.signal },
             )
-            if (res2.ok) {
+            if (res2.ok && currentCitationKeyRef.current === requestKey) {
               const res3 = await fetch(
                 `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   String(citationId),
                 )}`,
-                { headers },
+                { headers, signal: controller.signal },
               )
               const row2 = await res3.json().catch(() => ({}))
+              if (currentCitationKeyRef.current !== requestKey) return
 
               const ft2 = typeof (row2 as any).fulltext === 'string' ? (row2 as any).fulltext : null
-              if (ft2) setFulltextStr(ft2)
+              setFulltextStr(ft2)
+              fullTextCacheRef.current = ft2
 
               const coordsAny2 = parseJson((row2 as any).fulltext_coords) ?? (row2 as any).fulltext_coords
-              if (coordsAny2 && Array.isArray(coordsAny2)) setFulltextCoords(coordsAny2)
+              setFulltextCoords(Array.isArray(coordsAny2) ? coordsAny2 : null)
 
               const pagesAny2 = parseJson((row2 as any).fulltext_pages) ?? (row2 as any).fulltext_pages
-              if (pagesAny2 && Array.isArray(pagesAny2)) setFulltextPages(pagesAny2)
+              setFulltextPages(Array.isArray(pagesAny2) ? pagesAny2 : null)
             }
-          } catch (err) {
+          } catch (err: any) {
+            if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
             console.warn('Failed to extract fulltext for overlay', err)
           }
         }
-      } catch (err) {
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
         console.warn('Failed to load citation overlay data', err)
       }
     })()
+    return () => controller.abort()
   }, [srId, citationId])
 
   const updateValue = (name: string, val: string) => {
@@ -554,6 +621,7 @@ export default function CanSrL2ScreenPage() {
                       : `${dict.extract.ran} ${runAllProgress.done}/${runAllProgress.total}`}
                   </div>
                 ) : null}
+                {runAllError ? <div className="mt-1 text-xs text-red-600">{runAllError}</div> : null}
                 {/* <p className="mt-2 text-sm text-gray-600 text-center">
                   This is the area of the UI where you can select the human answer — the AI-selected answer is used as guidance.
                 </p> */}
@@ -779,7 +847,8 @@ export default function CanSrL2ScreenPage() {
 
               <div className="flex items-center justify-between">
                 <button
-                  onClick={async () => {
+                  disabled={runningAllAI}
+                  onClick={() => {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
@@ -792,12 +861,13 @@ export default function CanSrL2ScreenPage() {
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )
                   }}
-                  className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
+                  className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {dict.screening.previousCitation}
                 </button>
                 <button
-                  onClick={async () => {
+                  disabled={runningAllAI}
+                  onClick={() => {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
@@ -810,7 +880,7 @@ export default function CanSrL2ScreenPage() {
                       )}&citation_id=${encodeURIComponent(target)}`,
                     )
                   }}
-                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {dict.screening.nextCitation}
                 </button>

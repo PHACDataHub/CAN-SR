@@ -31,6 +31,13 @@ function copyHeaders(src: Headers) {
   return out
 }
 
+function preventPdfCaching(headers: Record<string, string>) {
+  headers['cache-control'] = 'no-store, max-age=0'
+  headers['pragma'] = 'no-cache'
+  headers['expires'] = '0'
+  return headers
+}
+
 export async function OPTIONS() {
   // Respond to CORS preflight requests (browsers send OPTIONS when Authorization header is present)
   return new Response(null, {
@@ -191,7 +198,7 @@ export async function GET(request: NextRequest) {
           const fileRes = await fetch(signedUrl)
 
           // Stream response back to client preserving content headers
-          const headers = copyHeaders(fileRes.headers)
+          const headers = preventPdfCaching(copyHeaders(fileRes.headers))
 
           // Ensure content-type defaults to application/pdf if not set
           if (!headers['content-type']) {
@@ -213,7 +220,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Case 2: backend streamed the file already -> proxy the stream back to browser
-    const headers = copyHeaders(backendRes.headers)
+    const headers = preventPdfCaching(copyHeaders(backendRes.headers))
 
     // Ensure content-type defaults to application/pdf if not set
     if (!headers['content-type']) {

@@ -117,7 +117,9 @@ Confidence requirements:
 
 
 PROMPT_XML_TEMPLATE_TA_CRITICAL = """
-You are a critical reviewer double-checking another model's screening answer.
+You are an independent critical reviewer auditing another model's screening answer.
+Your task is to decide whether the original answer is the best-supported option,
+not to repeat the screening task without reference to that answer.
 
 Original question:
 "{question}"
@@ -131,7 +133,13 @@ The first model answered:
 Now, you MUST choose from the following forced alternatives.
 Rules:
 - You are NOT allowed to choose the original answer.
-- If you agree with the original answer, choose "None of the above".
+- AGREEMENT means the original answer is the best-supported answer. If you agree,
+  choose "None of the above".
+- DISAGREEMENT means one of the listed alternatives is better supported than the
+  original answer. If you disagree, choose that specific alternative.
+- In <rationale>, explicitly state why the evidence supports the original answer
+  or why the selected alternative is better supported.
+- <confidence> represents confidence in this agreement/disagreement judgment.
 
 Forced alternatives (choose exactly one; exact text):
 {options}
@@ -195,7 +203,9 @@ Field requirements:
 
 
 PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL = """
-You are a critical reviewer double-checking another model's full-text screening answer.
+You are an independent critical reviewer auditing another model's full-text screening answer.
+Your task is to decide whether the original answer is the best-supported option,
+not to repeat the screening task without reference to that answer.
 
 Original question:
 "{question}"
@@ -206,7 +216,13 @@ The first model answered:
 Now, you MUST choose from the following forced alternatives.
 Rules:
 - You are NOT allowed to choose the original answer.
-- If you agree with the original answer, choose "None of the above".
+- AGREEMENT means the original answer is the best-supported answer. If you agree,
+  choose "None of the above".
+- DISAGREEMENT means one of the listed alternatives is better supported than the
+  original answer. If you disagree, choose that specific alternative.
+- In <rationale>, explicitly state why the evidence supports the original answer
+  or why the selected alternative is better supported.
+- <confidence> represents confidence in this agreement/disagreement judgment.
 
 Forced alternatives (choose exactly one; exact text):
 {options}

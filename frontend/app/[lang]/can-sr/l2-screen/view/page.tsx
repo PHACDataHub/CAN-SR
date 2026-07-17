@@ -43,6 +43,18 @@ function extractXmlTag(text: string, tag: string): string {
   return m && m[1] ? String(m[1]).trim() : ''
 }
 
+function parseObject(value: any): Record<string, any> | null {
+  if (!value) return null
+  if (typeof value === 'object') return value
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 /*
   Full-text single-citation viewer for L2 screening.
 
@@ -146,6 +158,7 @@ export default function CanSrL2ScreenViewPage() {
 
   // Agentic runs (screening_agent_runs) for this citation
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
+  const [titleAbstractRuns, setTitleAbstractRuns] = useState<LatestAgentRun[]>([])
   const [, setLoadingRuns] = useState(false)
 
   // Per-criterion thresholds for this SR/step
@@ -158,6 +171,10 @@ export default function CanSrL2ScreenViewPage() {
   // Run-all progress
   const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
   const [runningAll, setRunningAll] = useState(false)
+  const [runAllError, setRunAllError] = useState<string | null>(null)
+  const citationKey = `${srId || ''}:${citationId || ''}`
+  const currentCitationKeyRef = useRef(citationKey)
+  currentCitationKeyRef.current = citationKey
 
   const l2Validations = useMemo(() => parseValidations((citation as any)?.l2_validations), [citation])
   const l2Checked = useMemo(() => {
@@ -272,16 +289,18 @@ export default function CanSrL2ScreenViewPage() {
   }, [])
 
   // Load citation row (and ensure fulltext is extracted if missing)
-  const fetchCitationById = useCallback(async (id: string) => {
+  const fetchCitationById = useCallback(async (id: string, signal?: AbortSignal) => {
     if (!srId || !id) return
+    const requestKey = `${srId}:${id}`
     setLoadingCitation(true)
     try {
       const headers = getAuthHeaders()
       const res = await fetch(
         `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-        { method: 'GET', headers },
+        { method: 'GET', headers, signal },
       )
       const data = await res.json().catch(() => ({}))
+      if (currentCitationKeyRef.current !== requestKey) return
       if (!res.ok) {
         setError(
           data?.error || data?.detail || `Failed to load citation (${res.status})`,
@@ -301,11 +320,11 @@ export default function CanSrL2ScreenViewPage() {
         }
 
         const ft = typeof (data as any).fulltext === 'string' ? (data as any).fulltext : null
-        if (ft) setFulltextStr(ft)
+        setFulltextStr(ft)
         const coordsAny = parseJson((data as any).fulltext_coords) ?? (data as any).fulltext_coords
-        if (coordsAny && Array.isArray(coordsAny)) setFulltextCoords(coordsAny)
+        setFulltextCoords(Array.isArray(coordsAny) ? coordsAny : null)
         const pagesAny = parseJson((data as any).fulltext_pages) ?? (data as any).fulltext_pages
-        if (pagesAny && Array.isArray(pagesAny)) setFulltextPages(pagesAny)
+        setFulltextPages(Array.isArray(pagesAny) ? pagesAny : null)
 
         // If coords/pages missing, trigger backend extraction then refetch row
         const needExtract =
@@ -316,69 +335,94 @@ export default function CanSrL2ScreenViewPage() {
               `/api/can-sr/citations/full-text?action=extract&sr_id=${encodeURIComponent(
                 srId || '',
               )}&citation_id=${encodeURIComponent(String(id || ''))}`,
-              { method: 'POST', headers },
+              { method: 'POST', headers, signal },
             )
-            if (res2.ok) {
+            if (res2.ok && currentCitationKeyRef.current === requestKey) {
               const res3 = await fetch(
                 `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                   String(id),
                 )}`,
-                { headers },
+                { headers, signal },
               )
               const row2 = await res3.json().catch(() => ({}))
+              if (currentCitationKeyRef.current !== requestKey) return
+              if (res3.ok) setCitation(row2 || null)
 
               const ft2 = typeof (row2 as any).fulltext === 'string' ? (row2 as any).fulltext : null
-              if (ft2) setFulltextStr(ft2)
+              setFulltextStr(ft2)
 
               const coordsAny2 = parseJson((row2 as any).fulltext_coords) ?? (row2 as any).fulltext_coords
-              if (coordsAny2 && Array.isArray(coordsAny2)) setFulltextCoords(coordsAny2)
+              setFulltextCoords(Array.isArray(coordsAny2) ? coordsAny2 : null)
 
               const pagesAny2 = parseJson((row2 as any).fulltext_pages) ?? (row2 as any).fulltext_pages
-              if (pagesAny2 && Array.isArray(pagesAny2)) setFulltextPages(pagesAny2)
+              setFulltextPages(Array.isArray(pagesAny2) ? pagesAny2 : null)
             }
-          } catch (err) {
+          } catch (err: any) {
+            if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
             console.warn('Failed to extract fulltext for overlay', err)
           }
         }
       }
     } catch (err: any) {
+      if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
       console.error('Citation fetch error', err)
       setError(err?.message || 'Network error while fetching citation')
     } finally {
-      setLoadingCitation(false)
+      if (currentCitationKeyRef.current === requestKey) setLoadingCitation(false)
     }
   }, [srId])
 
   useEffect(() => {
     if (!srId || !citationId) return
-    // fetch for current citation on mount / when params change
-    fetchCitationById(citationId)
+    const controller = new AbortController()
+    setCitation(null)
+    setError(null)
+    setSelections({})
+    setAiPanels({})
+    setPanelOpen({})
+    setHintByIndex({})
+    setAgentRuns([])
+    setTitleAbstractRuns([])
+    setSaveStatus({})
+    setCriterionStatus({})
+    setRunAllProgress(null)
+    setRunAllError(null)
+    setRunningAll(false)
+    setFulltextStr(null)
+    setFulltextCoords(null)
+    setFulltextPages(null)
+    void fetchCitationById(citationId, controller.signal)
+    return () => controller.abort()
   }, [citationId, fetchCitationById, srId])
 
   // Re-usable loader so we can refresh after triggering an agentic run.
-  async function loadRuns() {
-    if (!srId || !citationId) return
+  async function loadRuns(context?: { srId: string; citationId: string }) {
+    const runContext = context || (srId && citationId ? { srId, citationId } : null)
+    if (!runContext) return
+    const requestKey = `${runContext.srId}:${runContext.citationId}`
     setLoadingRuns(true)
     try {
       const headers = getAuthHeaders()
       const res = await fetch(
         `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(
-          srId,
+          runContext.srId,
         )}&pipeline=${encodeURIComponent('fulltext')}&citation_ids=${encodeURIComponent(
-          String(citationId),
+          runContext.citationId,
         )}`,
         { method: 'GET', headers },
       )
       const data = await res.json().catch(() => ({}))
+      if (currentCitationKeyRef.current !== requestKey) return
       if (res.ok && Array.isArray(data?.runs)) {
         setAgentRuns(data.runs as LatestAgentRun[])
       } else {
         setAgentRuns([])
       }
     } catch {
+      if (currentCitationKeyRef.current !== requestKey) return
       setAgentRuns([])
     } finally {
-      setLoadingRuns(false)
+      if (currentCitationKeyRef.current === requestKey) setLoadingRuns(false)
     }
   }
 
@@ -386,6 +430,20 @@ export default function CanSrL2ScreenViewPage() {
   useEffect(() => {
     if (!srId || !citationId) return
     void loadRuns()
+    const requestKey = `${srId}:${citationId}`
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/can-sr/screen/agent-runs/latest?sr_id=${encodeURIComponent(srId)}&pipeline=title_abstract&citation_ids=${encodeURIComponent(citationId)}`,
+          { method: 'GET', headers: getAuthHeaders() },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (currentCitationKeyRef.current !== requestKey) return
+        setTitleAbstractRuns(res.ok && Array.isArray(data?.runs) ? data.runs : [])
+      } catch {
+        if (currentCitationKeyRef.current === requestKey) setTitleAbstractRuns([])
+      }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srId, citationId])
 
@@ -401,6 +459,16 @@ export default function CanSrL2ScreenViewPage() {
     }
     return by
   }, [agentRuns])
+
+  const titleAbstractRunsByCriterion = useMemo(() => {
+    const by: Record<string, LatestAgentRun> = {}
+    for (const run of titleAbstractRuns) {
+      if (String(run?.stage || '') !== 'screening') continue
+      const key = String(run?.criterion_key || '')
+      if (key) by[key] = run
+    }
+    return by
+  }, [titleAbstractRuns])
 
   // Load parsed criteria (L1 + L2 merged, L1 first)
   useEffect(() => {
@@ -519,6 +587,15 @@ export default function CanSrL2ScreenViewPage() {
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
       const humanCol = humanScreenColumn(q)
+      const criterionKey = llmCol.replace(/^llm_/, '')
+      const fulltextRun = runsByCriterion[criterionKey]?.screening
+      const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
+      const citationFulltextMd5 = String((citation as any)?.fulltext_md5 || '')
+      const runGuardrails = parseObject(fulltextRun?.guardrails)
+      const runFulltextMd5 = String(runGuardrails?.fulltext_md5 || '')
+      const isCurrentFulltextRun = Boolean(
+        fulltextRun && citationFulltextMd5 && runFulltextMd5 === citationFulltextMd5,
+      )
 
       const humanRaw = (citation as any)?.[humanCol]
       const llmRaw = (citation as any)?.[llmCol]
@@ -541,29 +618,38 @@ export default function CanSrL2ScreenViewPage() {
         }
       }
 
-      // 1) Prefill from human_* (answers saved during L2 screening), for both L1 and L2 questions
-      if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
+      // human_* is historically shared by L1 and L2. Only accept values that
+      // explicitly identify themselves as Full Text/L2; an untagged legacy value
+      // is ambiguous and must not appear as a previous Full Text review.
+      const isFulltextHuman = humanParsed && typeof humanParsed === 'object' && (
+        (humanParsed as any).pipeline === 'fulltext' ||
+        String((humanParsed as any).screening_step || '').toLowerCase() === 'l2'
+      )
+      if (isFulltextHuman && (humanParsed as any).selected !== undefined) {
         newSelections[idx] = (humanParsed as any).selected
-      } else if (typeof humanParsed === 'string' && humanParsed) {
-        newSelections[idx] = humanParsed
       }
 
       // 2) For L1 questions: show hint from prior L1 screening (llm_*), but do not prefill from it
       if (sourceFlags[idx] === 'l1') {
-        if (llmParsed && typeof llmParsed === 'object' && (llmParsed as any).selected !== undefined) {
-          newHints[idx] = String((llmParsed as any).selected ?? '')
-        } else if (typeof llmParsed === 'string') {
-          newHints[idx] = llmParsed
-        }
+        // The shared llm_* column may have been overwritten by either pipeline.
+        // Use the pipeline-specific run so a full-text result cannot masquerade
+        // as the earlier Title/Abstract answer (or vice versa).
+        if (titleAbstractRun?.answer != null) newHints[idx] = String(titleAbstractRun.answer)
       }
 
-      // Always populate AI panel from prior LLM result for both L1 and L2 (similar to extract view)
-      if (llmParsed && typeof llmParsed === 'object') {
-        newAiPanels[idx] = llmParsed
-        newPanelOpen[idx] = false
-      } else if (typeof llmParsed === 'string' && llmParsed) {
-        // Normalize simple string LLM values to object so UI can render suggestion
-        newAiPanels[idx] = { selected: llmParsed }
+      // A Full Text AI panel must only exist when there is a persisted fulltext
+      // screening run. Never display a shared/legacy L1 llm_* value as L2 output.
+      if (fulltextRun && isCurrentFulltextRun) {
+        const llmMatchesFulltext = llmParsed && typeof llmParsed === 'object' &&
+          String((llmParsed as any).selected ?? '') === String(fulltextRun.answer ?? '') &&
+          ((llmParsed as any).pipeline === 'fulltext' || !(llmParsed as any).pipeline)
+        newAiPanels[idx] = {
+          ...(llmMatchesFulltext ? llmParsed : {}),
+          selected: fulltextRun.answer ?? '',
+          confidence: fulltextRun.confidence,
+          explanation: fulltextRun.rationale ?? '',
+          pipeline: 'fulltext',
+        }
         newPanelOpen[idx] = false
       }
 
@@ -573,17 +659,15 @@ export default function CanSrL2ScreenViewPage() {
         const aiSelected = (newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string') ? newAiPanels[idx].selected : null
         if (aiSelected) {
           newSelections[idx] = aiSelected
-        } else if (typeof llmParsed === 'string' && llmParsed) {
-          newSelections[idx] = llmParsed
         }
       }
     })
 
-    setSelections((prev) => ({ ...newSelections, ...prev }))
-    setAiPanels((prev) => ({ ...newAiPanels, ...prev }))
-    setPanelOpen((prev) => ({ ...newPanelOpen, ...prev }))
-    setHintByIndex((prev) => ({ ...prev, ...newHints }))
-  }, [citation, criteriaData, sourceFlags])
+    setSelections(newSelections)
+    setAiPanels(newAiPanels)
+    setPanelOpen(newPanelOpen)
+    setHintByIndex(newHints)
+  }, [citation, criteriaData, sourceFlags, runsByCriterion, titleAbstractRunsByCriterion])
 
   // Persist human classification
   async function postHumanClassifyPayload(
@@ -637,10 +721,19 @@ export default function CanSrL2ScreenViewPage() {
   }
 
   // Run agentic fulltext screening for a single criterion (per-question AI button)
-  async function classifyQuestion(questionIndex: number) {
-    if (!srId || !citationId || !criteriaData) return
-    const q = criteriaData.questions[questionIndex]
-    if (!q) return
+  async function classifyQuestion(
+    questionIndex: number,
+    context?: { srId: string; citationId: string; questions: string[]; model: string },
+  ): Promise<boolean> {
+    const runContext = context || (srId && citationId && criteriaData
+      ? { srId, citationId, questions: criteriaData.questions, model: selectedModel }
+      : null)
+    if (!runContext) return false
+    const requestKey = `${runContext.srId}:${runContext.citationId}`
+    if (currentCitationKeyRef.current !== requestKey) return false
+    const q = runContext.questions[questionIndex]
+    if (!q) return false
+    setRunAllError(null)
     const ck = q.trim().toLowerCase().replace(/[^\w]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 56)
     setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'running' }))
     try {
@@ -649,27 +742,32 @@ export default function CanSrL2ScreenViewPage() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          sr_id: srId,
-          citation_id: Number(citationId),
-          model: selectedModel,
+          sr_id: runContext.srId,
+          citation_id: Number(runContext.citationId),
+          model: runContext.model,
           temperature: 0.0,
           max_tokens: 2000,
           prompt_version: 'v1',
           criterion_key: ck,
         }),
       })
-      await res.json().catch(() => ({}))
+      const runData = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(runData?.detail || runData?.error || `AI request failed (${res.status})`)
+      if (String(runData?.citation_id ?? runContext.citationId) !== runContext.citationId) {
+        throw new Error('AI response did not match the requested citation')
+      }
+      if (currentCitationKeyRef.current !== requestKey) return false
 
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — avoids re-rendering the PDF viewer (no setCitation call).
       try {
         const llmColName = `llm_${ck}`
         const citRes = await fetch(
-          `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(String(citationId))}`,
+          `/api/can-sr/citations/get?sr_id=${encodeURIComponent(runContext.srId)}&citation_id=${encodeURIComponent(runContext.citationId)}`,
           { method: 'GET', headers: getAuthHeaders() },
         )
         const citData = await citRes.json().catch(() => ({}))
-        if (citRes.ok && citData) {
+        if (currentCitationKeyRef.current === requestKey && citRes.ok && citData) {
           const llmRaw = citData[llmColName]
           let llmParsed = llmRaw
           if (typeof llmRaw === 'string') {
@@ -682,27 +780,90 @@ export default function CanSrL2ScreenViewPage() {
       } catch { /* best-effort */ }
 
       // Refresh agent runs (no PDF state changes)
-      await loadRuns()
+      await loadRuns({ srId: runContext.srId, citationId: runContext.citationId })
+      if (currentCitationKeyRef.current !== requestKey) return false
       setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'done' }))
+      return true
     } catch (err) {
       console.error('Classify API error', err)
-      setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'error' }))
+      if (currentCitationKeyRef.current === requestKey) {
+        setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'error' }))
+        setRunAllError(err instanceof Error ? err.message : 'Full Text AI failed')
+      }
+      return false
     }
   }
 
   // Run all criteria sequentially (Run All AI button)
   async function runAllAI() {
     if (!srId || !citationId || !criteriaData || runningAll) return
-    const total = criteriaData.questions.length
+    const context = { srId, citationId, questions: [...criteriaData.questions], model: selectedModel }
+    const requestKey = `${srId}:${citationId}`
+    const total = context.questions.length
     setRunningAll(true)
     setRunAllProgress({ done: 0, total })
+    setRunAllError(null)
+    setCriterionStatus(Object.fromEntries(context.questions.map((_, index) => [index, 'running'])))
     try {
-      for (let i = 0; i < criteriaData.questions.length; i++) {
-        await classifyQuestion(i)
-        setRunAllProgress({ done: i + 1, total })
+      // The backend endpoint natively runs every criterion when criterion_key is
+      // omitted. Use that bulk mode so full text, tables, and figures are loaded
+      // once rather than repeating the expensive setup for every criterion.
+      const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
+      const res = await fetch('/api/can-sr/screen/fulltext/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sr_id: context.srId,
+          citation_id: Number(context.citationId),
+          model: context.model,
+          temperature: 0.0,
+          max_tokens: 2000,
+          prompt_version: 'v1',
+        }),
+      })
+      const runData = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(runData?.detail || runData?.error || `Run All AI failed (${res.status})`)
+      if (String(runData?.citation_id ?? context.citationId) !== context.citationId) {
+        throw new Error('Run All AI response did not match the requested citation')
       }
+      if (currentCitationKeyRef.current !== requestKey) return
+
+      const completedKeys = new Set(
+        (Array.isArray(runData?.criteria) ? runData.criteria : [])
+          .filter((item: any) => !item?.error)
+          .map((item: any) => String(item?.criterion_key || '')),
+      )
+      const nextStatus: Record<number, 'done' | 'error'> = {}
+      context.questions.forEach((question, index) => {
+        const key = question.trim().toLowerCase().replace(/[^\w]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 56)
+        nextStatus[index] = completedKeys.has(key) ? 'done' : 'error'
+      })
+      setCriterionStatus(nextStatus)
+      setRunAllProgress({ done: completedKeys.size, total })
+
+      // Refresh the citation metadata/evidence once after the bulk run. Panels
+      // become visible from the authoritative fingerprinted fulltext runs below.
+      const citRes = await fetch(
+        `/api/can-sr/citations/get?sr_id=${encodeURIComponent(context.srId)}&citation_id=${encodeURIComponent(context.citationId)}`,
+        { method: 'GET', headers: getAuthHeaders() },
+      )
+      const citData = await citRes.json().catch(() => ({}))
+      if (currentCitationKeyRef.current !== requestKey) return
+      if (!citRes.ok) throw new Error(citData?.detail || citData?.error || 'AI completed, but results could not be refreshed')
+      setCitation(citData)
+      await loadRuns({ srId: context.srId, citationId: context.citationId })
     } finally {
-      setRunningAll(false)
+      if (currentCitationKeyRef.current === requestKey) setRunningAll(false)
+    }
+  }
+
+  async function onRunAllAI() {
+    try {
+      await runAllAI()
+    } catch (err: any) {
+      console.error('Run All AI error', err)
+      setRunAllError(err?.message || 'Run All AI failed')
+      setCriterionStatus((prev) => Object.fromEntries(Object.keys(prev).map((key) => [Number(key), 'error'])))
     }
   }
 
@@ -844,8 +1005,8 @@ export default function CanSrL2ScreenViewPage() {
                   {runAllProgress ? `${runAllProgress.done}/${runAllProgress.total} criteria` : ''}
                 </span>
                 <button
-                  onClick={runAllAI}
-                  disabled={runningAll || !criteriaData || criteriaData.questions.length === 0}
+                  onClick={onRunAllAI}
+                  disabled={runningAll || !criteriaData || criteriaData.questions.length === 0 || !(citation as any)?.fulltext_md5}
                   className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {runningAll ? (
@@ -861,6 +1022,7 @@ export default function CanSrL2ScreenViewPage() {
                     : 'Run All AI'}
                 </button>
               </div>
+              {runAllError ? <div className="text-xs text-red-600">{runAllError}</div> : null}
 
               {loadingCriteria ? (
                 <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
@@ -892,8 +1054,13 @@ export default function CanSrL2ScreenViewPage() {
                       : ''
 
                     const r = (runsByCriterion as any)?.[criterionKey] || {}
-                    const scr = r.screening
-                    const crit = r.critical
+                    const currentPdfMd5 = String((citation as any)?.fulltext_md5 || '')
+                    const runMatchesCurrentPdf = (run: any) => {
+                      const guardrails = parseObject(run?.guardrails)
+                      return Boolean(run && currentPdfMd5 && String(guardrails?.fulltext_md5 || '') === currentPdfMd5)
+                    }
+                    const scr = runMatchesCurrentPdf(r.screening) ? r.screening : undefined
+                    const crit = runMatchesCurrentPdf(r.critical) ? r.critical : undefined
                     const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
                     const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
 
@@ -958,7 +1125,7 @@ export default function CanSrL2ScreenViewPage() {
                           <div className="ml-3 flex flex-col items-end space-y-2">
                               <button
                                 onClick={() => classifyQuestion(idx)}
-                                disabled={criterionStatus[idx] === 'running' || runningAll}
+                                disabled={criterionStatus[idx] === 'running' || runningAll || !(citation as any)?.fulltext_md5}
                                 className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <span className="inline-flex items-center gap-1">
@@ -1041,14 +1208,18 @@ export default function CanSrL2ScreenViewPage() {
                                 {hasAgentic && crit ? (
                                   <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
                                     <div className="mt-1 font-semibold text-gray-800">
-                                      Critical agent{' '}
                                       {critDisagrees ? (
-                                        <span className="text-amber-700">disagrees</span>
+                                        <span className="text-amber-700">
+                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
+                                        </span>
                                       ) : (
-                                        <span className="text-emerald-700">agrees</span>
+                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
                                       )}
                                     </div>
-                                    <div>Confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                                    {(crit as any)?.rationale ? (
+                                      <div className="mt-1">Reason: {String((crit as any).rationale)}</div>
+                                    ) : null}
                                   </div>
                                 ) : null}
                                 {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
@@ -1191,30 +1362,27 @@ export default function CanSrL2ScreenViewPage() {
 
               <div className="flex items-center justify-between mt-4">
                 <button
-                  onClick={async () => {
+                  disabled={runningAll}
+                  onClick={() => {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
                     const idx = citationIdList.indexOf(cur)
                     if (idx <= 0) return
                     const target = String(citationIdList[idx - 1])
-                    // proactively fetch and reset selection state so UI updates immediately
-                    setSelections({})
-                    setAiPanels({})
-                    setPanelOpen({})
-                    await fetchCitationById(target)
                     router.push(
                       `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}&filter=${encodeURIComponent(filterMode)}`,
                     )
                   }}
-                  className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50"
+                  className="rounded-md border bg-white px-4 py-2 text-sm shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {dict.screening.previousCitation}
                 </button>
                 <button
-                  onClick={async () => {
+                  disabled={runningAll}
+                  onClick={() => {
                     if (!citationId || !srId) return
                     const cur = Number(citationId)
                     if (Number.isNaN(cur)) return
@@ -1225,18 +1393,13 @@ export default function CanSrL2ScreenViewPage() {
                       return
                     }
                     const target = String(citationIdList[idx + 1])
-                    // proactively fetch and reset selection state so UI updates immediately
-                    setSelections({})
-                    setAiPanels({})
-                    setPanelOpen({})
-                    await fetchCitationById(target)
                     router.push(
                       `/${lang}/can-sr/l2-screen/view?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
                         target,
                       )}&filter=${encodeURIComponent(filterMode)}`,
                     )
                   }}
-                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {dict.screening.nextCitation}
                 </button>
