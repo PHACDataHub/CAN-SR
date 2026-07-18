@@ -12,6 +12,7 @@ import {
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 
 type Selection = Record<string, { items: Set<string>; dimensions: Set<string> }>
+type ExportGroup = CitationExportSchema['groups'][number]
 type Props = {
   srId: string
   open: boolean
@@ -48,22 +49,24 @@ export function CitationExportDialog({ srId, open, onOpenChange, currentViewIds 
 
   useEffect(() => { if (open) void load() }, [open, load])
 
+  const selectableItemIds = (group: ExportGroup) => group.items
+    .filter((item) => group.id === 'citation' || !!item.available_dimensions?.length)
+    .map((item) => item.id)
+
   const updateSet = (groupId: string, key: 'items' | 'dimensions', id: string, checked: boolean) => {
     setSelection((previous) => {
       const group = previous[groupId] || { items: new Set<string>(), dimensions: new Set<string>() }
       const next = new Set(group[key])
       if (checked) next.add(id)
       else next.delete(id)
-      if (key === 'dimensions' && checked) {
+      if (key === 'dimensions') {
         const schemaGroup = schema?.groups.find((candidate) => candidate.id === groupId)
-        const compatible = new Set(
-          schemaGroup?.items
-            .filter((item) => [...next].every((dimension) => item.available_dimensions?.includes(dimension)))
-            .map((item) => item.id) || [],
-        )
+        const selectable = new Set(schemaGroup?.items
+          .filter((item) => [...next].some((dimension) => item.available_dimensions?.includes(dimension)))
+          .map((item) => item.id) || [])
         return { ...previous, [groupId]: {
           dimensions: next,
-          items: new Set([...group.items].filter((item) => compatible.has(item))),
+          items: new Set([...group.items].filter((item) => selectable.has(item))),
         } }
       }
       return { ...previous, [groupId]: { ...group, [key]: next } }
@@ -74,16 +77,41 @@ export function CitationExportDialog({ srId, open, onOpenChange, currentViewIds 
     if (!group) return
     const allDimensions = new Set(group.dimensions.map((dimension) => dimension.id))
     setSelection((previous) => ({ ...previous, [groupId]: {
-      items: new Set(checked ? group.items
-        .filter((item) => group.id === 'citation' || [...allDimensions].every((dimension) => item.available_dimensions?.includes(dimension)))
-        .map((item) => item.id) : []),
+      items: new Set(checked ? selectableItemIds(group) : []),
       dimensions: checked ? allDimensions : new Set(),
     } }))
   }
+  const toggleAll = (checked: boolean) => {
+    if (!schema) return
+    setSelection(Object.fromEntries(schema.groups.map((group) => [group.id, {
+      items: new Set(checked ? selectableItemIds(group) : []),
+      dimensions: new Set(checked ? group.dimensions.map((dimension) => dimension.id) : []),
+    }])))
+  }
+  const selectionState = (selectedCount: number, totalCount: number) => (
+    selectedCount === 0 ? false : selectedCount === totalCount ? true : 'indeterminate'
+  )
+  const totalOptions = schema?.groups.reduce(
+    (total, group) => total + selectableItemIds(group).length + group.dimensions.length, 0,
+  ) || 0
+  const checkedOptions = schema?.groups.reduce((total, group) => {
+    const selected = selection[group.id]
+    return total + (selected?.items.size || 0) + (selected?.dimensions.size || 0)
+  }, 0) || 0
+  const allState = selectionState(checkedOptions, totalOptions)
   const selectedColumns = useMemo(() => schema?.groups.reduce((total, group) => {
     const selected = selection[group.id]
     if (!selected) return total
-    return total + (group.id === 'citation' ? selected.items.size : selected.items.size * selected.dimensions.size)
+    if (group.id === 'citation') return total + selected.items.size
+    return total + group.items.reduce((itemTotal, item) => {
+      if (!selected.items.has(item.id)) return itemTotal
+      const applicable = [...selected.dimensions]
+        .filter((dimension) => item.available_dimensions?.includes(dimension))
+      if (group.id !== 'parameters') return itemTotal + applicable.length
+      return itemTotal + applicable.reduce(
+        (dimensionTotal, dimension) => dimensionTotal + (dimension.endsWith('_value') ? 2 : 1), 0,
+      )
+    }, 0)
   }, 0) || 0, [schema, selection])
   const canUseCurrent = !!currentViewIds?.length && currentViewIds.length <= 500
 
@@ -117,6 +145,11 @@ export function CitationExportDialog({ srId, open, onOpenChange, currentViewIds 
         {loading ? <div className="flex items-center gap-2 py-10 text-sm"><Loader2 className="h-4 w-4 animate-spin" />{copy.loading}</div> : null}
         {error ? <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} {!schema && <button onClick={() => void load()} className="ml-2 underline"><RefreshCw className="inline h-3 w-3" /> {copy.retry}</button>}</div> : null}
         {schema ? <>
+          <label className="flex items-center gap-2 rounded-md border bg-gray-50 p-3 font-semibold">
+            <Checkbox aria-label={copy.selectAll} checked={allState}
+              onCheckedChange={(value) => toggleAll(value === true)} />
+            {copy.selectAll}
+          </label>
           <fieldset className="space-y-2 rounded-md border p-3">
             <legend className="px-1 text-sm font-semibold">{copy.rows}</legend>
             {[
@@ -131,12 +164,13 @@ export function CitationExportDialog({ srId, open, onOpenChange, currentViewIds 
           <div className="space-y-3">
             {schema.groups.map((group) => {
               const selected = selection[group.id] || { items: new Set(), dimensions: new Set() }
-              const descendantCount = group.items.length + group.dimensions.length
+              const descendantCount = selectableItemIds(group).length + group.dimensions.length
               const checkedCount = selected.items.size + selected.dimensions.size
-              const state = checkedCount === 0 ? false : checkedCount === descendantCount ? true : 'indeterminate'
+              const state = selectionState(checkedCount, descendantCount)
               return <details key={group.id} open className="rounded-md border p-3">
                 <summary className="flex cursor-pointer list-none items-center gap-2 font-semibold">
-                  <Checkbox checked={state} onCheckedChange={(value) => toggleGroup(group.id, value === true)} onClick={(event) => event.stopPropagation()} />
+                  <Checkbox aria-label={`${copy.selectAll} ${group.label}`} checked={state}
+                    onCheckedChange={(value) => toggleGroup(group.id, value === true)} onClick={(event) => event.stopPropagation()} />
                   {group.label}
                 </summary>
                 {group.dimensions.length ? <div className="mt-3 grid gap-2 border-b pb-3 sm:grid-cols-2">
@@ -147,7 +181,7 @@ export function CitationExportDialog({ srId, open, onOpenChange, currentViewIds 
                 <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pl-1">
                   {group.items.map((item) => <label key={item.id} className="flex items-start gap-2 text-sm">
                     <Checkbox checked={selected.items.has(item.id)}
-                      disabled={group.id !== 'citation' && ![...selected.dimensions].every((dimension) => item.available_dimensions?.includes(dimension))}
+                      disabled={group.id !== 'citation' && ![...selected.dimensions].some((dimension) => item.available_dimensions?.includes(dimension))}
                       onCheckedChange={(value) => updateSet(group.id, 'items', item.id, value === true)} />
                     <span>{item.category ? <span className="text-gray-500">{item.category}: </span> : null}{item.label}</span>
                   </label>)}

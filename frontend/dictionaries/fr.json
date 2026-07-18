@@ -13,6 +13,7 @@
     "currentView": "Vue filtrée actuelle",
     "unavailable": "indisponible ou plus de 500 citations",
     "noneAvailable": "Aucun champ sécurisé n’est disponible dans ce groupe.",
+    "selectAll": "Tout sélectionner",
     "selected": "{count} colonnes sélectionnées",
     "cancel": "Annuler",
     "preparing": "Préparation du CSV…",

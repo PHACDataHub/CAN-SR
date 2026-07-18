@@ -13,6 +13,7 @@
     "currentView": "Current filtered view",
     "unavailable": "unavailable or more than 500 citations",
     "noneAvailable": "No safe fields are available in this group.",
+    "selectAll": "Select all",
     "selected": "{count} columns selected",
     "cancel": "Cancel",
     "preparing": "Preparing CSV…",

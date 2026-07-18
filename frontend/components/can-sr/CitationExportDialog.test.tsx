@@ -21,6 +21,7 @@ vi.mock('@/app/[lang]/DictionaryProvider', () => ({
       loadError: 'Could not load', retry: 'Retry', exportError: 'Could not export',
       rows: 'Rows', all: 'All', l1Included: 'L1 included', l2Included: 'L2 included',
       currentView: 'Current view', unavailable: 'Unavailable', noneAvailable: 'None',
+      selectAll: 'Select all',
       selected: '{count} columns selected', cancel: 'Cancel', preparing: 'Preparing',
       exportCsv: 'Export CSV',
     },
@@ -95,5 +96,42 @@ describe('CitationExportDialog', () => {
     expect(await screen.findByText('3 columns selected')).toBeInTheDocument()
     expect(loadCitationExportSchema).toHaveBeenCalledTimes(2)
     expect(screen.getByRole('radio', { name: /Current view/ })).toBeDisabled()
+  })
+
+  it('selects every option and becomes indeterminate when one child is cleared', async () => {
+    const user = userEvent.setup()
+    render(<CitationExportDialog srId="review-1" open onOpenChange={vi.fn()} />)
+
+    const selectAll = await screen.findByRole('checkbox', { name: 'Select all' })
+    await user.click(selectAll)
+
+    expect(selectAll).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select all Citation details' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select all L1 screening' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'AI answers' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Current question?' })).toBeChecked()
+    expect(screen.getByText('3 columns selected')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Title' }))
+    expect(selectAll).toHaveAttribute('data-state', 'indeterminate')
+    expect(screen.getByRole('checkbox', { name: 'Select all Citation details' }))
+      .toHaveAttribute('data-state', 'indeterminate')
+    expect(screen.getByRole('checkbox', { name: 'Select all L1 screening' })).toBeChecked()
+  })
+
+  it('clears a question only when no selected dimension applies to it', async () => {
+    const user = userEvent.setup()
+    render(<CitationExportDialog srId="review-1" open onOpenChange={vi.fn()} />)
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }))
+    const question = screen.getByRole('checkbox', { name: 'Current question?' })
+    expect(question).toBeChecked()
+
+    await user.click(screen.getByRole('checkbox', { name: 'AI answers' }))
+    expect(question).toBeChecked()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Human answers' }))
+    expect(question).not.toBeChecked()
+    expect(question).toBeDisabled()
   })
 })

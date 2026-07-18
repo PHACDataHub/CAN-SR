@@ -197,10 +197,11 @@ class CitationExportService:
                     fields.append(OutputField(registry[3], registry[2][0]))
                     continue
                 available = set(item.available_dimensions or [])
-                if not dimensions <= available:
-                    raise ExportValidationError(f'Requested data is unavailable for {item.id}')
                 key = item.id.split('.', 1)[1]
-                for dimension in [d.id for d in group.dimensions if d.id in dimensions]:
+                applicable = dimensions & available
+                if not applicable:
+                    raise ExportValidationError(f'Requested data is unavailable for {item.id}')
+                for dimension in [d.id for d in group.dimensions if d.id in applicable]:
                     fields.extend(self._dimension_fields(group.id, item.label, key, dimension))
         if not fields:
             raise ExportValidationError('At least one output field must be selected')

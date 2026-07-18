@@ -116,6 +116,32 @@ def test_parameter_dimensions_expand_in_stable_order():
     ]
 
 
+def test_select_all_dimensions_uses_each_items_available_intersection():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns('id', 'human_current_question', 'llm_current_full_text_question'),
+    )
+    request = CitationExportRequest(selections=[
+        {
+            'group': 'l1',
+            'items': ['l1.current_question'],
+            'dimensions': ['human_answer', 'ai_answer', 'ai_explanation', 'confidence', 'evidence'],
+        },
+        {
+            'group': 'l2',
+            'items': ['l2.current_full_text_question'],
+            'dimensions': ['human_answer', 'ai_answer', 'ai_explanation', 'confidence', 'evidence'],
+        },
+    ])
+    fields = citation_export_service.resolve(schema, request)
+    assert [field.header for field in fields] == [
+        'L1 | Current question? | Human answer',
+        'L2 | Current full text question? | AI answer',
+        'L2 | Current full text question? | AI explanation',
+        'L2 | Current full text question? | Confidence',
+        'L2 | Current full text question? | Evidence',
+    ]
+
+
 def test_csv_is_ordered_normalized_and_formula_safe(monkeypatch):
     columns = _columns('id', 'title', 'human_current_question')
     monkeypatch.setattr(cits_dp_service, 'get_table_columns', lambda _table: columns)
