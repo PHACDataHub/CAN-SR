@@ -1,4 +1,24 @@
 {
+  "citationExport": {
+    "title": "Export citations",
+    "description": "Choose only the citation and screening data you need. Internal fields and historical questions can never be exported.",
+    "loading": "Loading safe export options…",
+    "loadError": "Unable to load export options.",
+    "exportError": "Unable to prepare the CSV.",
+    "retry": "Retry",
+    "rows": "Rows to include",
+    "all": "All citations",
+    "l1Included": "L1 included",
+    "l2Included": "L2 included",
+    "currentView": "Current filtered view",
+    "unavailable": "unavailable or more than 500 citations",
+    "noneAvailable": "No safe fields are available in this group.",
+    "selectAll": "Select all",
+    "selected": "{count} columns selected",
+    "cancel": "Cancel",
+    "preparing": "Preparing CSV…",
+    "exportCsv": "Export CSV"
+  },
   "common": {
     "languageSwitch": "Français",
     "governmentOfCanada": "Government of Canada",

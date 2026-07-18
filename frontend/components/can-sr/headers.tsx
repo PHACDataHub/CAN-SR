@@ -6,9 +6,9 @@ import BackButton from '@/components/ui/backbutton'
 import { InteractiveHoverButton } from '@/components/magicui/interactive-hover-button'
 import { Settings, Download } from 'lucide-react'
 import React from 'react'
-import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import Link from 'next/link'
+import { CitationExportDialog } from '@/components/can-sr/CitationExportDialog'
 
 export function GCHeader() {
   const router = useRouter()
@@ -85,7 +85,7 @@ type SRHeaderProps = {
 
 export function SRHeader({
   title,
-  srName = 'None',
+  srName: _srName = 'None',
   showSettings = false,
   showExport = false,
   showBack = true,
@@ -96,53 +96,9 @@ export function SRHeader({
   const router = useRouter()
   const dict = useDictionary()
   const resolvedBackLabel = backLabel || dict.cansr.backToReview
-
-  const handleExport = async () => {
-    try {
-      const url = new URL(window.location.href)
-      const srId = url.searchParams.get('sr_id')
-      if (!srId) {
-        alert('Missing sr_id in URL')
-        return
-      }
-
-      const token = getAuthToken()
-      const tokenType = getTokenType()
-      if (!token) {
-        alert('You must be logged in to export citations')
-        return
-      }
-
-      const res = await fetch(
-        `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `${tokenType} ${token}`,
-          },
-        },
-      )
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        throw new Error(errText || `Export failed (${res.status})`)
-      }
-
-      const blob = await res.blob()
-      const filename = `sr_${srName}_citations.csv`
-      const blobUrl = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.URL.revokeObjectURL(blobUrl)
-    } catch (e: any) {
-      console.error('Export error:', e)
-      alert(e?.message || 'Export failed')
-    }
-  }
+  void _srName
+  const [exportOpen, setExportOpen] = React.useState(false)
+  const srId = useSearchParams().get('sr_id') || ''
 
   // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>();
@@ -188,9 +144,8 @@ export function SRHeader({
             {showExport ? (
               <button
                 type="button"
-                onClick={() => {
-                  handleExport()
-                }}
+                onClick={() => setExportOpen(true)}
+                disabled={!srId}
                 className="hidden items-center space-x-2 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 md:flex"
               >
                 <Download className="h-4 w-4 text-gray-600" />
@@ -203,6 +158,9 @@ export function SRHeader({
           </div>
         </div>
       </div>
+      {showExport && srId ? (
+        <CitationExportDialog srId={srId} open={exportOpen} onOpenChange={setExportOpen} />
+      ) : null}
     </header>
   )
 }

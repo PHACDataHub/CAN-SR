@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { CitationExportDialog } from '@/components/can-sr/CitationExportDialog'
 // Progress UI is shown in the bottom-right floating panel; keep list view clean.
 
 function getAuthHeaders(): Record<string, string> {
@@ -77,7 +78,7 @@ export default function CitationsListPage({
 
   const [citationIds, setCitationIds] = useState<number[] | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
-  const [exporting, setExporting] = useState<boolean>(false)
+  const [exportOpen, setExportOpen] = useState<boolean>(false)
   const [runAllModalOpen, setRunAllModalOpen] = useState<boolean>(false)
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
@@ -785,40 +786,18 @@ export default function CitationsListPage({
 
                   <button
                     type="button"
-                    disabled={!srId || exporting}
-                    onClick={async () => {
-                      if (!srId) return
-                      try {
-                        setExporting(true)
-                        const headers = getAuthHeaders()
-                        const res = await fetch(
-                          `/api/can-sr/citations/list?action=export&sr_id=${encodeURIComponent(srId)}`,
-                          { method: 'GET', headers },
-                        )
-                        if (!res.ok) {
-                          const text = await res.text().catch(() => '')
-                          throw new Error(text || `Export failed (${res.status})`)
-                        }
-                        const blob = await res.blob()
-                        const url = window.URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url
-                        a.download = `citations_${srId}.csv`
-                        document.body.appendChild(a)
-                        a.click()
-                        a.remove()
-                        window.URL.revokeObjectURL(url)
-                      } catch (e: any) {
-                        console.error('Export failed', e)
-                        setError(e?.message || 'Export failed')
-                      } finally {
-                        setExporting(false)
-                      }
-                    }}
+                    disabled={!srId}
+                    onClick={() => setExportOpen(true)}
                     className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
                   >
-                    {exporting ? dict.common.downloading : dict.common.export}
+                    {dict.common.export}
                   </button>
+                  {srId ? <CitationExportDialog
+                    srId={srId}
+                    open={exportOpen}
+                    onOpenChange={setExportOpen}
+                    currentViewIds={citationIds || undefined}
+                  /> : null}
 
                   <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
                     <div className="flex items-center space-x-2">

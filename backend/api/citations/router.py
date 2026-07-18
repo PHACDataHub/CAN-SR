@@ -40,6 +40,8 @@ from ..services.sr_db_service import srdb_service
 from ..core.security import get_current_active_user
 from ..core.config import settings
 from ..services.cit_db_service import cits_dp_service, snake_case, snake_case_column, parse_dsn
+from ..services.citation_export_service import citation_export_service, ExportValidationError
+from .export_models import CitationExportRequest, CitationExportSchema
 from ..core.cit_utils import load_sr_and_check
 
 router = APIRouter()
@@ -1186,56 +1188,63 @@ async def hard_clean_screening_endpoint(sr_id: str, current_user: dict[str, Any]
     return result
 
 
-@router.get('/{sr_id}/export-citations')
-async def export_citations_csv(
-    sr_id: str,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
-):
-    """Download an exact CSV dump of the SR's Postgres `citations` table.
+def _safe_export_filename(sr: dict[str, Any], sr_id: str) -> str:
+    raw = str((sr or {}).get('name') or (sr or {}).get('title') or sr_id)
+    safe = re.sub(r'[^A-Za-z0-9_-]+', '_', raw).strip('_')[:80] or 'review'
+    return f'sr_{safe}_citations_{datetime.utcnow().date().isoformat()}.csv'
 
-    Notes:
-    - Auth: requires the requester to be a member/owner of the SR (load_sr_and_check)
-    - Filename: set to a generic default; frontend proxy/UI may override via its own
-      Content-Disposition.
-    """
 
+async def _load_export_context(sr_id: str, current_user: dict[str, Any]):
     try:
-        sr, screening = await load_sr_and_check(
-            sr_id, current_user, srdb_service,
-        )
+        sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to load systematic review: {e}",
+            detail=f'Failed to load systematic review: {exc}',
         )
-
     if not screening:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='No screening database configured for this systematic review',
         )
+    return sr, (screening or {}).get('table_name') or 'citations'
 
-    table_name = (screening or {}).get('table_name') or 'citations'
 
+@router.get('/{sr_id}/export-schema', response_model=CitationExportSchema)
+async def get_citation_export_schema(
+    sr_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return only current, safe semantic fields available for this SR."""
+    sr, table_name = await _load_export_context(sr_id, current_user)
     try:
-        # Validation-friendly export: exclude fulltext/artifacts and flatten JSON columns.
-        csv_bytes = await run_in_threadpool(cits_dp_service.dump_citations_csv_filtered, table_name)
-    except RuntimeError as rexc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to export citations CSV: {e}",
-        )
+        return await run_in_threadpool(citation_export_service.build_schema, sr, table_name)
+    except ExportValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
+
+@router.post('/{sr_id}/export-citations')
+async def export_citations_selective(
+    sr_id: str,
+    payload: CitationExportRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Generate a CSV exclusively from server-resolved semantic selections."""
+    sr, table_name = await _load_export_context(sr_id, current_user)
+    try:
+        csv_bytes = await run_in_threadpool(
+            citation_export_service.export_csv, table_name, sr, payload,
+        )
+    except ExportValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     return Response(
         content=csv_bytes,
         media_type='text/csv; charset=utf-8',
-        headers={
-            'Content-Disposition': f'attachment; filename="sr_{sr_id}_citations.csv"',
-        },
+        headers={'Content-Disposition': f'attachment; filename="{_safe_export_filename(sr, sr_id)}"'},
     )
