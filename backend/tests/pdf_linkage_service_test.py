@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 from api.services.fulltext_attachment_service import validate_pdf
-from api.services.pdf_linkage_service import (
-    _candidate,
-    _is_public_url,
-    link_citation_pdf,
-    normalize_doi,
-)
+from api.services.pdf_linkage_service import _candidate
+from api.services.pdf_linkage_service import _is_public_url
+from api.services.pdf_linkage_service import link_citation_pdf
+from api.services.pdf_linkage_service import normalize_doi
 
 
 class PdfLinkageServiceTests(unittest.TestCase):
@@ -19,13 +19,17 @@ class PdfLinkageServiceTests(unittest.TestCase):
 
     def test_candidate_supports_nested_provider_payload(self):
         self.assertEqual(
-            _candidate({'data': {'best_oa_location': {'url_for_pdf': 'https://x.test/a.pdf'}}}),
+            _candidate(
+                {'data': {'best_oa_location': {'url_for_pdf': 'https://x.test/a.pdf'}}},
+            ),
             'https://x.test/a.pdf',
         )
 
     def test_private_and_metadata_destinations_are_rejected(self):
         with patch('api.services.pdf_linkage_service.socket.getaddrinfo') as resolve:
-            resolve.return_value = [(None, None, None, None, ('169.254.169.254', 80))]
+            resolve.return_value = [
+                (None, None, None, None, ('169.254.169.254', 80)),
+            ]
             self.assertFalse(_is_public_url('http://metadata.test/latest'))
 
     def test_pdf_validation(self):
@@ -48,9 +52,13 @@ class PdfLinkageDoiFallbackTests(unittest.IsolatedAsyncioTestCase):
         }
         resolve.return_value = '10.1000/recovered'
         response = MagicMock()
-        response.json.return_value = {'url_for_pdf': 'https://example.test/paper.pdf'}
+        response.json.return_value = {
+            'url_for_pdf': 'https://example.test/paper.pdf',
+        }
         request.return_value = response
-        download.return_value = (b'%PDF-1.7\n', 'https://example.test/paper.pdf')
+        download.return_value = (
+            b'%PDF-1.7\n', 'https://example.test/paper.pdf',
+        )
         attach.return_value = MagicMock(attached=True)
 
         outcome = await link_citation_pdf(

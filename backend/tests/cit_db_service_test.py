@@ -27,7 +27,9 @@ class DropTableTests(unittest.TestCase):
 
     def test_drop_table_rolls_back_on_failure(self) -> None:
         connection = Mock()
-        connection.cursor.return_value.execute.side_effect = RuntimeError('drop failed')
+        connection.cursor.return_value.execute.side_effect = RuntimeError(
+            'drop failed',
+        )
         service = CitsDPService()
 
         with patch('api.services.cit_db_service.postgres_server') as server:

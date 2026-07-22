@@ -8,10 +8,12 @@ for title/abstract and fulltext pipelines.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
-from typing import List
-from typing import Optional
+from typing import Literal
+from typing import TypeVar
 
 
 @dataclass
@@ -22,6 +24,7 @@ class ParsedAgentXML:
     parse_ok: bool
     missing_answer: bool
     missing_confidence: bool
+    missing_rationale: bool
     # Evidence fields (only populated for fulltext screening prompts)
     evidence_sentences: list[int] = field(default_factory=list)
     evidence_tables: list[int] = field(default_factory=list)
@@ -90,6 +93,12 @@ def parse_agent_xml(text: str) -> ParsedAgentXML:
 
     missing_answer = not bool(ans_m and answer.strip())
     missing_confidence = not bool(conf_m)
+    if conf_m:
+        try:
+            float(conf_m.group(1).strip())
+        except (TypeError, ValueError):
+            missing_confidence = True
+    missing_rationale = not bool(rat_m and rationale)
     parse_ok = (not missing_answer) and (not missing_confidence)
     return ParsedAgentXML(
         answer=answer,
@@ -98,10 +107,82 @@ def parse_agent_xml(text: str) -> ParsedAgentXML:
         parse_ok=parse_ok,
         missing_answer=missing_answer,
         missing_confidence=missing_confidence,
+        missing_rationale=missing_rationale,
         evidence_sentences=evidence_sentences,
         evidence_tables=evidence_tables,
         evidence_figures=evidence_figures,
     )
+
+
+AgentStage = Literal['screening', 'critical']
+TCallMetadata = TypeVar('TCallMetadata')
+
+
+class AgentResponseError(ValueError):
+    """Raised when an LLM response still violates its stage contract after repair."""
+
+
+def validate_agent_response(
+    parsed: ParsedAgentXML,
+    *,
+    stage: AgentStage,
+) -> list[str]:
+    """Return contract violations for a parsed screening or critical response."""
+    missing: list[str] = []
+    if parsed.missing_answer:
+        missing.append('answer')
+    if parsed.missing_confidence:
+        missing.append('confidence')
+    if stage == 'screening' and parsed.missing_rationale:
+        missing.append('rationale')
+    return missing
+
+
+def build_repair_prompt(*, raw_response: str, stage: AgentStage) -> str:
+    """Ask the model to reformat an incomplete response without changing its judgment."""
+    if stage == 'screening':
+        schema = (
+            '<answer>exact selected option</answer>\n'
+            '<confidence>number from 0 to 1</confidence>\n'
+            '<rationale>non-empty concise evidence-based explanation</rationale>'
+        )
+    else:
+        schema = (
+            '<answer>exact selected option</answer>\n'
+            '<confidence>number from 0 to 1</confidence>'
+        )
+    return f"""Your previous response did not match the required output contract.
+Preserve the same judgment, but return ONLY these XML tags with valid, non-empty values:
+{schema}
+
+Previous response:
+{raw_response}
+"""
+
+
+async def call_and_parse_agent_response(
+    prompt: str,
+    *,
+    stage: AgentStage,
+    call_llm: Callable[[str], Awaitable[tuple[str, TCallMetadata]]],
+) -> tuple[str, ParsedAgentXML, TCallMetadata, bool]:
+    """Call an agent and make one repair attempt when its stage contract is invalid."""
+    raw, metadata = await call_llm(prompt)
+    parsed = parse_agent_xml(raw)
+    missing = validate_agent_response(parsed, stage=stage)
+    if not missing:
+        return raw, parsed, metadata, False
+
+    repair_prompt = build_repair_prompt(raw_response=raw, stage=stage)
+    repaired_raw, repaired_metadata = await call_llm(repair_prompt)
+    repaired = parse_agent_xml(repaired_raw)
+    repaired_missing = validate_agent_response(repaired, stage=stage)
+    if repaired_missing:
+        fields = ', '.join(repaired_missing)
+        raise AgentResponseError(
+            f'{stage.capitalize()} agent response missing or invalid fields after repair: {fields}',
+        )
+    return repaired_raw, repaired, repaired_metadata, True
 
 
 def resolve_option(raw_answer: str, options: list[str]) -> str:

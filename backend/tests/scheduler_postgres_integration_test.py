@@ -41,7 +41,11 @@ class SchedulerPostgresIntegrationTests(unittest.TestCase):
         table = f'scheduler_claim_test_{uuid.uuid4().hex}'
         cur = self.conn.cursor()
         cur.execute(f'CREATE TABLE {table} (id INT PRIMARY KEY, status TEXT)')
-        cur.executemany(f'INSERT INTO {table} VALUES (%s, %s)', [(i, 'todo') for i in range(20)])
+        cur.executemany(
+            f'INSERT INTO {table} VALUES (%s, %s)', [
+                (i, 'todo') for i in range(20)
+            ],
+        )
         self.conn.commit()
 
         def worker():
@@ -65,8 +69,10 @@ class SchedulerPostgresIntegrationTests(unittest.TestCase):
                 conn.close()
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
-        for thread in threads: thread.start()
-        for thread in threads: thread.join()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
         try:
             self.assertEqual(len(claimed), 20)
             self.assertEqual(len(set(claimed)), 20)

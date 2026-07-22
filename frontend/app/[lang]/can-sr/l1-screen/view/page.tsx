@@ -931,9 +931,6 @@ export default function CanSrL1ScreenPage() {
 	                                      )}
 	                                    </div>
 	                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
-	                                    {(crit as any)?.rationale ? (
-	                                      <div className="mt-1">Reason: {String((crit as any).rationale)}</div>
-	                                    ) : null}
 	                                  </div>
 	                                ) : null}
                               </div>

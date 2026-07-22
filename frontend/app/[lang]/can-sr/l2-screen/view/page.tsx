@@ -1183,9 +1183,6 @@ export default function CanSrL2ScreenViewPage() {
                                       )}
                                     </div>
                                     <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
-                                    {(crit as any)?.rationale ? (
-                                      <div className="mt-1">Reason: {String((crit as any).rationale)}</div>
-                                    ) : null}
                                   </div>
                                 ) : null}
                                 {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
