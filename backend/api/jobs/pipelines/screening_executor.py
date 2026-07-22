@@ -53,15 +53,13 @@ def _eligible_ids(*, sr_id: str, table_name: str, step: str) -> list[int]:
     - l2/extract additionally require an uploaded PDF/fulltext (fulltext_url)
     """
 
-    # Apply filter semantics
-    filter_step = ''
-    if step == 'l2':
-        filter_step = 'l1'
-    elif step == 'extract':
-        filter_step = 'l2'
+    from ...services.screening_eligibility_service import screening_eligibility_service
+    from ...services.sr_db_service import srdb_service
 
-    ids = cits_dp_service.list_citation_ids(
-        filter_step if filter_step else None, table_name,
+    sr = srdb_service.get_systematic_review(sr_id) or {}
+    criteria = sr.get('criteria_parsed') or sr.get('criteria') or {}
+    ids = screening_eligibility_service.list_eligible_ids(
+        criteria=criteria, table_name=table_name, target_stage=step,
     )
 
     # PDF gating for l2/extract

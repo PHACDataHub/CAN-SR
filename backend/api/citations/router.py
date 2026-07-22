@@ -677,19 +677,23 @@ async def list_citation_ids(
 
     table_name = (screening or {}).get('table_name') or 'citations'
 
-    # Ensure decision columns are never stale before filtering.
-    # Validation strategy: UI filters by human_l1_decision / human_l2_decision.
     try:
-        cp = (sr or {}).get('criteria_parsed') or (
+        from ..services.screening_eligibility_service import screening_eligibility_service
+
+        criteria = (sr or {}).get('criteria_parsed') or (
             sr or {}
         ).get('criteria') or {}
-        await run_in_threadpool(cits_dp_service.backfill_human_decisions, cp, table_name)
-    except Exception:
-        # best-effort; listing should still work even if backfill fails
-        pass
-
-    try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        stage = 'l1'
+        if str(filter_step or '').strip().lower() == 'l1':
+            stage = 'l2'
+        elif str(filter_step or '').strip().lower() == 'l2':
+            stage = 'extract'
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=criteria,
+            table_name=table_name,
+            target_stage=stage,
+        )
     except RuntimeError as rexc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
@@ -699,7 +703,6 @@ async def list_citation_ids(
         # treat it as "no citations" instead of poisoning the shared connection.
         if _is_undefined_table_error(e):
             return {'citation_ids': []}
-    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to query screening DB: {e}",
@@ -1222,9 +1225,13 @@ async def get_citation_export_schema(
     try:
         return await run_in_threadpool(citation_export_service.build_schema, sr, table_name)
     except ExportValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        )
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
 
 
 @router.post('/{sr_id}/export-citations')
@@ -1240,11 +1247,17 @@ async def export_citations_selective(
             citation_export_service.export_csv, table_name, sr, payload,
         )
     except ExportValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc),
+        )
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
     return Response(
         content=csv_bytes,
         media_type='text/csv; charset=utf-8',
-        headers={'Content-Disposition': f'attachment; filename="{_safe_export_filename(sr, sr_id)}"'},
+        headers={
+            'Content-Disposition': f'attachment; filename="{_safe_export_filename(sr, sr_id)}"',
+        },
     )

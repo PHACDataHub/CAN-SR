@@ -1422,7 +1422,9 @@ class CitsDPService:
         }
         requested = list(dict.fromkeys(['id', *columns]))
         if any(column not in existing for column in requested):
-            raise ValueError('Export contains a column that is not present in the citation table')
+            raise ValueError(
+                'Export contains a column that is not present in the citation table',
+            )
 
         predicates: dict[str, tuple[str, tuple[Any, ...]]] = {
             'all': ('', ()),
@@ -1465,6 +1467,10 @@ class CitsDPService:
         """
         table_name = _validate_ident(table_name, kind='table_name')
         self._require_psycopg2()
+
+        # Local import avoids a module cycle: the eligibility service owns the
+        # domain rule while this repository owns persistence.
+        from .screening_eligibility_service import compute_screening_decisions
 
         cp = criteria_parsed or {}
         l1_qs = (cp.get('l1') or {}).get(
@@ -1530,49 +1536,6 @@ class CitsDPService:
             cur.execute(f'SELECT {sql_cols} FROM "{table_name}" ORDER BY id')
             rows = cur.fetchall() or []
 
-            def _parse_jsonb(v: Any) -> dict[str, Any]:
-                if v is None:
-                    return {}
-                if isinstance(v, dict):
-                    return v
-                if isinstance(v, str):
-                    s = v.strip()
-                    if s.startswith('{'):
-                        try:
-                            obj = json.loads(s)
-                            return obj if isinstance(obj, dict) else {}
-                        except Exception:
-                            return {}
-                return {}
-
-            def _selected_from_row(row: dict[str, Any], q: str) -> str | None:
-                human_col = _human_col(q)
-                llm_col = _llm_col(q)
-
-                for col in [human_col, llm_col]:
-                    if col not in existing_cols:
-                        continue
-                    obj = _parse_jsonb(row.get(col))
-                    selected = obj.get('selected')
-                    if isinstance(selected, str):
-                        selected = selected.strip()
-                    if selected:
-                        return str(selected)
-                return None
-
-            def _compute(step_qs: list[str], row: dict[str, Any]) -> str:
-                if not step_qs:
-                    return 'undecided'
-                for q in step_qs:
-                    # Eligibility precedence:
-                    #   human answer > llm answer > no answer (exclude)
-                    selected = _selected_from_row(row, q)
-                    if selected is None:
-                        return 'exclude'
-                    if 'exclude' in str(selected).lower():
-                        return 'exclude'
-                return 'include'
-
             updates: list[tuple[str, str, int]] = []
             for r in rows:
                 if not r:
@@ -1582,8 +1545,7 @@ class CitsDPService:
                     rid_i = int(rid)
                 except Exception:
                     continue
-                d1 = _compute(l1_qs, r)
-                d2 = _compute(l2_union_qs, r)
+                d1, d2 = compute_screening_decisions(r, cp)
                 updates.append((d1, d2, rid_i))
 
             if not updates:
@@ -1776,9 +1738,14 @@ class CitsDPService:
                             OR column_name LIKE 'human_param_%')""",
                     (table_name,),
                 )
-                clear_columns = [str(item[0]) for item in (cur.fetchall() or [])]
+                clear_columns = [
+                    str(item[0])
+                    for item in (cur.fetchall() or [])
+                ]
                 if clear_columns:
-                    assignments = ', '.join(f'"{name}"=NULL' for name in clear_columns)
+                    assignments = ', '.join(
+                        f'"{name}"=NULL' for name in clear_columns
+                    )
                     cur.execute(
                         f'UPDATE "{table_name}" SET {assignments} WHERE id=%s',
                         (int(citation_id),),
@@ -1879,7 +1846,10 @@ class CitsDPService:
                     pdf_link_status=%s, pdf_link_reason=%s, pdf_link_source=%s,
                     pdf_link_url=%s, pdf_link_error=%s,
                     pdf_link_last_checked_at=now() WHERE id=%s''',
-                (status, reason, source, url, (error or '')[:2000] or None, int(citation_id)),
+                (
+                    status, reason, source, url, (error or '')
+                    [:2000] or None, int(citation_id),
+                ),
             )
             rows = cur.rowcount
             conn.commit()
@@ -1989,7 +1959,9 @@ class CitsDPService:
             col_defs.append('"pdf_link_reason" TEXT')
             col_defs.append('"pdf_link_source" TEXT')
             col_defs.append('"pdf_link_url" TEXT')
-            col_defs.append('"pdf_link_last_checked_at" TIMESTAMP WITH TIME ZONE')
+            col_defs.append(
+                '"pdf_link_last_checked_at" TIMESTAMP WITH TIME ZONE',
+            )
             col_defs.append('"pdf_link_error" TEXT')
             col_defs.append('"pdf_link_doi_source" TEXT')
 

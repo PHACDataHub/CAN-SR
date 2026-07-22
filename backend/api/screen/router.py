@@ -28,6 +28,8 @@ from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
 from ..services.cit_db_service import snake_case
 from ..services.cit_db_service import snake_case_column
+from ..services.screening_eligibility_service import compute_screening_decisions
+from ..services.screening_eligibility_service import screening_eligibility_service
 from ..services.sr_db_service import srdb_service
 from ..services.storage import storage_service
 from .agentic_utils import AgentResponseError
@@ -277,12 +279,15 @@ async def get_filtered_citation_ids(
             thr = 0.9
         criteria.append({'criterion_key': ck, 'label': q, 'threshold': thr})
 
-    # Scope ids for step (L2 scope depends on human L1 include)
-    filter_step = ''
-    if step_norm == 'l2':
-        filter_step = 'l1'
+    # Resolve scope through the authoritative eligibility boundary. For L2 this
+    # repairs stale derived L1 decisions before filtering.
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=cp,
+            table_name=table_name,
+            target_stage=step_norm,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2207,12 +2212,11 @@ async def get_screening_metrics(
             thr = 0.9
         criteria.append({'criterion_key': ck, 'label': q, 'threshold': thr})
 
-    # Pull all citation ids for this step (L2 list is filtered by human_l1_decision include)
-    filter_step = ''
-    if step_norm == 'l2':
-        filter_step = 'l1'
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=cp, table_name=table_name, target_stage=step_norm,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2761,11 +2765,11 @@ async def get_screening_calibration(
         criteria.append({'criterion_key': ck, 'label': q})
 
     # Determine SR scope ids for step (same as metrics)
-    filter_step = ''
-    if step_norm == 'l2':
-        filter_step = 'l1'
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=cp, table_name=table_name, target_stage=step_norm,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3063,11 +3067,11 @@ async def get_live_confidence_histogram(
         criteria.append({'criterion_key': ck, 'label': q})
 
     # Scope ids for step
-    filter_step = ''
-    if step_norm == 'l2':
-        filter_step = 'l1'
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=cp, table_name=table_name, target_stage=step_norm,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3206,11 +3210,11 @@ async def get_calibration_samples(
         )
 
     # Determine SR scope ids for step
-    filter_step = ''
-    if step_norm == 'l2':
-        filter_step = 'l1'
     try:
-        ids = await run_in_threadpool(cits_dp_service.list_citation_ids, filter_step, table_name)
+        ids = await run_in_threadpool(
+            screening_eligibility_service.list_eligible_ids,
+            criteria=cp, table_name=table_name, target_stage=step_norm,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3441,95 +3445,9 @@ async def update_inclusion_decision(
     try:
         fresh = await run_in_threadpool(_get_row_fresh)
 
-        def _compute_human_decision(step: str) -> str:
-            """Compute derived decisions used for filtering (pass to next stage).
-
-            Priority rules:
-            1. Human-set values have highest priority (include/exclude)
-            2. If no human answer exists, fall back to AI/LLM answer
-            3. If neither human nor AI answer exists, treat as exclude
-
-            Scope:
-            - human_l1_decision is derived ONLY from L1 questions.
-            - human_l2_decision represents "passed to L2/extract" and must consider
-              BOTH L1 + L2 criteria questions.
-            """
-            cp = sr.get('criteria_parsed') or {}
-
-            # L1: only L1 questions
-            if step == 'l1':
-                qs = (cp.get('l1') or {}).get('questions') or []
-            # L2: union of L1 + L2 questions
-            elif step == 'l2':
-                l1_qs = (cp.get('l1') or {}).get('questions') or []
-                l2_qs = (cp.get('l2') or {}).get('questions') or []
-                qs = list(l1_qs) + list(l2_qs)
-            else:
-                qs = (cp.get(step) or {}).get('questions') or []
-
-            if not isinstance(qs, list) or not qs:
-                return 'undecided'
-
-            for q in qs:
-                core = snake_case(q, max_len=56) if snake_case else ''
-                hcol = f"human_{core}" if core else 'human_col'
-                llm_col = f"llm_{core}" if core else 'llm_col'
-
-                # Priority 1: Check human answer
-                hval = fresh.get(hcol)
-                selected = None
-                if hval is not None:
-                    try:
-                        hobj = json.loads(hval) if isinstance(
-                            hval, str,
-                        ) else hval
-                        selected = (hobj or {}).get('selected')
-                    except Exception:
-                        selected = None
-
-                # Treat empty/whitespace as unanswered
-                if selected is not None and isinstance(selected, str) and selected.strip() == '':
-                    selected = None
-
-                # Priority 2: Fall back to AI/LLM answer if no human answer
-                if selected is None:
-                    llm_val = fresh.get(llm_col)
-                    if llm_val is not None:
-                        try:
-                            llm_obj = json.loads(llm_val) if isinstance(
-                                llm_val, str,
-                            ) else llm_val
-                            selected = (llm_obj or {}).get('selected')
-                        except Exception:
-                            selected = None
-                    # Check critical answer override if available
-                    if selected is not None and isinstance(llm_val, (dict, str)):
-                        try:
-                            obj = json.loads(llm_val) if isinstance(
-                                llm_val, str,
-                            ) else llm_val
-                            critical = (obj or {}).get('critical')
-                            if isinstance(critical, dict) and critical.get('selected'):
-                                selected = critical['selected']
-                        except Exception:
-                            pass
-
-                # Treat empty/whitespace as unanswered
-                if selected is not None and isinstance(selected, str) and selected.strip() == '':
-                    selected = None
-
-                # Priority 3: Neither exists -> exclude
-                if selected is None:
-                    return 'exclude'
-
-                if 'exclude' in str(selected).lower():
-                    return 'exclude'
-
-            return 'include'
-
         # Always set both human decisions on any update, so the list filters never go stale.
-        h1 = _compute_human_decision('l1')
-        h2 = _compute_human_decision('l2')
+        criteria = sr.get('criteria_parsed') or sr.get('criteria') or {}
+        h1, h2 = compute_screening_decisions(fresh, criteria)
         await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'human_l1_decision', h1, table_name)
         await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'human_l2_decision', h2, table_name)
     except Exception:
