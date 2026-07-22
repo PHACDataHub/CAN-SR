@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock
 
+from api.jobs.run_all_tasks import recover_and_enqueue_stale_chunks
 from api.jobs.scheduler_service import InvalidJobTransition
 from api.jobs.scheduler_service import SchedulerService
-from api.jobs.run_all_tasks import recover_and_enqueue_stale_chunks
 
 
 class FakeRepository:
@@ -30,16 +30,24 @@ class FakeRepository:
 
 class SchedulerServiceTests(unittest.TestCase):
     def test_prefetch_splits_workers_across_active_jobs(self):
-        service = SchedulerService(FakeRepository(active_jobs=3), worker_count=8)
+        service = SchedulerService(
+            FakeRepository(active_jobs=3), worker_count=8,
+        )
         self.assertEqual(service.compute_prefetch(), 2)
 
     def test_prefetch_is_bounded_and_at_least_one(self):
         self.assertEqual(
-            SchedulerService(FakeRepository(active_jobs=0), worker_count=100).compute_prefetch(),
+            SchedulerService(
+                FakeRepository(active_jobs=0),
+                worker_count=100,
+            ).compute_prefetch(),
             20,
         )
         self.assertEqual(
-            SchedulerService(FakeRepository(active_jobs=100), worker_count=2).compute_prefetch(),
+            SchedulerService(
+                FakeRepository(active_jobs=100),
+                worker_count=2,
+            ).compute_prefetch(),
             1,
         )
 

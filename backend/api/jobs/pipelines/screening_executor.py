@@ -1,17 +1,31 @@
 from __future__ import annotations
+
 from typing import Any
+
 from fastapi.concurrency import run_in_threadpool
+
 from ...citations import router as citations_router
 from ...extract.prompts import PARAMETER_PROMPT_JSON
 from ...extract.router import extract_fulltext_from_storage
-from ...screen.agentic_utils import build_critical_options, parse_agent_xml, resolve_option
-from ...screen.prompts import PROMPT_XML_TEMPLATE_FULLTEXT, PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL, PROMPT_XML_TEMPLATE_TA, PROMPT_XML_TEMPLATE_TA_CRITICAL
-from ...screen.router import _build_guardrails, update_inclusion_decision
+from ...screen.agentic_utils import build_critical_options
+from ...screen.agentic_utils import call_and_parse_agent_response
+from ...screen.agentic_utils import resolve_option
+from ...screen.prompts import PROMPT_XML_TEMPLATE_FULLTEXT
+from ...screen.prompts import PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL
+from ...screen.prompts import PROMPT_XML_TEMPLATE_TA
+from ...screen.prompts import PROMPT_XML_TEMPLATE_TA_CRITICAL
+from ...screen.router import _build_guardrails
+from ...screen.router import update_inclusion_decision
 from ...services.azure_openai_client import azure_openai_client
-from ...services.cit_db_service import cits_dp_service, snake_case, snake_case_column, snake_case_param
+from ...services.cit_db_service import cits_dp_service
+from ...services.cit_db_service import snake_case
+from ...services.cit_db_service import snake_case_column
+from ...services.cit_db_service import snake_case_param
 from ...services.storage import storage_service
 from ..run_all_repo import run_all_repo
-from .control import PipelineCanceled, wait_if_paused
+from .control import PipelineCanceled
+from .control import wait_if_paused
+
 
 def _should_skip_ai_output(existing_value: Any, *, force: bool) -> bool:
     """Return True if we should skip doing work because output already exists."""
@@ -138,14 +152,22 @@ async def _run_l1_for_citation(
             options=options_listed,
             xtra=xtra or '',
         )
-        screening_raw = await azure_openai_client.simple_chat(
-            user_message=screening_prompt,
-            system_prompt=None,
-            model=model,
-            max_tokens=2000,
-            temperature=0.0,
+
+        async def _call_agent(prompt: str):
+            raw = await azure_openai_client.simple_chat(
+                user_message=prompt,
+                system_prompt=None,
+                model=model,
+                max_tokens=2000,
+                temperature=0.0,
+            )
+            return str(raw), None
+
+        screening_raw, screening_parsed, _, _ = await call_and_parse_agent_response(
+            screening_prompt,
+            stage='screening',
+            call_llm=_call_agent,
         )
-        screening_parsed = parse_agent_xml(str(screening_raw))
         screening_answer = resolve_option(screening_parsed.answer, opts)
 
         await run_in_threadpool(
@@ -181,14 +203,11 @@ async def _run_l1_for_citation(
             # run-all does not currently inject SR-scoped critical prompt additions (done in /screen/*/run)
             critical_additions='(none)',
         )
-        critical_raw = await azure_openai_client.simple_chat(
-            user_message=critical_prompt,
-            system_prompt=None,
-            model=model,
-            max_tokens=2000,
-            temperature=0.0,
+        critical_raw, critical_parsed, _, _ = await call_and_parse_agent_response(
+            critical_prompt,
+            stage='critical',
+            call_llm=_call_agent,
         )
-        critical_parsed = parse_agent_xml(str(critical_raw))
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
 
         await run_in_threadpool(
@@ -202,7 +221,7 @@ async def _run_l1_for_citation(
                 'stage': 'critical',
                 'answer': critical_answer,
                 'confidence': critical_parsed.confidence,
-                'rationale': critical_parsed.rationale,
+                'rationale': '',
                 'raw_response': str(critical_raw),
                 'guardrails': _build_guardrails(critical_parsed, raw_text=str(critical_raw), stage='critical'),
                 'model': model,
@@ -222,7 +241,6 @@ async def _run_l1_for_citation(
             'llm_raw': str(screening_raw),
             'critical': {
                 'selected': critical_answer,
-                'explanation': critical_parsed.rationale or '',
                 'confidence': critical_parsed.confidence,
                 'llm_raw': str(critical_raw),
             },
@@ -460,24 +478,32 @@ async def _run_l2_for_citation(
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
-        if images:
-            screening_raw = await azure_openai_client.multimodal_chat(
-                user_text=screening_prompt,
-                images=images,
-                system_prompt=None,
-                model=model,
-                max_tokens=2000,
-                temperature=0.0,
-            )
-        else:
-            screening_raw = await azure_openai_client.simple_chat(
-                user_message=screening_prompt,
-                system_prompt=None,
-                model=model,
-                max_tokens=2000,
-                temperature=0.0,
-            )
-        screening_parsed = parse_agent_xml(str(screening_raw))
+
+        async def _call_agent(prompt: str):
+            if images:
+                raw = await azure_openai_client.multimodal_chat(
+                    user_text=prompt,
+                    images=images,
+                    system_prompt=None,
+                    model=model,
+                    max_tokens=2000,
+                    temperature=0.0,
+                )
+            else:
+                raw = await azure_openai_client.simple_chat(
+                    user_message=prompt,
+                    system_prompt=None,
+                    model=model,
+                    max_tokens=2000,
+                    temperature=0.0,
+                )
+            return str(raw), None
+
+        screening_raw, screening_parsed, _, _ = await call_and_parse_agent_response(
+            screening_prompt,
+            stage='screening',
+            call_llm=_call_agent,
+        )
         screening_answer = resolve_option(screening_parsed.answer, opts)
 
         await run_in_threadpool(
@@ -514,24 +540,11 @@ async def _run_l2_for_citation(
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
-        if images:
-            critical_raw = await azure_openai_client.multimodal_chat(
-                user_text=critical_prompt,
-                images=images,
-                system_prompt=None,
-                model=model,
-                max_tokens=2000,
-                temperature=0.0,
-            )
-        else:
-            critical_raw = await azure_openai_client.simple_chat(
-                user_message=critical_prompt,
-                system_prompt=None,
-                model=model,
-                max_tokens=2000,
-                temperature=0.0,
-            )
-        critical_parsed = parse_agent_xml(str(critical_raw))
+        critical_raw, critical_parsed, _, _ = await call_and_parse_agent_response(
+            critical_prompt,
+            stage='critical',
+            call_llm=_call_agent,
+        )
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
 
         await run_in_threadpool(
@@ -545,7 +558,7 @@ async def _run_l2_for_citation(
                 'stage': 'critical',
                 'answer': critical_answer,
                 'confidence': critical_parsed.confidence,
-                'rationale': critical_parsed.rationale,
+                'rationale': '',
                 'raw_response': str(critical_raw),
                 'guardrails': _build_guardrails(critical_parsed, raw_text=str(critical_raw), stage='critical'),
                 'model': model,
@@ -565,7 +578,6 @@ async def _run_l2_for_citation(
             'llm_raw': str(screening_raw),
             'critical': {
                 'selected': critical_answer,
-                'explanation': critical_parsed.rationale or '',
                 'confidence': critical_parsed.confidence,
                 'llm_raw': str(critical_raw),
             },

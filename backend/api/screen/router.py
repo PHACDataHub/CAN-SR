@@ -30,8 +30,9 @@ from ..services.cit_db_service import snake_case
 from ..services.cit_db_service import snake_case_column
 from ..services.sr_db_service import srdb_service
 from ..services.storage import storage_service
+from .agentic_utils import AgentResponseError
 from .agentic_utils import build_critical_options
-from .agentic_utils import parse_agent_xml
+from .agentic_utils import call_and_parse_agent_response
 from .agentic_utils import resolve_option
 from .prompts import PROMPT_JSON_TEMPLATE
 from .prompts import PROMPT_JSON_TEMPLATE_FULLTEXT
@@ -1281,8 +1282,22 @@ async def run_title_abstract_agentic(
             options=options_listed,
             xtra=xtra or '',
         )
-        screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
-        screening_parsed = parse_agent_xml(screening_raw)
+
+        async def _call_with_metadata(prompt: str):
+            raw, usage, latency = await _call_llm(prompt)
+            return raw, (usage, latency)
+
+        try:
+            screening_raw, screening_parsed, screening_meta, _ = await call_and_parse_agent_response(
+                screening_prompt,
+                stage='screening',
+                call_llm=_call_with_metadata,
+            )
+        except AgentResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+            ) from exc
+        screening_usage, screening_latency = screening_meta
         screening_answer = resolve_option(screening_parsed.answer, opts)
 
         try:
@@ -1345,8 +1360,17 @@ async def run_title_abstract_agentic(
             xtra=xtra or '',
             critical_additions=critical_additions,
         )
-        critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
-        critical_parsed = parse_agent_xml(critical_raw)
+        try:
+            critical_raw, critical_parsed, critical_meta, _ = await call_and_parse_agent_response(
+                critical_prompt,
+                stage='critical',
+                call_llm=_call_with_metadata,
+            )
+        except AgentResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+            ) from exc
+        critical_usage, critical_latency = critical_meta
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
 
         disagrees = str(critical_answer).strip() != 'None of the above'
@@ -1363,7 +1387,7 @@ async def run_title_abstract_agentic(
                     'stage': 'critical',
                     'answer': critical_answer,
                     'confidence': critical_parsed.confidence,
-                    'rationale': critical_parsed.rationale,
+                    'rationale': '',
                     'raw_response': critical_raw,
                     'guardrails': _build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
                     'model': payload.model,
@@ -1425,7 +1449,6 @@ async def run_title_abstract_agentic(
                     'run_id': critical_run_id,
                     'answer': critical_answer,
                     'confidence': critical_parsed.confidence,
-                    'rationale': critical_parsed.rationale,
                     'parse_ok': critical_parsed.parse_ok,
                     'disagrees': disagrees,
                 },
@@ -1845,8 +1868,22 @@ async def run_fulltext_agentic(
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
-        screening_raw, screening_usage, screening_latency = await _call_llm(screening_prompt)
-        screening_parsed = parse_agent_xml(screening_raw)
+
+        async def _call_with_metadata(prompt: str):
+            raw, usage, latency = await _call_llm(prompt)
+            return raw, (usage, latency)
+
+        try:
+            screening_raw, screening_parsed, screening_meta, _ = await call_and_parse_agent_response(
+                screening_prompt,
+                stage='screening',
+                call_llm=_call_with_metadata,
+            )
+        except AgentResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+            ) from exc
+        screening_usage, screening_latency = screening_meta
         screening_answer = resolve_option(screening_parsed.answer, opts)
 
         try:
@@ -1926,8 +1963,17 @@ async def run_fulltext_agentic(
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
-        critical_raw, critical_usage, critical_latency = await _call_llm(critical_prompt)
-        critical_parsed = parse_agent_xml(critical_raw)
+        try:
+            critical_raw, critical_parsed, critical_meta, _ = await call_and_parse_agent_response(
+                critical_prompt,
+                stage='critical',
+                call_llm=_call_with_metadata,
+            )
+        except AgentResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+            ) from exc
+        critical_usage, critical_latency = critical_meta
         critical_answer = resolve_option(critical_parsed.answer, critical_opts)
         disagrees = str(critical_answer).strip() != 'None of the above'
 
@@ -1943,7 +1989,7 @@ async def run_fulltext_agentic(
                     'stage': 'critical',
                     'answer': critical_answer,
                     'confidence': critical_parsed.confidence,
-                    'rationale': critical_parsed.rationale,
+                    'rationale': '',
                     'raw_response': critical_raw,
                     'guardrails': {
                         **_build_guardrails(critical_parsed, raw_text=critical_raw, stage='critical'),
@@ -2012,7 +2058,6 @@ async def run_fulltext_agentic(
                     'run_id': critical_run_id,
                     'answer': critical_answer,
                     'confidence': critical_parsed.confidence,
-                    'rationale': critical_parsed.rationale,
                     'parse_ok': critical_parsed.parse_ok,
                     'disagrees': disagrees,
                 },

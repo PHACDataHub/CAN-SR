@@ -110,7 +110,9 @@ Return ONLY the following XML tags (no Markdown, no extra prose):
 <confidence>...</confidence>
 <rationale>...</rationale>
 
-Confidence requirements:
+Field requirements:
+- rationale is mandatory and must be a non-empty, concise explanation (1-4 sentences)
+- connect specific facts in the citation to the selected option; do not invent evidence
 - confidence is a float between 0 and 1
 - be conservative; do not overestimate confidence
 """
@@ -137,8 +139,6 @@ Rules:
   choose "None of the above".
 - DISAGREEMENT means one of the listed alternatives is better supported than the
   original answer. If you disagree, choose that specific alternative.
-- In <rationale>, explicitly state why the evidence supports the original answer
-  or why the selected alternative is better supported.
 - <confidence> represents confidence in this agreement/disagreement judgment.
 
 Forced alternatives (choose exactly one; exact text):
@@ -154,7 +154,6 @@ Output requirement:
 Return ONLY the following XML tags (no Markdown, no extra prose):
 <answer>...</answer>
 <confidence>...</confidence>
-<rationale>...</rationale>
 
 Confidence requirements:
 - confidence is a float between 0 and 1
@@ -220,8 +219,6 @@ Rules:
   choose "None of the above".
 - DISAGREEMENT means one of the listed alternatives is better supported than the
   original answer. If you disagree, choose that specific alternative.
-- In <rationale>, explicitly state why the evidence supports the original answer
-  or why the selected alternative is better supported.
 - <confidence> represents confidence in this agreement/disagreement judgment.
 
 Forced alternatives (choose exactly one; exact text):
@@ -246,7 +243,6 @@ Output requirement:
 Return ONLY the following XML tags (no Markdown, no extra prose):
 <answer>...</answer>
 <confidence>...</confidence>
-<rationale>...</rationale>
 
 Confidence requirements:
 - confidence is a float between 0 and 1

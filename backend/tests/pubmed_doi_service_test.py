@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import httpx
-
-from api.services.pubmed_doi_service import (
-    PubMedArticle,
-    _common_params,
-    _select_title_match,
-    resolve_doi_from_pubmed,
-)
+from api.services.pubmed_doi_service import _common_params
+from api.services.pubmed_doi_service import _select_title_match
+from api.services.pubmed_doi_service import PubMedArticle
+from api.services.pubmed_doi_service import resolve_doi_from_pubmed
 
 
 XML = '''<PubmedArticleSet><PubmedArticle>
@@ -25,8 +23,14 @@ XML = '''<PubmedArticleSet><PubmedArticle>
 
 class PubMedDoiSelectionTests(unittest.TestCase):
     def test_title_match_requires_corroborating_metadata(self):
-        article = PubMedArticle('123', '10.1/x', 'Same Title', '2024', ('Smith',))
-        self.assertIsNone(_select_title_match({'title': 'Same Title'}, [article]))
+        article = PubMedArticle(
+            '123', '10.1/x', 'Same Title', '2024', ('Smith',),
+        )
+        self.assertIsNone(
+            _select_title_match(
+                {'title': 'Same Title'}, [article],
+            ),
+        )
         self.assertEqual(
             _select_title_match(
                 {'title': 'Same Title', 'year': '2024', 'authors': 'Jane Smith'},
@@ -36,18 +40,27 @@ class PubMedDoiSelectionTests(unittest.TestCase):
         )
 
     def test_ambiguous_or_mismatched_results_are_rejected(self):
-        article = PubMedArticle('1', '10.1/a', 'Same Title', '2024', ('Smith',))
+        article = PubMedArticle(
+            '1', '10.1/a', 'Same Title', '2024', ('Smith',),
+        )
         other = PubMedArticle('2', '10.1/b', 'Same Title', '2024', ('Smith',))
         row = {'title': 'Same Title', 'year': '2024', 'authors': 'Smith'}
         self.assertIsNone(_select_title_match(row, [article, other]))
-        self.assertIsNone(_select_title_match({**row, 'year': '2023'}, [article]))
+        self.assertIsNone(
+            _select_title_match(
+                {**row, 'year': '2023'}, [article],
+            ),
+        )
 
     def test_api_key_is_optional(self):
         with patch('api.services.pubmed_doi_service.ENTREZ_EMAIL', 'team@example.test'), patch(
             'api.services.pubmed_doi_service.ENTREZ_API_KEY', '',
         ):
             self.assertEqual(
-                _common_params(), {'tool': 'CAN-SR', 'email': 'team@example.test'},
+                _common_params(), {
+                    'tool': 'CAN-SR',
+                    'email': 'team@example.test',
+                },
             )
 
 

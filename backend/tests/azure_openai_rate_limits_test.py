@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from api.screen.prompts import PROMPT_XML_TEMPLATE_FULLTEXT_CRITICAL
 from api.screen.prompts import PROMPT_XML_TEMPLATE_TA_CRITICAL
 from api.services.azure_openai_client import AzureOpenAIClient
@@ -56,7 +55,11 @@ def test_request_token_estimate_includes_maximum_output_and_images():
         'messages': [{
             'content': [
                 {'type': 'text', 'text': 'abcdefgh'},
-                {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,...'}},
+                {
+                    'type': 'image_url', 'image_url': {
+                        'url': 'data:image/png;base64,...',
+                    },
+                },
             ],
         }],
         'max_completion_tokens': 100,

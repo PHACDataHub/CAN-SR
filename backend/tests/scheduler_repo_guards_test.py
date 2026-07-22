@@ -13,7 +13,8 @@ class SchedulerRepositoryGuardTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        repo_path = Path(__file__).resolve().parents[1] / 'api/jobs/run_all_repo.py'
+        repo_path = Path(__file__).resolve(
+        ).parents[1] / 'api/jobs/run_all_repo.py'
         with repo_path.open(encoding='utf-8') as source:
             cls.source = source.read()
 
@@ -32,7 +33,9 @@ class SchedulerRepositoryGuardTests(unittest.TestCase):
 
     def test_stale_recovery_only_targets_active_jobs(self):
         self.assertIn('def recover_stale_chunks', self.source)
-        self.assertIn("j.status IN ('queued', 'running', 'paused')", self.source)
+        self.assertIn(
+            "j.status IN ('queued', 'running', 'paused')", self.source,
+        )
         self.assertIn("c.status = 'doing'", self.source)
 
 
