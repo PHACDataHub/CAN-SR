@@ -147,7 +147,17 @@
     "downloadYAML": "Télécharger le YAML",
     "saveCriteria": "Enregistrer les critères",
     "saving": "Enregistrement...",
-    "savedSuccessfully": "Enregistré avec succès"
+    "savedSuccessfully": "Enregistré avec succès",
+    "criteriaBuilder": {
+      "visualBuilder": "Générateur visuel de critères", "visualBuilderDesc": "Configurez les champs de citation et les questions sans modifier le YAML.",
+      "citationFields": "Champs de citation", "l1Fields": "Champs L1 (séparés par des virgules)", "doiField": "Champ source du DOI",
+      "l1": "Sélection titre et résumé (L1)", "l2": "Sélection du texte intégral (L2)", "question": "Question", "questionText": "Texte de la question", "context": "Contexte supplémentaire",
+      "answers": "Réponses", "answerLabel": "Libellé de réponse", "decision": "Décision", "include": "Inclure", "exclude": "Exclure",
+      "addQuestion": "Ajouter une question", "addAnswer": "Ajouter une réponse", "deleteQuestion": "Supprimer la question", "deleteAnswer": "Supprimer la réponse", "moveUp": "Monter", "moveDown": "Descendre", "noQuestions": "Aucune question configurée.",
+      "triggers": "Visibilité conditionnelle", "triggerDescription": "Afficher cette question uniquement lorsque toutes les conditions suivantes sont remplies.", "alwaysShown": "Toujours affichée", "triggerSource": "Question précédente", "triggerAnswer": "Réponse requise", "addTrigger": "Ajouter une condition", "removeTrigger": "Supprimer la condition", "invalidReference": "Référence non valide", "triggerOrderError": "Cette condition fait référence à une question manquante, courante ou ultérieure. Modifiez-la ou supprimez-la.", "missingAnswerError": "La réponse référencée n’existe plus. Sélectionnez une autre réponse ou supprimez la condition.",
+      "importYaml": "Importer le YAML", "downloadYaml": "Télécharger le YAML", "reload": "Recharger", "save": "Enregistrer les critères", "loading": "Chargement des critères…", "saving": "Enregistrement…", "saved": "Enregistré avec succès.", "unsaved": "Modifications non enregistrées", "imported": "YAML importé dans le brouillon.",
+      "loadFailed": "Impossible de charger les critères.", "saveFailed": "Impossible d’enregistrer les critères.", "importFailed": "Impossible d’importer le YAML.", "downloadFailed": "Impossible de télécharger le YAML.", "migrationWarning": "Le YAML hérité a été normalisé. Vérifiez les décisions déduites avant l’enregistrement.", "confirmInvalidation": "Je comprends que ce changement peut invalider les résultats de sélection existants."
+    }
   },
   "search": {
     "title": "Recherche",

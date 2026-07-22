@@ -147,7 +147,17 @@
     "downloadYAML": "Download YAML",
     "saveCriteria": "Save criteria",
     "saving": "Saving...",
-    "savedSuccessfully": "Saved successfully"
+    "savedSuccessfully": "Saved successfully",
+    "criteriaBuilder": {
+      "visualBuilder": "Visual criteria builder", "visualBuilderDesc": "Configure citation fields and screening questions without editing YAML.",
+      "citationFields": "Citation fields", "l1Fields": "L1 fields (comma separated)", "doiField": "DOI source field",
+      "l1": "Title and abstract screening (L1)", "l2": "Full-text screening (L2)", "question": "Question", "questionText": "Question text", "context": "Additional context",
+      "answers": "Answers", "answerLabel": "Answer label", "decision": "Decision", "include": "Include", "exclude": "Exclude",
+      "addQuestion": "Add question", "addAnswer": "Add answer", "deleteQuestion": "Delete question", "deleteAnswer": "Delete answer", "moveUp": "Move up", "moveDown": "Move down", "noQuestions": "No questions configured.",
+      "triggers": "Conditional visibility", "triggerDescription": "Show this question only when all of the following are true.", "alwaysShown": "Always shown", "triggerSource": "Earlier question", "triggerAnswer": "Required answer", "addTrigger": "Add condition", "removeTrigger": "Remove condition", "invalidReference": "Invalid reference", "triggerOrderError": "This condition references a missing, current, or later question. Retarget it or remove the condition.", "missingAnswerError": "The referenced answer no longer exists. Select another answer or remove the condition.",
+      "importYaml": "Import YAML", "downloadYaml": "Download YAML", "reload": "Reload", "save": "Save criteria", "loading": "Loading criteria…", "saving": "Saving…", "saved": "Saved successfully.", "unsaved": "Unsaved changes", "imported": "YAML imported into the draft.",
+      "loadFailed": "Unable to load criteria.", "saveFailed": "Unable to save criteria.", "importFailed": "Unable to import YAML.", "downloadFailed": "Unable to download YAML.", "migrationWarning": "Legacy YAML was normalized. Review inferred decisions before saving.", "confirmInvalidation": "I understand this change may invalidate existing screening results."
+    }
   },
   "search": {
     "title": "Search",

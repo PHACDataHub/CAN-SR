@@ -20,15 +20,60 @@ from fastapi import HTTPException
 from fastapi import status
 from fastapi import UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from pydantic import ValidationError
 
 from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
+from ..criteria.models import CriteriaConfigV2
+from ..criteria.service import criteria_configuration_service
 from ..services.sr_db_service import srdb_service
 from ..services.user_db import user_db_service
 
 router = APIRouter()
+
+
+class CriteriaConfigSaveRequest(BaseModel):
+    expected_revision: int
+    force: bool = False
+    migration_fingerprint: str | None = None
+    criteria: CriteriaConfigV2
+
+
+class CriteriaYamlImportRequest(BaseModel):
+    criteria_yaml: str
+
+
+def _criteria_error(exc: ValueError) -> HTTPException:
+    if isinstance(exc, ValidationError):
+        errors = [
+            {
+                'path': list(error['loc']),
+                'code': error['type'],
+                'message': error['msg'],
+            }
+            for error in exc.errors(include_url=False)
+        ]
+    else:
+        errors = [
+            {'path': [], 'code': 'invalid_criteria', 'message': str(exc)},
+        ]
+    return HTTPException(status_code=422, detail={'errors': errors})
+
+
+def _require_migration_confirmation(result, fingerprint: str | None) -> None:
+    if result.source_format == 'legacy_yaml_v1' and result.requires_confirmation:
+        if fingerprint != result.fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    'code': 'migration_confirmation_required',
+                    'message': 'Preview and confirm the legacy migration before saving.',
+                    'fingerprint': result.fingerprint,
+                },
+            )
 
 
 class SystematicReviewCreate(BaseModel):
@@ -79,6 +124,7 @@ async def create_systematic_review(
     description: str | None = Form(None),
     criteria_file: UploadFile | None = File(None),
     criteria_yaml: str | None = Form(None),
+    migration_fingerprint: str | None = Form(None),
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
@@ -111,19 +157,20 @@ async def create_systematic_review(
             criteria_str = criteria_yaml
 
         if criteria_str:
-            criteria_obj = yaml.safe_load(criteria_str)
-            # ensure it's a mapping/dict
-            if criteria_obj is None:
-                criteria_obj = {}
-            elif not isinstance(criteria_obj, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail='Parsed YAML criteria must be a mapping/object at the top level',
-                )
-    except yaml.YAMLError as ye:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}",
-        )
+            normalized = criteria_configuration_service.parse_yaml(
+                criteria_str,
+            )
+            _require_migration_confirmation(normalized, migration_fingerprint)
+            criteria_obj = normalized.criteria.model_dump(
+                mode='json', exclude_none=True,
+            )
+            criteria_str = criteria_configuration_service.export_yaml(
+                normalized.criteria,
+            )
+    except (yaml.YAMLError, ValueError) as exc:
+        raise _criteria_error(exc) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
@@ -317,6 +364,135 @@ async def list_systematic_reviews_for_user(
     return results
 
 
+async def _load_criteria_review(sr_id: str, current_user: dict[str, Any]) -> dict[str, Any]:
+    review, _screening = await load_sr_and_check(
+        sr_id, current_user, srdb_service, require_screening=False,
+    )
+    return review
+
+
+@router.get('/{sr_id}/criteria-config')
+async def get_criteria_config(
+    sr_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    review = await _load_criteria_review(sr_id, current_user)
+    try:
+        if isinstance(review.get('criteria'), dict):
+            result = criteria_configuration_service.normalize(
+                review['criteria'],
+            )
+        elif review.get('criteria_yaml'):
+            result = criteria_configuration_service.parse_yaml(
+                review['criteria_yaml'], source_kind='backend_load',
+            )
+        else:
+            raise ValueError(
+                'No usable criteria configuration is stored for this review.',
+            )
+    except ValueError as exc:
+        raise _criteria_error(exc) from exc
+
+    response: dict[str, Any] = {
+        'criteria': result.criteria.model_dump(mode='json', exclude_none=True),
+        'revision': review.get('criteria_revision', 0),
+        'warnings': [item.model_dump(mode='json') for item in result.diagnostics],
+    }
+    if result.source_format == 'legacy_yaml_v1':
+        response['migration'] = {
+            'status': 'preview',
+            'source_format': result.source_format,
+            'fingerprint': result.fingerprint,
+            'requires_confirmation': result.requires_confirmation,
+            'stats': result.stats.model_dump() if result.stats else None,
+            'diagnostics': [item.model_dump(mode='json') for item in result.diagnostics],
+        }
+    return response
+
+
+@router.post('/{sr_id}/criteria-config/validate')
+async def validate_criteria_config(
+    sr_id: str,
+    criteria: CriteriaConfigV2,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    await _load_criteria_review(sr_id, current_user)
+    return {
+        'valid': True,
+        'criteria': criteria.model_dump(mode='json', exclude_none=True),
+        'warnings': [],
+    }
+
+
+@router.post('/{sr_id}/criteria-config/import-yaml')
+async def import_criteria_yaml(
+    sr_id: str,
+    payload: CriteriaYamlImportRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    await _load_criteria_review(sr_id, current_user)
+    try:
+        result = criteria_configuration_service.parse_yaml(
+            payload.criteria_yaml,
+        )
+    except ValueError as exc:
+        raise _criteria_error(exc) from exc
+    return result.model_dump(mode='json', exclude_none=True)
+
+
+@router.put('/{sr_id}/criteria-config')
+async def save_criteria_config(
+    sr_id: str,
+    payload: CriteriaConfigSaveRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    review = await _load_criteria_review(sr_id, current_user)
+    if (review.get('screening_db') or {}).get('table_name') and not payload.force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='This SR already has screening data. Pass force=true to confirm criteria invalidation.',
+        )
+    try:
+        stored = criteria_configuration_service.normalize(review['criteria'])
+    except (KeyError, ValueError):
+        stored = None
+    if stored:
+        _require_migration_confirmation(stored, payload.migration_fingerprint)
+    criteria = payload.criteria.model_dump(mode='json', exclude_none=True)
+    criteria_yaml = criteria_configuration_service.export_yaml(
+        payload.criteria,
+    )
+    saved = await run_in_threadpool(
+        srdb_service.save_criteria_config,
+        sr_id,
+        criteria,
+        criteria_yaml,
+        payload.expected_revision,
+        current_user.get('email') or current_user.get('id'),
+    )
+    return {
+        'criteria': criteria,
+        'revision': saved['revision'],
+        'warnings': [],
+        'invalidation': {'forced': payload.force, 'screening_data_present': bool(review.get('screening_db'))},
+    }
+
+
+@router.get('/{sr_id}/criteria-config/export-yaml', response_class=PlainTextResponse)
+async def export_criteria_yaml(
+    sr_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    response = await get_criteria_config(sr_id, current_user)
+    return PlainTextResponse(
+        criteria_configuration_service.export_yaml(response['criteria']),
+        media_type='application/yaml',
+        headers={
+            'Content-Disposition': f'attachment; filename="criteria-{sr_id}.yaml"',
+        },
+    )
+
+
 @router.get('/{sr_id}', response_model=SystematicReviewRead)
 async def get_systematic_review(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
     """
@@ -383,6 +559,7 @@ async def update_systematic_review_criteria(
     criteria_file: UploadFile | None = File(None),
     criteria_yaml: str | None = Form(None),
     force: str | None = Form(None),
+    migration_fingerprint: str | None = Form(None),
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """
@@ -435,18 +612,18 @@ async def update_systematic_review_criteria(
                 detail='Either criteria_file or criteria_yaml must be provided',
             )
 
-        criteria_obj = yaml.safe_load(criteria_str)
-        if criteria_obj is None:
-            criteria_obj = {}
-        elif not isinstance(criteria_obj, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail='Parsed YAML criteria must be a mapping/object at the top level',
-            )
-    except yaml.YAMLError as ye:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid YAML provided: {ye}",
+        normalized = criteria_configuration_service.parse_yaml(criteria_str)
+        _require_migration_confirmation(normalized, migration_fingerprint)
+        criteria_obj = normalized.criteria.model_dump(
+            mode='json', exclude_none=True,
         )
+        criteria_str = criteria_configuration_service.export_yaml(
+            normalized.criteria,
+        )
+    except (yaml.YAMLError, ValueError) as exc:
+        raise _criteria_error(exc) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
