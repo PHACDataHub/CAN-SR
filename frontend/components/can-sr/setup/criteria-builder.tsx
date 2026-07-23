@@ -4,6 +4,7 @@ import type { Dispatch } from 'react'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, ScreeningQuestion } from './criteria-types'
 import ParameterBuilder from './parameter-builder'
+import type { CriteriaDiagnostic } from './criteria-validation'
 
 type SourceOption = { stage: 'l1' | 'l2'; question: ScreeningQuestion }
 
@@ -11,6 +12,7 @@ type Props = {
   state: CriteriaDraftState
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
+  diagnostics?: CriteriaDiagnostic[]
 }
 
 function QuestionCard({
@@ -21,6 +23,7 @@ function QuestionCard({
   dispatch,
   labels,
   sources,
+  diagnostics,
 }: {
   question: ScreeningQuestion
   index: number
@@ -29,10 +32,11 @@ function QuestionCard({
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
   sources: SourceOption[]
+  diagnostics: CriteriaDiagnostic[]
 }) {
   const prefix = `${stage}-${question.id}`
   return (
-    <article className="rounded-lg border border-gray-200 bg-white p-4" aria-labelledby={`${prefix}-title`}>
+    <article id={`criteria-item-${question.id}`} className={`rounded-lg border bg-white p-4 ${diagnostics.length ? 'border-red-400' : 'border-gray-200'}`} aria-labelledby={`${prefix}-title`}>
       <div className="flex items-center gap-2">
         <strong id={`${prefix}-title`} className="text-sm text-gray-700">{labels.question} {index + 1}</strong>
         <div className="ml-auto flex gap-1">
@@ -102,11 +106,12 @@ function QuestionCard({
           if (source && answer) dispatch({ type: 'add-trigger', stage, questionId: question.id, sourceItemId: source.question.id, optionId: answer.id })
         }} className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm disabled:opacity-40"><Plus className="h-4 w-4" />{labels.addTrigger}</button>
       </fieldset>
+      {diagnostics.length ? <ul className="mt-3 list-disc rounded bg-red-50 p-3 pl-8 text-sm text-red-800">{diagnostics.map((item) => <li key={`${item.path}-${item.message}`}>{item.message}</li>)}</ul> : null}
     </article>
   )
 }
 
-export default function CriteriaBuilder({ state, dispatch, labels }: Props) {
+export default function CriteriaBuilder({ state, dispatch, labels, diagnostics = [] }: Props) {
   const ordered: SourceOption[] = [
     ...state.criteria.l1.map((question) => ({ stage: 'l1' as const, question })),
     ...state.criteria.l2.map((question) => ({ stage: 'l2' as const, question })),
@@ -129,11 +134,11 @@ export default function CriteriaBuilder({ state, dispatch, labels }: Props) {
           {state.criteria[stage].length === 0 ? <p className="rounded-md border border-dashed p-4 text-sm text-gray-500">{labels.noQuestions}</p> : null}
           {state.criteria[stage].map((question, index) => {
             const position = ordered.findIndex((item) => item.question.id === question.id)
-            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} />
+            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} />
           })}
         </section>
       ))}
-      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} />
+      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} />
     </div>
   )
 }

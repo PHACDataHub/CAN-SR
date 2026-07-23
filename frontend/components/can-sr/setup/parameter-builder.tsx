@@ -3,6 +3,7 @@
 import type { Dispatch } from 'react'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, Parameter, ParameterOption, ScreeningQuestion } from './criteria-types'
+import type { CriteriaDiagnostic } from './criteria-validation'
 
 type TriggerSource = { stage: 'l1' | 'l2' | 'parameters'; id: string; label: string; options: ParameterOption[] }
 
@@ -11,7 +12,7 @@ const questionSource = (stage: 'l1' | 'l2', question: ScreeningQuestion): Trigge
   options: question.answers.map(({ id, label, context }) => ({ id, label, context })),
 })
 
-function ParameterCard({ parameter, index, count, sources, dependants, dispatch, labels }: {
+function ParameterCard({ parameter, index, count, sources, dependants, dispatch, labels, diagnostics }: {
   parameter: Parameter
   index: number
   count: number
@@ -19,11 +20,12 @@ function ParameterCard({ parameter, index, count, sources, dependants, dispatch,
   dependants: string[]
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
+  diagnostics: CriteriaDiagnostic[]
 }) {
   const prefix = `parameter-${parameter.id}`
   const typeChangeBlocked = parameter.type === 'selection' && dependants.length > 0
   const update = (field: 'name' | 'description' | 'unit_instructions' | 'calculation', value: string) => dispatch({ type: 'update-parameter', parameterId: parameter.id, field, value })
-  return <article className="rounded-lg border border-gray-200 bg-white p-4" aria-labelledby={`${prefix}-title`}>
+  return <article id={`criteria-item-${parameter.id}`} className={`rounded-lg border bg-white p-4 ${diagnostics.length ? 'border-red-400' : 'border-gray-200'}`} aria-labelledby={`${prefix}-title`}>
     <div className="flex items-center gap-2">
       <strong id={`${prefix}-title`} className="text-sm text-gray-700">{labels.parameter} {index + 1}</strong>
       <div className="ml-auto flex gap-1">
@@ -68,10 +70,11 @@ function ParameterCard({ parameter, index, count, sources, dependants, dispatch,
       })}
       <button type="button" disabled={sources.length === 0} onClick={() => { const source = sources[0]; const option = source?.options[0]; if (source && option) dispatch({ type: 'add-parameter-trigger', parameterId: parameter.id, sourceItemId: source.id, optionId: option.id }) }} className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm disabled:opacity-40"><Plus className="h-4 w-4" />{labels.addTrigger}</button>
     </fieldset>
+    {diagnostics.length ? <ul className="mt-3 list-disc rounded bg-red-50 p-3 pl-8 text-sm text-red-800">{diagnostics.map((item) => <li key={`${item.path}-${item.message}`}>{item.message}</li>)}</ul> : null}
   </article>
 }
 
-export default function ParameterBuilder({ state, dispatch, labels }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string> }) {
+export default function ParameterBuilder({ state, dispatch, labels, diagnostics = [] }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[] }) {
   const screeningSources = [...state.criteria.l1.map((item) => questionSource('l1', item)), ...state.criteria.l2.map((item) => questionSource('l2', item))]
   const itemLabels = new Map([...state.criteria.l1.map((item) => [item.id, item.question] as const), ...state.criteria.l2.map((item) => [item.id, item.question] as const), ...state.criteria.parameters.map((item) => [item.id, item.name] as const)])
   return <section className="space-y-3" aria-labelledby="parameters-heading">
@@ -80,7 +83,7 @@ export default function ParameterBuilder({ state, dispatch, labels }: { state: C
     {state.criteria.parameters.map((parameter, index) => {
       const earlierParameters: TriggerSource[] = state.criteria.parameters.slice(0, index).filter((item) => item.type === 'selection').map((item) => ({ stage: 'parameters', id: item.id, label: item.name, options: item.options }))
       const dependants = state.criteria.parameters.filter((item) => item.id !== parameter.id && item.trigger.all.some((condition) => condition.source_item_id === parameter.id)).map((item) => itemLabels.get(item.id) || item.id)
-      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} dispatch={dispatch} labels={labels} />
+      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} dispatch={dispatch} labels={labels} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} />
     })}
   </section>
 }
