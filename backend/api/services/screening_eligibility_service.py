@@ -26,7 +26,11 @@ def _answer_object(value: Any) -> dict[str, Any]:
 
 
 def selected_answer(row: dict[str, Any], question: str) -> str | None:
-    """Return the effective answer using human-over-AI precedence."""
+    """Return the effective answer using human-over-main-AI precedence.
+
+    The critical agent is advisory: disagreements are routed to human review
+    but do not change the main screening agent's progression decision.
+    """
     core = snake_case(question, max_len=56)
     if not core:
         return None
@@ -90,7 +94,15 @@ class ScreeningEligibilityService:
         criteria: dict[str, Any] | None,
         table_name: str,
         target_stage: str,
+        repair_decisions: bool = True,
     ) -> list[int]:
+        """Return citation IDs eligible for ``target_stage``.
+
+        Progression callers should keep ``repair_decisions=True`` so derived
+        decision caches are refreshed before they are used. Read-only reporting
+        callers can set it to ``False`` to avoid turning concurrent metrics
+        requests into repeated, table-wide writes.
+        """
         stage = str(target_stage or '').strip().lower()
         if stage not in {'l1', 'l2', 'extract'}:
             raise ValueError(f'Unsupported screening stage: {target_stage!r}')
@@ -98,9 +110,12 @@ class ScreeningEligibilityService:
         if stage == 'l1':
             return self.repository.list_citation_ids(None, table_name)
 
-        # Later stages depend on derived decisions. Repair first and fail loudly
-        # if repair fails; an empty list would be a misleading valid result.
-        self.repository.backfill_human_decisions(criteria or {}, table_name)
+        # Later stages depend on derived decisions. Progression paths repair
+        # first and fail loudly; reporting paths only read the existing cache.
+        if repair_decisions:
+            self.repository.backfill_human_decisions(
+                criteria or {}, table_name,
+            )
         source_stage = 'l1' if stage == 'l2' else 'l2'
         return self.repository.list_citation_ids(source_stage, table_name)
 
