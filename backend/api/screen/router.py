@@ -2215,7 +2215,10 @@ async def get_screening_metrics(
     try:
         ids = await run_in_threadpool(
             screening_eligibility_service.list_eligible_ids,
-            criteria=cp, table_name=table_name, target_stage=step_norm,
+            criteria=cp,
+            table_name=table_name,
+            target_stage=step_norm,
+            repair_decisions=False,
         )
     except Exception as e:
         raise HTTPException(
@@ -2768,7 +2771,10 @@ async def get_screening_calibration(
     try:
         ids = await run_in_threadpool(
             screening_eligibility_service.list_eligible_ids,
-            criteria=cp, table_name=table_name, target_stage=step_norm,
+            criteria=cp,
+            table_name=table_name,
+            target_stage=step_norm,
+            repair_decisions=False,
         )
     except Exception as e:
         raise HTTPException(
@@ -3070,7 +3076,10 @@ async def get_live_confidence_histogram(
     try:
         ids = await run_in_threadpool(
             screening_eligibility_service.list_eligible_ids,
-            criteria=cp, table_name=table_name, target_stage=step_norm,
+            criteria=cp,
+            table_name=table_name,
+            target_stage=step_norm,
+            repair_decisions=False,
         )
     except Exception as e:
         raise HTTPException(
@@ -3213,7 +3222,10 @@ async def get_calibration_samples(
     try:
         ids = await run_in_threadpool(
             screening_eligibility_service.list_eligible_ids,
-            criteria=cp, table_name=table_name, target_stage=step_norm,
+            criteria=cp,
+            table_name=table_name,
+            target_stage=step_norm,
+            repair_decisions=False,
         )
     except Exception as e:
         raise HTTPException(
