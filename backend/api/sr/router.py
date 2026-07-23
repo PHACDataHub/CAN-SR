@@ -29,6 +29,7 @@ from ..core.config import settings
 from ..core.security import get_current_active_user
 from ..criteria.models import CriteriaConfigV2
 from ..criteria.service import criteria_configuration_service
+from ..services.citation_field_service import discover_citation_fields
 from ..services.sr_db_service import srdb_service
 from ..services.user_db import user_db_service
 
@@ -369,6 +370,15 @@ async def _load_criteria_review(sr_id: str, current_user: dict[str, Any]) -> dic
         sr_id, current_user, srdb_service, require_screening=False,
     )
     return review
+
+
+@router.get('/{sr_id}/citation-fields')
+async def get_citation_fields(
+    sr_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    review = await _load_criteria_review(sr_id, current_user)
+    return await run_in_threadpool(discover_citation_fields, review)
 
 
 @router.get('/{sr_id}/criteria-config')

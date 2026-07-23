@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, ScreeningQuestion } from './criteria-types'
 import ParameterBuilder from './parameter-builder'
 import type { CriteriaDiagnostic } from './criteria-validation'
+import CitationFieldSelector, { type CitationFieldContract } from './citation-field-selector'
 
 type SourceOption = { stage: 'l1' | 'l2'; question: ScreeningQuestion }
 
@@ -13,6 +14,7 @@ type Props = {
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
   diagnostics?: CriteriaDiagnostic[]
+  citationFields?: CitationFieldContract
 }
 
 function QuestionCard({
@@ -24,6 +26,8 @@ function QuestionCard({
   labels,
   sources,
   diagnostics,
+  sourceReferenced,
+  referencedAnswerIds,
 }: {
   question: ScreeningQuestion
   index: number
@@ -33,6 +37,8 @@ function QuestionCard({
   labels: Record<string, string>
   sources: SourceOption[]
   diagnostics: CriteriaDiagnostic[]
+  sourceReferenced: boolean
+  referencedAnswerIds: Set<string>
 }) {
   const prefix = `${stage}-${question.id}`
   return (
@@ -42,7 +48,9 @@ function QuestionCard({
         <div className="ml-auto flex gap-1">
           <button type="button" aria-label={`${labels.moveUp} ${index + 1}`} disabled={index === 0} onClick={() => dispatch({ type: 'move-question', stage, questionId: question.id, direction: -1 })} className="rounded border p-2 disabled:opacity-40"><ArrowUp className="h-4 w-4" /></button>
           <button type="button" aria-label={`${labels.moveDown} ${index + 1}`} disabled={index === count - 1} onClick={() => dispatch({ type: 'move-question', stage, questionId: question.id, direction: 1 })} className="rounded border p-2 disabled:opacity-40"><ArrowDown className="h-4 w-4" /></button>
-          <button type="button" aria-label={`${labels.deleteQuestion} ${index + 1}`} onClick={() => dispatch({ type: 'delete-question', stage, questionId: question.id })} className="rounded border border-red-200 p-2 text-red-700"><Trash2 className="h-4 w-4" /></button>
+          <button type="button" aria-label={`${labels.deleteQuestion} ${index + 1}`} onClick={() => {
+            if (!sourceReferenced || window.confirm(labels.deleteDependencyWarning)) dispatch({ type: 'delete-question', stage, questionId: question.id })
+          }} className="rounded border border-red-200 p-2 text-red-700"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
       <label className="mt-3 block text-sm font-medium" htmlFor={`${prefix}-question`}>{labels.questionText}</label>
@@ -63,7 +71,9 @@ function QuestionCard({
                 <option value="include">{labels.include}</option><option value="exclude">{labels.exclude}</option>
               </select>
             </div>
-            <button type="button" aria-label={`${labels.deleteAnswer} ${answerIndex + 1}`} disabled={question.answers.length <= 2} onClick={() => dispatch({ type: 'delete-answer', stage, questionId: question.id, answerId: answer.id })} className="self-end rounded border border-red-200 p-2 text-red-700 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
+            <button type="button" aria-label={`${labels.deleteAnswer} ${answerIndex + 1}`} disabled={question.answers.length <= 2} onClick={() => {
+              if (!referencedAnswerIds.has(answer.id) || window.confirm(labels.deleteDependencyWarning)) dispatch({ type: 'delete-answer', stage, questionId: question.id, answerId: answer.id })
+            }} className="self-end rounded border border-red-200 p-2 text-red-700 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
           </div>
         ))}
       </fieldset>
@@ -111,20 +121,15 @@ function QuestionCard({
   )
 }
 
-export default function CriteriaBuilder({ state, dispatch, labels, diagnostics = [] }: Props) {
+export default function CriteriaBuilder({ state, dispatch, labels, diagnostics = [], citationFields = { fields: [], doi_suggestions: [], unavailable_configured_fields: [] } }: Props) {
   const ordered: SourceOption[] = [
     ...state.criteria.l1.map((question) => ({ stage: 'l1' as const, question })),
     ...state.criteria.l2.map((question) => ({ stage: 'l2' as const, question })),
   ]
+  const conditions = [...state.criteria.l1, ...state.criteria.l2, ...state.criteria.parameters].flatMap((item) => item.trigger.all)
   return (
     <div className="space-y-6">
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h4 className="font-semibold">{labels.citationFields}</h4>
-        <label className="mt-3 block text-sm font-medium" htmlFor="criteria-l1-fields">{labels.l1Fields}</label>
-        <input id="criteria-l1-fields" value={state.criteria.citation_fields.l1_include.join(', ')} onChange={(event) => dispatch({ type: 'set-citation-fields', value: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} className="mt-1 w-full rounded-md border px-3 py-2" placeholder="Title, Abstract" />
-        <label className="mt-3 block text-sm font-medium" htmlFor="criteria-doi-field">{labels.doiField}</label>
-        <input id="criteria-doi-field" value={state.criteria.citation_fields.doi || ''} onChange={(event) => dispatch({ type: 'set-doi', value: event.target.value || null })} className="mt-1 w-full rounded-md border px-3 py-2" placeholder="DOI" />
-      </section>
+      <CitationFieldSelector state={state} dispatch={dispatch} contract={citationFields} labels={labels} />
       {(['l1', 'l2'] as const).map((stage) => (
         <section key={stage} className="space-y-3" aria-labelledby={`${stage}-heading`}>
           <div className="flex items-center justify-between">
@@ -134,7 +139,7 @@ export default function CriteriaBuilder({ state, dispatch, labels, diagnostics =
           {state.criteria[stage].length === 0 ? <p className="rounded-md border border-dashed p-4 text-sm text-gray-500">{labels.noQuestions}</p> : null}
           {state.criteria[stage].map((question, index) => {
             const position = ordered.findIndex((item) => item.question.id === question.id)
-            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} />
+            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} sourceReferenced={conditions.some((condition) => condition.source_item_id === question.id)} referencedAnswerIds={new Set(conditions.filter((condition) => condition.source_item_id === question.id).map((condition) => condition.option_id))} />
           })}
         </section>
       ))}

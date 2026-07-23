@@ -6,6 +6,10 @@ import CriteriaBuilder from './criteria-builder'
 import { criteriaDraftReducer, emptyCriteria, type CriteriaConfig } from './criteria-types'
 import CriteriaPreview from './criteria-preview'
 import { backendDiagnostics, type CriteriaDiagnostic, validateCriteriaDraft } from './criteria-validation'
+import YamlImportPreview, { type CriteriaImportPreview } from './yaml-import-preview'
+import CriteriaRecoveryDialog, { type RecoveryMode } from './criteria-recovery-dialog'
+import { downloadCriteriaDraft } from './criteria-download'
+import type { CitationFieldContract } from './citation-field-selector'
 
 type Props = { srId: string; labels: Record<string, string>; hasScreeningData: boolean }
 
@@ -15,6 +19,9 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
   const [migrationFingerprint, setMigrationFingerprint] = useState<string | null>(null)
   const [force, setForce] = useState(false)
   const [serverDiagnostics, setServerDiagnostics] = useState<CriteriaDiagnostic[]>([])
+  const [importPreview, setImportPreview] = useState<CriteriaImportPreview | null>(null)
+  const [recoveryMode, setRecoveryMode] = useState<RecoveryMode | null>(null)
+  const [citationFields, setCitationFields] = useState<CitationFieldContract>({ fields: [], doi_suggestions: [], unavailable_configured_fields: [] })
   const clientDiagnostics = useMemo(() => validateCriteriaDraft(state.criteria), [state.criteria])
   const diagnostics = [...clientDiagnostics, ...serverDiagnostics]
 
@@ -25,6 +32,8 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
     const data = await response.json().catch(() => ({}))
     if (!response.ok) { setStatus(data?.detail || labels.loadFailed); return }
     dispatch({ type: 'replace', criteria: data.criteria as CriteriaConfig, revision: data.revision || 0 })
+    const fieldsResponse = await authenticatedFetch(`/api/can-sr/reviews/citation-fields?sr_id=${encodeURIComponent(srId)}`)
+    if (fieldsResponse.ok) setCitationFields(await fieldsResponse.json())
     setMigrationFingerprint(data?.migration?.fingerprint || null)
     setStatus(data?.migration?.requires_confirmation ? labels.migrationWarning : '')
   }, [endpoint, labels])
@@ -68,6 +77,11 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
       const detail = data?.detail
+      if (response.status === 409) {
+        setRecoveryMode('conflict')
+        setStatus(labels.conflictDetected)
+        return
+      }
       setStatus(typeof detail === 'string' ? detail : detail?.message || labels.saveFailed)
       return
     }
@@ -82,10 +96,17 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) { setStatus(data?.detail?.errors?.[0]?.message || labels.importFailed); return }
-    dispatch({ type: 'replace', criteria: data.criteria, revision: state.revision })
-    dispatch({ type: 'set-citation-fields', value: data.criteria.citation_fields.l1_include })
-    setMigrationFingerprint(data.fingerprint || null)
-    setStatus(data.requires_confirmation ? labels.migrationWarning : labels.imported)
+    setImportPreview(data as CriteriaImportPreview)
+    setStatus(labels.importReady)
+  }
+
+  const acceptImport = () => {
+    if (!importPreview) return
+    dispatch({ type: 'replace', criteria: importPreview.criteria, revision: state.revision })
+    dispatch({ type: 'set-citation-fields', value: importPreview.criteria.citation_fields.l1_include })
+    setMigrationFingerprint(importPreview.fingerprint || null)
+    setStatus(importPreview.requires_confirmation ? labels.migrationWarning : labels.imported)
+    setImportPreview(null)
   }
 
   const downloadYaml = async () => {
@@ -103,7 +124,7 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
         <div className="mr-auto"><h3 id="visual-criteria-heading" className="text-lg font-semibold">{labels.visualBuilder}</h3><p className="text-sm text-gray-600">{labels.visualBuilderDesc}</p></div>
         <label className="cursor-pointer rounded-md border px-3 py-2 text-sm">{labels.importYaml}<input className="sr-only" type="file" accept=".yaml,.yml,text/yaml" onChange={(event) => void importYaml(event.target.files?.[0] || null)} /></label>
         <button type="button" onClick={() => void downloadYaml()} className="rounded-md border px-3 py-2 text-sm">{labels.downloadYaml}</button>
-        <button type="button" onClick={() => void load()} className="rounded-md border px-3 py-2 text-sm">{labels.reload}</button>
+        <button type="button" onClick={() => state.dirty ? setRecoveryMode('reload') : void load()} className="rounded-md border px-3 py-2 text-sm">{labels.reload}</button>
         <button type="button" disabled={!state.dirty || clientDiagnostics.length > 0} onClick={() => void save()} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
       </div>
       {hasScreeningData ? <label className="mb-4 flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm"><input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />{labels.confirmInvalidation}</label> : null}
@@ -113,7 +134,9 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
         {diagnostics.length ? <ul className="mt-2 list-disc pl-5">{diagnostics.map((item, index) => <li key={`${item.path}-${index}`}><button type="button" className="text-left underline" onClick={() => document.getElementById(item.itemId ? `criteria-item-${item.itemId}` : 'criteria-l1-fields')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>{item.message}</button></li>)}</ul> : null}
       </div>
       <CriteriaPreview criteria={state.criteria} labels={labels} />
-      <div className="mt-6"><CriteriaBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} /></div>
+      <div className="mt-6"><CriteriaBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} /></div>
+      <YamlImportPreview preview={importPreview} labels={labels} onCancel={() => { setImportPreview(null); setStatus(labels.importCancelled) }} onAccept={acceptImport} />
+      <CriteriaRecoveryDialog mode={recoveryMode} labels={labels} onCancel={() => setRecoveryMode(null)} onExport={() => downloadCriteriaDraft(state.criteria)} onReload={() => { setRecoveryMode(null); void load() }} />
     </section>
   )
 }

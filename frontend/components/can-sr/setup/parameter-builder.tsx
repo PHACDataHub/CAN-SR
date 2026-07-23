@@ -12,12 +12,13 @@ const questionSource = (stage: 'l1' | 'l2', question: ScreeningQuestion): Trigge
   options: question.answers.map(({ id, label, context }) => ({ id, label, context })),
 })
 
-function ParameterCard({ parameter, index, count, sources, dependants, dispatch, labels, diagnostics }: {
+function ParameterCard({ parameter, index, count, sources, dependants, referencedOptionIds, dispatch, labels, diagnostics }: {
   parameter: Parameter
   index: number
   count: number
   sources: TriggerSource[]
   dependants: string[]
+  referencedOptionIds: Set<string>
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
   diagnostics: CriteriaDiagnostic[]
@@ -31,7 +32,9 @@ function ParameterCard({ parameter, index, count, sources, dependants, dispatch,
       <div className="ml-auto flex gap-1">
         <button type="button" aria-label={`${labels.moveUpParameter} ${index + 1}`} disabled={index === 0} onClick={() => dispatch({ type: 'move-parameter', parameterId: parameter.id, direction: -1 })} className="rounded border p-2 disabled:opacity-40"><ArrowUp className="h-4 w-4" /></button>
         <button type="button" aria-label={`${labels.moveDownParameter} ${index + 1}`} disabled={index === count - 1} onClick={() => dispatch({ type: 'move-parameter', parameterId: parameter.id, direction: 1 })} className="rounded border p-2 disabled:opacity-40"><ArrowDown className="h-4 w-4" /></button>
-        <button type="button" aria-label={`${labels.deleteParameter} ${index + 1}`} onClick={() => dispatch({ type: 'delete-parameter', parameterId: parameter.id })} className="rounded border border-red-200 p-2 text-red-700"><Trash2 className="h-4 w-4" /></button>
+        <button type="button" aria-label={`${labels.deleteParameter} ${index + 1}`} onClick={() => {
+          if (!dependants.length || window.confirm(labels.deleteDependencyWarning)) dispatch({ type: 'delete-parameter', parameterId: parameter.id })
+        }} className="rounded border border-red-200 p-2 text-red-700"><Trash2 className="h-4 w-4" /></button>
       </div>
     </div>
     <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -50,7 +53,9 @@ function ParameterCard({ parameter, index, count, sources, dependants, dispatch,
       {parameter.options.map((option, optionIndex) => <div key={option.id} className="grid gap-2 rounded-md bg-gray-50 p-3 md:grid-cols-[1fr_1fr_auto]">
         <div><label className="block text-xs font-medium" htmlFor={`${prefix}-${option.id}-label`}>{labels.optionLabel} {optionIndex + 1}</label><input id={`${prefix}-${option.id}-label`} value={option.label} onChange={(event) => dispatch({ type: 'update-option', parameterId: parameter.id, optionId: option.id, field: 'label', value: event.target.value })} className="mt-1 w-full rounded border px-2 py-1.5" /></div>
         <div><label className="block text-xs font-medium" htmlFor={`${prefix}-${option.id}-context`}>{labels.optionContext}</label><input id={`${prefix}-${option.id}-context`} value={option.context || ''} onChange={(event) => dispatch({ type: 'update-option', parameterId: parameter.id, optionId: option.id, field: 'context', value: event.target.value })} className="mt-1 w-full rounded border px-2 py-1.5" /></div>
-        <button type="button" aria-label={`${labels.deleteOption} ${optionIndex + 1}`} disabled={parameter.options.length <= 1} onClick={() => dispatch({ type: 'delete-option', parameterId: parameter.id, optionId: option.id })} className="self-end rounded border border-red-200 p-2 text-red-700 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
+        <button type="button" aria-label={`${labels.deleteOption} ${optionIndex + 1}`} disabled={parameter.options.length <= 1} onClick={() => {
+          if (!referencedOptionIds.has(option.id) || window.confirm(labels.deleteDependencyWarning)) dispatch({ type: 'delete-option', parameterId: parameter.id, optionId: option.id })
+        }} className="self-end rounded border border-red-200 p-2 text-red-700 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
       </div>)}
       <button type="button" onClick={() => dispatch({ type: 'add-option', parameterId: parameter.id })} className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm"><Plus className="h-4 w-4" />{labels.addOption}</button>
     </fieldset> : null}
@@ -77,13 +82,14 @@ function ParameterCard({ parameter, index, count, sources, dependants, dispatch,
 export default function ParameterBuilder({ state, dispatch, labels, diagnostics = [] }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[] }) {
   const screeningSources = [...state.criteria.l1.map((item) => questionSource('l1', item)), ...state.criteria.l2.map((item) => questionSource('l2', item))]
   const itemLabels = new Map([...state.criteria.l1.map((item) => [item.id, item.question] as const), ...state.criteria.l2.map((item) => [item.id, item.question] as const), ...state.criteria.parameters.map((item) => [item.id, item.name] as const)])
+  const allConditions = state.criteria.parameters.flatMap((item) => item.trigger.all)
   return <section className="space-y-3" aria-labelledby="parameters-heading">
     <div className="flex items-center justify-between"><h4 id="parameters-heading" className="font-semibold">{labels.parameters}</h4><button type="button" onClick={() => dispatch({ type: 'add-parameter' })} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white"><Plus className="h-4 w-4" />{labels.addParameter}</button></div>
     {state.criteria.parameters.length === 0 ? <p className="rounded-md border border-dashed p-4 text-sm text-gray-500">{labels.noParameters}</p> : null}
     {state.criteria.parameters.map((parameter, index) => {
       const earlierParameters: TriggerSource[] = state.criteria.parameters.slice(0, index).filter((item) => item.type === 'selection').map((item) => ({ stage: 'parameters', id: item.id, label: item.name, options: item.options }))
       const dependants = state.criteria.parameters.filter((item) => item.id !== parameter.id && item.trigger.all.some((condition) => condition.source_item_id === parameter.id)).map((item) => itemLabels.get(item.id) || item.id)
-      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} dispatch={dispatch} labels={labels} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} />
+      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} referencedOptionIds={new Set(allConditions.filter((condition) => condition.source_item_id === parameter.id).map((condition) => condition.option_id))} dispatch={dispatch} labels={labels} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} />
     })}
   </section>
 }

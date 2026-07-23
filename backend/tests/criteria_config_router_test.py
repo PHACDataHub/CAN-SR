@@ -7,6 +7,7 @@ from unittest.mock import patch
 from api.criteria.models import CriteriaConfigV2
 from api.sr.router import CriteriaConfigSaveRequest
 from api.sr.router import CriteriaYamlImportRequest
+from api.sr.router import get_citation_fields
 from api.sr.router import get_criteria_config
 from api.sr.router import import_criteria_yaml
 from api.sr.router import save_criteria_config
@@ -24,6 +25,19 @@ USER = {'id': 'owner-id', 'email': 'owner@example.test'}
 
 
 class CriteriaConfigRouterTests(unittest.IsolatedAsyncioTestCase):
+    @patch('api.sr.router.discover_citation_fields')
+    @patch('api.sr.router._load_criteria_review', new_callable=AsyncMock)
+    async def test_citation_fields_uses_authorized_review(self, load_review: AsyncMock, discover) -> None:
+        review = {'screening_db': {'table_name': 'review_citations'}}
+        load_review.return_value = review
+        discover.return_value = {
+            'fields': [], 'doi_suggestions': [], 'unavailable_configured_fields': [],
+        }
+        response = await get_citation_fields('review-id', USER)
+        load_review.assert_awaited_once_with('review-id', USER)
+        discover.assert_called_once_with(review)
+        self.assertEqual(response['fields'], [])
+
     @patch('api.sr.router._load_criteria_review', new_callable=AsyncMock)
     async def test_get_normalizes_legacy_without_persisting(self, load_review: AsyncMock) -> None:
         load_review.return_value = {

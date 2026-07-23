@@ -1,7 +1,7 @@
 import { useReducer } from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import CriteriaBuilder from './criteria-builder'
 import { criteriaDraftReducer, emptyCriteria } from './criteria-types'
 
@@ -58,6 +58,7 @@ describe('CriteriaBuilder', () => {
 
   it('surfaces a missing source after deletion without silently removing the trigger', async () => {
     const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<Harness />)
     const addQuestion = screen.getAllByRole('button', { name: /addQuestion/ })[0]
     await user.click(addQuestion); await user.click(addQuestion)
