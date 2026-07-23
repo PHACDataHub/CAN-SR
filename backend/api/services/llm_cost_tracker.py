@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime
 from datetime import timezone
 from decimal import Decimal
-from typing import Optional
 
 from .postgres_auth import postgres_server
 
