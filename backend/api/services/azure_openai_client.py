@@ -130,18 +130,15 @@ class CachedTokenProvider:
 
 class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
+    # Pricing per 1k tokens
     MODEL_PRICING_CAD = {
         'default': {
+            'prompt': Decimal('1000'),
+            'completion': Decimal('20000'),
+        },
+        'GPT-5.4-Mini': {
             'prompt': Decimal('0.0001'),
             'completion': Decimal('0.0002'),
-        },
-        'GPT-5-mini': {
-            'prompt': Decimal('0.0001'),
-            'completion': Decimal('0.0002'),
-        },
-        'GPT-4.1': {
-            'prompt': Decimal('0.0003'),
-            'completion': Decimal('0.0005'),
         },
     }
 
