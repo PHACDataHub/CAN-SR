@@ -3,6 +3,7 @@
 import type { Dispatch } from 'react'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, ScreeningQuestion } from './criteria-types'
+import ParameterBuilder from './parameter-builder'
 
 type SourceOption = { stage: 'l1' | 'l2'; question: ScreeningQuestion }
 
@@ -132,6 +133,7 @@ export default function CriteriaBuilder({ state, dispatch, labels }: Props) {
           })}
         </section>
       ))}
+      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} />
     </div>
   )
 }
