@@ -755,6 +755,30 @@ def _questions_for_step(cp: Any, step_norm: str) -> list[str]:
     return _get(step_norm)
 
 
+def _build_llm_tracking(
+    *,
+    current_user: dict[str, Any],
+    sr_id: str,
+    model: str | None = None,
+) -> dict[str, Any]:
+    user_id = str(
+        current_user.get('email') or
+        current_user.get('id') or
+        current_user.get('sub')
+        or 'unknown',
+    ).strip()
+
+    tracking: dict[str, Any] = {
+        'user_id': user_id,
+        'sr_id': str(sr_id).strip() or None,
+    }
+
+    if model:
+        tracking['model'] = model
+
+    return tracking
+
+
 class FulltextRunRequest(BaseModel):
     sr_id: str = Field(..., description='Systematic review id')
     citation_id: int = Field(
@@ -857,6 +881,12 @@ async def classify_citation(
     )
     llm_response: str
 
+    tracking = _build_llm_tracking(
+        current_user=current_user,
+        sr_id=sr_id,
+        model=payload.model,
+    )
+
     if (payload.screening_step or '').lower() == 'l2':
         fulltext = row.get('fulltext') or ''
 
@@ -934,6 +964,7 @@ async def classify_citation(
                 model=payload.model,
                 max_tokens=payload.max_tokens or 2000,
                 temperature=payload.temperature or 0.0,
+                tracking=tracking,
             )
         else:
             llm_response = await azure_openai_client.simple_chat(
@@ -942,6 +973,7 @@ async def classify_citation(
                 model=payload.model,
                 max_tokens=payload.max_tokens or 2000,
                 temperature=payload.temperature or 0.0,
+                tracking=tracking,
             )
     else:
         prompt = PROMPT_JSON_TEMPLATE.format(
@@ -956,6 +988,7 @@ async def classify_citation(
             model=payload.model,
             max_tokens=payload.max_tokens or 2000,
             temperature=payload.temperature or 0.0,
+            tracking=tracking,
         )
 
     # Parse JSON (assume valid JSON) - try/except only
@@ -1270,12 +1303,20 @@ async def run_title_abstract_agentic(
 
         t0 = time.time()
         messages = [{'role': 'user', 'content': prompt}]
+
+        tracking = _build_llm_tracking(
+            current_user=current_user,
+            sr_id=sr_id,
+            model=payload.model,
+        )
+
         resp = await azure_openai_client.chat_completion(
             messages=messages,
             model=payload.model,
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             stream=False,
+            tracking=tracking,
         )
         latency_ms = int((time.time() - t0) * 1000)
         content = ((resp.get('choices') or [{}])[0].get(
@@ -1890,6 +1931,13 @@ async def run_fulltext_agentic(
         import time
 
         t0 = time.time()
+
+        tracking = _build_llm_tracking(
+            current_user=current_user,
+            sr_id=sr_id,
+            model=payload.model,
+        )
+
         # Use multimodal API when we have figure images
         if images:
             content = await azure_openai_client.multimodal_chat(
@@ -1899,6 +1947,7 @@ async def run_fulltext_agentic(
                 model=payload.model,
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
+                tracking=tracking,
             )
             latency_ms = int((time.time() - t0) * 1000)
             # multimodal_chat does not expose usage
@@ -1911,6 +1960,7 @@ async def run_fulltext_agentic(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             stream=False,
+            tracking=tracking,
         )
         latency_ms = int((time.time() - t0) * 1000)
         content = ((resp.get('choices') or [{}])[0].get(

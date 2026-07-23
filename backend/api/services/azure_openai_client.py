@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections import deque
-import json
 import logging
 import re
 import time
+from collections import deque
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -38,6 +38,8 @@ import yaml
 from azure.identity import DefaultAzureCredential
 from azure.identity import get_bearer_token_provider
 from openai import AzureOpenAI
+
+from .llm_cost_tracker import llm_cost_tracker
 
 # Async client exists in modern openai SDKs (v1+ / v2+). If unavailable, we
 # will safely offload sync calls to a threadpool to avoid blocking the event loop.
@@ -128,6 +130,16 @@ class CachedTokenProvider:
 
 class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
+    MODEL_PRICING_CAD = {
+        'GPT-5-Mini': {
+            'prompt': Decimal('0.0001'),
+            'completion': Decimal('0.0002'),
+        },
+        'GPT-4.1': {
+            'prompt': Decimal('0.0003'),
+            'completion': Decimal('0.0005'),
+        },
+    }
 
     def __init__(self):
         self._config_error: str | None = None
@@ -537,7 +549,9 @@ class AzureOpenAIClient:
         if not dep or dep in self._disabled_deployments:
             return
         self._disabled_deployments.add(dep)
-        logger.warning('Disabling Azure OpenAI deployment %s after failure: %s', dep, reason)
+        logger.warning(
+            'Disabling Azure OpenAI deployment %s after failure: %s', dep, reason,
+        )
 
     def _get_retry_model_key(self, current_deployment: str) -> str | None:
         preferred_keys: list[str] = []
@@ -566,7 +580,9 @@ class AzureOpenAIClient:
         chars = 0
         image_count = 0
         for message in request_kwargs.get('messages') or []:
-            content = message.get('content', '') if isinstance(message, dict) else ''
+            content = message.get('content', '') if isinstance(
+                message, dict,
+            ) else ''
             if isinstance(content, str):
                 chars += len(content)
             elif isinstance(content, list):
@@ -580,7 +596,7 @@ class AzureOpenAIClient:
         output_tokens = int(
             request_kwargs.get('max_completion_tokens')
             or request_kwargs.get('max_tokens')
-            or 0
+            or 0,
         )
         return max(1, (chars + 3) // 4 + image_count * 1000 + output_tokens)
 
@@ -675,8 +691,12 @@ class AzureOpenAIClient:
                     self._disable_deployment(deployment, e)
                     retry_model = self._get_retry_model_key(deployment)
                     if retry_model:
-                        retry_config = self.model_configs.get(retry_model) or {}
-                        retry_deployment = str(retry_config.get('deployment') or '').strip()
+                        retry_config = self.model_configs.get(
+                            retry_model,
+                        ) or {}
+                        retry_deployment = str(
+                            retry_config.get('deployment') or '',
+                        ).strip()
                         if retry_deployment and retry_deployment not in attempted_deployments:
                             logger.warning(
                                 'Retrying Azure OpenAI request with fallback deployment %s after %s was not found',
@@ -684,10 +704,60 @@ class AzureOpenAIClient:
                                 deployment,
                             )
                             current_model = retry_model
-                            current_request = {**current_request, 'model': retry_deployment}
+                            current_request = {
+                                **current_request, 'model': retry_deployment,
+                            }
                             continue
 
                 raise
+
+    def _normalize_tracking_context(
+        self,
+        tracking: dict[str, Any] | None,
+        *,
+        fallback_model: str | None = None,
+    ) -> dict[str, Any]:
+        track = dict(tracking or {})
+        model = self.normalize_model_key(
+            track.get('model') or fallback_model or self.default_model)
+
+        return {
+            'user_id': str(track.get('user_id') or '').strip() or 'unknown',
+            'sr_id': str(track.get('sr_id') or '').strip() or None,
+            'model': model,
+            'prompt_tokens': int(track.get('prompt_tokens') or 0),
+            'completion_tokens': int(track.get('completion_tokens') or 0),
+            'total_tokens': int(track.get('total_tokens') or 0),
+            'created_at': track.get('created_at') or None,
+        }
+
+    def _calculate_cost_cad(
+        self,
+        model: str | None,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+    ) -> Decimal:
+        normalized_model = self.normalize_model_key(model) or 'default'
+        rates = self.MODEL_PRICING_CAD.get(
+            normalized_model, self.MODEL_PRICING_CAD['default'])
+
+        prompt_cost = (
+            Decimal(prompt_tokens) / Decimal('1000')
+        ) * rates['prompt']
+        completion_cost = (
+            Decimal(completion_tokens) / Decimal('1000')
+        ) * rates['completion']
+
+        total_cost = prompt_cost + completion_cost
+
+        return total_cost.quantize(Decimal('0.000001'))
+
+    async def _record_usage(self, **kwargs) -> None:
+        try:
+            await llm_cost_tracker.record_attempt(**kwargs)
+        except Exception as e:
+            logger.exception('Failed to record LLM usage: %s', e)
 
     async def chat_completion(
         self,
@@ -699,6 +769,7 @@ class AzureOpenAIClient:
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         stream: bool = False,
+        tracking: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Create a chat completion using Azure OpenAI official client
@@ -720,6 +791,12 @@ class AzureOpenAIClient:
         config = self._get_model_config(model)
         deployment = config['deployment']
 
+        track = self._normalize_tracking_context(
+            tracking, fallback_model=model)
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
         try:
             # Prefer true async client when available; otherwise offload the sync
             # network call to a threadpool to avoid blocking the event loop.
@@ -740,42 +817,58 @@ class AzureOpenAIClient:
 
             if stream:
                 return response
-            else:
-                usage = response.usage
-                completion_tokens = usage.completion_tokens if usage else 0
-                prompt_tokens = usage.prompt_tokens if usage else 0
-                total_tokens = usage.total_tokens if usage else 0
 
-                logger.info(
-                    'Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s',
-                    model,
-                    deployment,
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                )
-                return {
-                    'choices': [
-                        {
-                            'message': {
-                                'content': response.choices[0].message.content,
-                                'role': response.choices[0].message.role,
-                            },
-                            'finish_reason': response.choices[0].finish_reason,
+            usage = response.usage
+            completion_tokens = usage.completion_tokens if usage else 0
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            total_tokens = usage.total_tokens if usage else 0
+
+            cost_cad = self._calculate_cost_cad(
+                model=track['model'],
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
+
+            await self._record_usage(
+                user_id=track['user_id'],
+                sr_id=track['sr_id'],
+                model=track['model'],
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                cost_cad=cost_cad,
+                created_at=track['created_at'],
+            )
+
+            logger.info(
+                'Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s',
+                model,
+                deployment,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            )
+            return {
+                'choices': [
+                    {
+                        'message': {
+                            'content': response.choices[0].message.content,
+                            'role': response.choices[0].message.role,
                         },
-                    ],
-                    'usage': {
-                        'completion_tokens': completion_tokens,
-                        'prompt_tokens': prompt_tokens,
-                        'total_tokens': total_tokens,
+                        'finish_reason': response.choices[0].finish_reason,
                     },
-                }
+                ],
+                'usage': {
+                    'completion_tokens': completion_tokens,
+                    'prompt_tokens': prompt_tokens,
+                    'total_tokens': total_tokens,
+                },
+            }
 
         except Exception as e:
-            print(f"Error calling Azure OpenAI: {e}")
             raise Exception(
-                f"Failed to get response from Azure OpenAI: {str(e)}",
-            )
+                f"Failed to get response from Azure OpenAI: {str(e)}")
 
     async def simple_chat(
         self,
@@ -784,6 +877,7 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.7,
+        tracking: dict[str, Any] | None = None,
     ) -> str:
         """Simple chat interface that returns just the response text"""
         try:
@@ -793,6 +887,7 @@ class AzureOpenAIClient:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                tracking=tracking,
             )
             return response['choices'][0]['message']['content']
         except Exception as e:
@@ -807,6 +902,7 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.0,
+        tracking: dict[str, Any] | None = None,
     ) -> str:
         """Send a single user message with multiple attached images.
 
@@ -835,6 +931,7 @@ class AzureOpenAIClient:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                tracking=tracking,
             )
             return response['choices'][0]['message']['content']
         except Exception as e:
@@ -933,6 +1030,7 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1500,
         temperature: float = 0.7,
+        tracking: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Chat with document context for RAG applications
@@ -991,6 +1089,7 @@ Guidelines:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                tracking=tracking,
             )
 
             if 'choices' in response and len(response['choices']) > 0:
