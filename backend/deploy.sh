@@ -130,7 +130,7 @@ fi
 # Build images if requested
 if [ "$BUILD" = true ]; then
     echo -e "${BLUE}🔨 Building Docker images...${NC}"
-    docker compose build --no-cache
+    docker compose build
     echo -e "${GREEN}✅ Images built successfully${NC}"
 fi
 

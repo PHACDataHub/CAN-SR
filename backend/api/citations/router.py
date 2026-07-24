@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
     rispy = None
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -920,8 +920,15 @@ async def upload_citation_fulltext(
     sr_id: str,
     citation_id: int,
     file: UploadFile = File(...),
+    mode: str = 'replace',
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
+    mode = str(mode or '').strip().lower()
+    if mode not in {'replace', 'supplementary'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mode must be 'replace' or 'supplementary'",
+        )
     # The backend is authoritative: a PDF-linkage worker and manual upload must
     # never compete for an SR. A final conditional worker update remains the
     # race-safe fallback for uploads that began just before job creation.
@@ -1002,16 +1009,24 @@ async def upload_citation_fulltext(
         )
 
     try:
-        from ..services.fulltext_attachment_service import attach_fulltext_document
-        result = await attach_fulltext_document(
-            citation_id=citation_id,
-            table_name=table_name,
-            user_id=str(current_user['id']),
-            filename=file.filename,
-            content=content,
-            source='manual',
-            replace=True,
+        from ..services.fulltext_attachment_service import (
+            add_supplementary_document, attach_fulltext_document,
         )
+        if mode == 'supplementary':
+            result = await add_supplementary_document(
+                citation_id=citation_id, table_name=table_name,
+                user_id=str(current_user['id']), filename=file.filename, content=content,
+            )
+        else:
+            result = await attach_fulltext_document(
+                citation_id=citation_id,
+                table_name=table_name,
+                user_id=str(current_user['id']),
+                filename=file.filename,
+                content=content,
+                source='manual',
+                replace=True,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as e:
@@ -1031,6 +1046,100 @@ async def upload_citation_fulltext(
         'storage_path': result.storage_path,
         'document_id': result.document_id,
     }
+
+
+@router.get('/{sr_id}/citations/{citation_id}/fulltext-documents')
+async def get_fulltext_documents(
+    sr_id: str, citation_id: int,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name') or 'citations'
+    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    if not row:
+        raise HTTPException(status_code=404, detail='Citation not found')
+    from ..services.fulltext_attachment_service import ensure_legacy_document, list_fulltext_documents
+    await run_in_threadpool(ensure_legacy_document, citation_id, table_name, row)
+    documents = await run_in_threadpool(list_fulltext_documents, citation_id, table_name)
+    return {'documents': documents, 'title': row.get('title') or row.get('citation') or ''}
+
+
+@router.get('/{sr_id}/citations/{citation_id}/fulltext-documents/{document_id}/download')
+async def download_fulltext_document(
+    sr_id: str, citation_id: int, document_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Download a citation attachment after checking SR membership and linkage."""
+    _, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name') or 'citations'
+    row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+    if not row:
+        raise HTTPException(status_code=404, detail='Citation not found')
+    from ..services.fulltext_attachment_service import ensure_legacy_document, get_fulltext_document
+    from ..services.storage import storage_service
+    await run_in_threadpool(ensure_legacy_document, citation_id, table_name, row)
+    document = await run_in_threadpool(
+        get_fulltext_document, citation_id, table_name, document_id,
+    )
+    if not document:
+        raise HTTPException(
+            status_code=404, detail='Full-text document not found',
+        )
+    try:
+        content, filename = await storage_service.get_bytes_by_path(document['storage_path'])
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail='Full-text file not found in storage',
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail='Invalid full-text storage path',
+        ) from exc
+    return StreamingResponse(
+        iter([content]), media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'inline; filename="{filename or document["filename"]}"',
+            'Cache-Control': 'no-store, max-age=0',
+        },
+    )
+
+
+class ActivateDocumentRequest(BaseModel):
+    document_id: str
+
+
+@router.post('/{sr_id}/citations/{citation_id}/fulltext-documents/activate')
+async def activate_document(
+    sr_id: str, citation_id: int, payload: ActivateDocumentRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name') or 'citations'
+    from ..services.fulltext_attachment_service import activate_fulltext_document
+    activated = await run_in_threadpool(
+        activate_fulltext_document, citation_id, table_name, payload.document_id,
+    )
+    if not activated:
+        raise HTTPException(
+            status_code=404, detail='Full-text document not found',
+        )
+    return {'status': 'success'}
+
+
+@router.delete('/{sr_id}/citations/{citation_id}/fulltext-documents/{document_id}')
+async def delete_document(
+    sr_id: str, citation_id: int, document_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name') or 'citations'
+    from ..services.fulltext_attachment_service import delete_fulltext_document
+    deleted, was_active = await delete_fulltext_document(citation_id, table_name, document_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail='Full-text document not found',
+        )
+    return {'status': 'success', 'was_active': was_active}
 
 
 # Helper to list fulltext URLs - delegated to backend.api.core.postgres.list_fulltext_urls
@@ -1076,6 +1185,9 @@ async def hard_delete_screening_resources(sr_id: str, current_user: dict[str, An
     # 1) collect fulltext URLs from the screening DB
     try:
         urls = await run_in_threadpool(cits_dp_service.list_fulltext_urls, table_name)
+        from ..services.fulltext_attachment_service import list_registered_storage_paths
+        registered_urls = await run_in_threadpool(list_registered_storage_paths, table_name)
+        urls = list(dict.fromkeys([*(urls or []), *(registered_urls or [])]))
     except RuntimeError as rexc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
@@ -1154,6 +1266,13 @@ async def hard_delete_screening_resources(sr_id: str, current_user: dict[str, An
     # 3) drop the screening table
     try:
         await run_in_threadpool(cits_dp_service.drop_table, table_name)
+        try:
+            from ..services.fulltext_attachment_service import delete_document_registry
+            await run_in_threadpool(delete_document_registry, table_name)
+        except Exception:
+            # The citation table is authoritative; stale registry rows are harmless
+            # and can be reconciled separately if registry cleanup is unavailable.
+            pass
         table_dropped = True
     except RuntimeError as rexc:
         raise HTTPException(
