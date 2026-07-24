@@ -119,7 +119,26 @@ TCallMetadata = TypeVar('TCallMetadata')
 
 
 class AgentResponseError(ValueError):
-    """Raised when an LLM response still violates its stage contract after repair."""
+    """Raised when an LLM response still violates its stage contract after repair.
+
+    The repaired response is retained so callers that support partial suggestions
+    can persist the usable fields and show precise warnings to reviewers.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_response: str = '',
+        parsed: ParsedAgentXML | None = None,
+        metadata: object | None = None,
+        missing_fields: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.parsed = parsed
+        self.metadata = metadata
+        self.missing_fields = list(missing_fields or [])
 
 
 def validate_agent_response(
@@ -138,7 +157,12 @@ def validate_agent_response(
     return missing
 
 
-def build_repair_prompt(*, raw_response: str, stage: AgentStage) -> str:
+def build_repair_prompt(
+    *,
+    raw_response: str,
+    stage: AgentStage,
+    original_prompt: str = '',
+) -> str:
     """Ask the model to reformat an incomplete response without changing its judgment."""
     if stage == 'screening':
         schema = (
@@ -151,9 +175,15 @@ def build_repair_prompt(*, raw_response: str, stage: AgentStage) -> str:
             '<answer>exact selected option</answer>\n'
             '<confidence>number from 0 to 1</confidence>'
         )
+    context = original_prompt.strip()
     return f"""Your previous response did not match the required output contract.
-Preserve the same judgment, but return ONLY these XML tags with valid, non-empty values:
+Use the original task and allowed options below. Preserve the same judgment when it
+is recoverable; otherwise make the best supported judgment from the original task.
+Return ONLY these XML tags with valid, non-empty values:
 {schema}
+
+Original task and allowed options:
+{context or '(not available)'}
 
 Previous response:
 {raw_response}
@@ -173,7 +203,11 @@ async def call_and_parse_agent_response(
     if not missing:
         return raw, parsed, metadata, False
 
-    repair_prompt = build_repair_prompt(raw_response=raw, stage=stage)
+    repair_prompt = build_repair_prompt(
+        raw_response=raw,
+        stage=stage,
+        original_prompt=prompt,
+    )
     repaired_raw, repaired_metadata = await call_llm(repair_prompt)
     repaired = parse_agent_xml(repaired_raw)
     repaired_missing = validate_agent_response(repaired, stage=stage)
@@ -181,6 +215,10 @@ async def call_and_parse_agent_response(
         fields = ', '.join(repaired_missing)
         raise AgentResponseError(
             f'{stage.capitalize()} agent response missing or invalid fields after repair: {fields}',
+            raw_response=repaired_raw,
+            parsed=repaired,
+            metadata=repaired_metadata,
+            missing_fields=repaired_missing,
         )
     return repaired_raw, repaired, repaired_metadata, True
 

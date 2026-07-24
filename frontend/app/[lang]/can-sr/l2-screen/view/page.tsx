@@ -896,7 +896,12 @@ export default function CanSrL2ScreenViewPage() {
         srId={srId || ''}
         citationId={citationId ?? ''}
         conversionId={null}
-        fileName={"Fulltext"}
+        fileName={String(
+          citation?.title ||
+          citation?.citation ||
+          citation?.article_title ||
+          'Full text'
+        )}
         coords={fulltextCoords || []}
         pages={fulltextPages || []}
         aiPanels={panelsKeyed.panels}
@@ -1050,6 +1055,18 @@ export default function CanSrL2ScreenViewPage() {
                     const displayExplanationRaw = (scrRationale || aiExpl || '').trim()
                     const displayExplanation =
                       extractXmlTag(displayExplanationRaw, 'rationale') || displayExplanationRaw
+                    const screeningGuardrails = parseObject((scr as any)?.guardrails)
+                    const missingFields = Array.isArray(aiData?.missing_fields)
+                      ? aiData.missing_fields.map((field: unknown) => String(field))
+                      : Array.isArray(screeningGuardrails?.missing_fields)
+                        ? screeningGuardrails.missing_fields.map((field: unknown) => String(field))
+                        : []
+                    const missingLabels = missingFields.map((field: string) => {
+                      if (field === 'answer') return 'selection'
+                      if (field === 'confidence') return 'confidence'
+                      if (field === 'rationale') return 'rationale'
+                      return field
+                    })
 
                     return (
                       <div
@@ -1158,16 +1175,29 @@ export default function CanSrL2ScreenViewPage() {
 
                             {panelOpen[idx] ? (
                               <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
+                                {missingLabels.length > 0 ? (
+                                  <div
+                                    className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                                    role="alert"
+                                  >
+                                    The AI response was incomplete after one automatic repair. Missing:{' '}
+                                    <strong>{missingLabels.join(', ')}</strong>. Review the available fields and rerun this criterion.
+                                  </div>
+                                ) : null}
                                 <div className="mt-2">
                                   <strong>{dict.screening.confidence}</strong>{' '}
-                                  {Number.isFinite(displayConfidence)
+                                  {missingFields.includes('confidence')
+                                    ? 'Not returned by AI'
+                                    : Number.isFinite(displayConfidence)
                                     ? String(displayConfidence)
                                     : String(aiData.confidence ?? '')}
                                 </div>
                                 <div className="mt-2">
                                   <strong>{dict.screening.explanation}</strong>
                                   <div className="mt-1 text-sm text-gray-700">
-                                    {displayExplanation || dict.screening.noExplanation}
+                                    {missingFields.includes('rationale')
+                                      ? 'Rationale was not returned by the AI after repair.'
+                                      : displayExplanation || dict.screening.noExplanation}
                                   </div>
                                 </div>
 

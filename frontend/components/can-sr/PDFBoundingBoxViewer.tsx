@@ -25,6 +25,14 @@ interface PDFBoundingBoxViewerProps {
   defaultFitToWidth?: boolean
 }
 
+type FulltextDocument = {
+  document_id: string
+  filename: string
+  document_type: string
+  is_active: boolean
+  is_extracted: boolean
+}
+
 /**
  * PDFBoundingBoxViewer
  * - Renders all pages stacked vertically using pdf.js
@@ -105,7 +113,12 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   const [error, setError] = useState<string | null>(null)
   const [pdfMissing, setPdfMissing] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [processingDocumentId, setProcessingDocumentId] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [documents, setDocuments] = useState<FulltextDocument[]>([])
+  const [documentsLoaded, setDocumentsLoaded] = useState(false)
+  const [viewedDocumentId, setViewedDocumentId] = useState<string | null>(null)
+  const [uploadMode, setUploadMode] = useState<'replace' | 'supplementary'>('replace')
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const pageRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -122,6 +135,35 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   const [selectedCoord, setSelectedCoord] = useState<any | null>(null)
 
   const sentenceTexts = extractSentenceArray(fulltext)
+
+  const authHeaders = (): Record<string, string> => {
+    const token = getAuthToken()
+    const tokenType = getTokenType()
+    return token ? { Authorization: `${tokenType} ${token}` } : {}
+  }
+
+  useEffect(() => {
+    setDocumentsLoaded(false)
+    const refreshDocuments = async () => {
+      const res = await fetch(
+        `/api/can-sr/citations/full-text?action=documents&sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
+        { headers: authHeaders(), cache: 'no-store' },
+      )
+      if (!res.ok) {
+        setDocumentsLoaded(true)
+        return
+      }
+      const payload = await res.json()
+      const nextDocuments = Array.isArray(payload?.documents) ? payload.documents : []
+      setDocuments(nextDocuments)
+      setViewedDocumentId((current) => {
+        if (current && nextDocuments.some((document: FulltextDocument) => document.document_id === current)) return current
+        return nextDocuments.find((document: FulltextDocument) => document.is_active)?.document_id || null
+      })
+      setDocumentsLoaded(true)
+    }
+    void refreshDocuments()
+  }, [srId, citationId, reloadKey])
 
   useImperativeHandle(ref, () => ({
   scrollToPage: (pageNum: number) => {
@@ -213,6 +255,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
     let objectUrl: string | null = null
     let cancelled = false
     const fetchPDF = async () => {
+      if (!documentsLoaded) return
       setLoading(true)
       setError(null)
       setPdfMissing(false)
@@ -220,14 +263,12 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       setTotalPages(0)
       setPdfUrl(null)
       try {
-        const token = getAuthToken()
-        const tokenType = getTokenType()
-        const headers: Record<string, string> = {}
-        if (token) headers['Authorization'] = `${tokenType} ${token}`
+        const headers: Record<string, string> = authHeaders()
 
-        const url = `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(
-          String(citationId),
-        )}`
+        const selectedDocument = documents.find((document) => document.document_id === viewedDocumentId)
+        const url = selectedDocument
+          ? `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}&document_id=${encodeURIComponent(selectedDocument.document_id)}`
+          : `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`
 
         const res = await fetch(url, { headers, cache: 'no-store' })
         if (res.status === 404) {
@@ -254,7 +295,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [srId, citationId, reloadKey])
+  }, [srId, citationId, reloadKey, documents, viewedDocumentId, documentsLoaded])
 
   // All viewer state is citation-scoped. Invalidate document/render work and
   // remove coordinates, canvases, and scroll state before the next PDF arrives.
@@ -296,19 +337,55 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
       const body = new FormData()
       body.append('file', file)
       const res = await fetch(
-        `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
+        `/api/can-sr/citations/full-text?mode=${uploadMode}&sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
         { method: 'POST', headers, body },
       )
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}))
         throw new Error(payload?.detail || payload?.error || `${dict.pdf.uploadFailed} (${res.status})`)
       }
-      setReloadKey((value) => value + 1)
+      if (uploadMode === 'replace') window.location.reload()
+      else setReloadKey((value) => value + 1)
     } catch (err: any) {
       setError(err?.message || dict.pdf.uploadFailed)
     } finally {
       setUploading(false)
     }
+  }
+
+  const processDocument = async (documentId: string) => {
+    setProcessingDocumentId(documentId)
+    setError(null)
+    try {
+      const activateRes = await fetch(
+        `/api/can-sr/citations/full-text?action=activate&sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
+        { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ document_id: documentId }) },
+      )
+      if (!activateRes.ok) throw new Error('Failed to select PDF for processing')
+      const extractRes = await fetch(
+        `/api/can-sr/citations/full-text?action=extract&sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}`,
+        { method: 'POST', headers: authHeaders() },
+      )
+      if (!extractRes.ok) {
+        const payload = await extractRes.json().catch(() => ({}))
+        throw new Error(payload?.detail || payload?.error || 'PDF text extraction failed')
+      }
+      window.location.reload()
+    } catch (err: any) {
+      setError(err?.message || 'PDF processing failed')
+      setProcessingDocumentId(null)
+    }
+  }
+
+  const deleteDocument = async (document: FulltextDocument) => {
+    if (!window.confirm(`Delete ${document.filename}?`)) return
+    const res = await fetch(
+      `/api/can-sr/citations/full-text?sr_id=${encodeURIComponent(String(srId))}&citation_id=${encodeURIComponent(String(citationId))}&document_id=${encodeURIComponent(document.document_id)}`,
+      { method: 'DELETE', headers: authHeaders() },
+    )
+    if (!res.ok) return setError('Failed to delete PDF')
+    if (document.is_active) window.location.reload()
+    else setReloadKey((value) => value + 1)
   }
 
   // Load PDF document via pdf.js
@@ -489,6 +566,10 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
   }
 
   const renderOverlayForPage = (pageNum: number) => {
+    const viewedDocument = documents.find((document) => document.document_id === viewedDocumentId)
+    // Coordinates and sentence IDs on the citation row belong to the active
+    // processed PDF. Never draw them over a different PDF selected only for viewing.
+    if (viewedDocument && !viewedDocument.is_active) return null
     if (!coords || !Array.isArray(coords) || coords.length === 0) return null
     const vp = pageViewports[pageNum]
     const dims = pages?.[pageNum - 1]
@@ -715,6 +796,26 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
         </div> : null}
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-gray-50 p-2 text-sm">
+        {documents.map((document) => (
+          <div key={document.document_id} className={`flex items-center gap-2 rounded border px-2 py-1 ${document.document_id === viewedDocumentId ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 bg-white'}`}>
+            <button type="button" onClick={() => setViewedDocumentId(document.document_id)} className="max-w-64 truncate font-medium" title={document.filename}>
+              {document.filename} {document.document_type === 'supplementary' ? '(supplement)' : ''}
+            </button>
+            <span className="text-xs text-gray-500">{document.is_extracted ? 'Processed' : 'Needs processing'}</span>
+            {!document.is_extracted ? (
+              <button type="button" disabled={processingDocumentId !== null} onClick={() => void processDocument(document.document_id)} className="text-xs text-blue-700 hover:underline disabled:opacity-50">
+                {processingDocumentId === document.document_id ? 'Processing…' : 'Process for AI'}
+              </button>
+            ) : null}
+            <button type="button" onClick={() => void deleteDocument(document)} className="text-xs text-red-600 hover:underline">Delete</button>
+          </div>
+        ))}
+        <button type="button" onClick={() => { setUploadMode('supplementary'); uploadInputRef.current?.click() }} className="rounded border px-2 py-1 hover:bg-white">+ Add supplementary PDF</button>
+        <button type="button" onClick={() => { setUploadMode('replace'); uploadInputRef.current?.click() }} className="rounded border px-2 py-1 hover:bg-white">Replace main PDF</button>
+        <input ref={uploadInputRef} type="file" accept="application/pdf,.pdf" onChange={uploadPDF} className="hidden" />
+      </div>
+
       <div className="space-y-3">
         {!pdfMissing && !error ? <div className="flex items-center gap-3">
           <div className="ml-auto flex items-center gap-2">
@@ -772,13 +873,6 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
                   >
                     {uploading ? dict.pdf.uploadingPDF : dict.pdf.uploadPDF}
                   </button>
-                  <input
-                    ref={uploadInputRef}
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={uploadPDF}
-                    className="hidden"
-                  />
                 </div>
               </div>
             ) : error ? (

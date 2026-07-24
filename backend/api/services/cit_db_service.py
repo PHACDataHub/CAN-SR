@@ -1734,8 +1734,8 @@ class CitsDPService:
                            'fulltext','fulltext_coords','fulltext_pages',
                            'fulltext_figures','fulltext_tables',
                            'llm_l2_decision','human_l2_decision'
-                         ) OR column_name LIKE 'llm_param_%'
-                            OR column_name LIKE 'human_param_%')""",
+                         ) OR column_name LIKE 'llm_param_%%'
+                            OR column_name LIKE 'human_param_%%')""",
                     (table_name,),
                 )
                 clear_columns = [
