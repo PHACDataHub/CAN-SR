@@ -1681,6 +1681,16 @@ async def run_fulltext_agentic(
     )
     fulltext = str((row or {}).get('fulltext') or '')
     fulltext_md5 = str((row or {}).get('fulltext_md5') or '')
+    # Screen against every extracted document for the citation. Document
+    # boundaries prevent the model from conflating main and supplementary text.
+    try:
+        from ..services.fulltext_attachment_service import combined_fulltext
+        fulltext = await run_in_threadpool(
+            combined_fulltext, citation_id, table_name, fulltext,
+        )
+    except Exception:
+        # Registry support is additive; legacy single-PDF screening must remain available.
+        pass
 
     # Tables/Figures context from row
     tables_md_lines: list[str] = []
@@ -1878,6 +1888,8 @@ async def run_fulltext_agentic(
             raw, usage, latency = await _call_llm(prompt)
             return raw, (usage, latency)
 
+        screening_missing_fields: list[str] = []
+        screening_repair_failed = False
         try:
             screening_raw, screening_parsed, screening_meta, _ = await call_and_parse_agent_response(
                 screening_prompt,
@@ -1885,11 +1897,22 @@ async def run_fulltext_agentic(
                 call_llm=_call_with_metadata,
             )
         except AgentResponseError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
-            ) from exc
+            if exc.parsed is None or exc.metadata is None:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc),
+                ) from exc
+            screening_raw = exc.raw_response
+            screening_parsed = exc.parsed
+            screening_meta = exc.metadata
+            screening_missing_fields = list(exc.missing_fields)
+            screening_repair_failed = True
         screening_usage, screening_latency = screening_meta
         screening_answer = resolve_option(screening_parsed.answer, opts)
+        screening_confidence = (
+            None
+            if 'confidence' in screening_missing_fields
+            else screening_parsed.confidence
+        )
 
         try:
             screening_run_id = await run_in_threadpool(
@@ -1902,12 +1925,14 @@ async def run_fulltext_agentic(
                     'criterion_key': criterion_key,
                     'stage': 'screening',
                     'answer': screening_answer,
-                    'confidence': screening_parsed.confidence,
+                    'confidence': screening_confidence,
                     'rationale': screening_parsed.rationale,
                     'raw_response': screening_raw,
                     'guardrails': {
                         **_build_guardrails(screening_parsed, raw_text=screening_raw, stage='screening'),
                         'fulltext_md5': fulltext_md5,
+                        'repair_failed': screening_repair_failed,
+                        'missing_fields': screening_missing_fields,
                     },
                     'model': payload.model,
                     'prompt_version': payload.prompt_version,
@@ -1928,6 +1953,54 @@ async def run_fulltext_agentic(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to persist screening run: {e}",
             )
+
+        # A critical audit requires a valid selected option and confidence. Keep
+        # the partial screening suggestion, but do not manufacture an audit from
+        # missing inputs.
+        if 'answer' in screening_missing_fields or 'confidence' in screening_missing_fields:
+            try:
+                llm_col = snake_case_column(q)
+                partial_payload = {
+                    'selected': screening_answer or '',
+                    'confidence': screening_confidence,
+                    'explanation': screening_parsed.rationale or '',
+                    'evidence_sentences': screening_parsed.evidence_sentences or [],
+                    'evidence_tables': screening_parsed.evidence_tables or [],
+                    'evidence_figures': screening_parsed.evidence_figures or [],
+                    'source': 'agentic',
+                    'pipeline': 'fulltext',
+                    'fulltext_md5': fulltext_md5,
+                    'partial': True,
+                    'repair_failed': True,
+                    'missing_fields': screening_missing_fields,
+                }
+                await run_in_threadpool(
+                    cits_dp_service.update_jsonb_column,
+                    citation_id,
+                    llm_col,
+                    partial_payload,
+                    table_name,
+                )
+            except Exception:
+                pass
+            results.append({
+                'question': q,
+                'criterion_key': criterion_key,
+                'screening': {
+                    'run_id': screening_run_id,
+                    'answer': screening_answer or None,
+                    'confidence': screening_confidence,
+                    'rationale': screening_parsed.rationale or None,
+                    'parse_ok': False,
+                    'partial': True,
+                    'missing_fields': screening_missing_fields,
+                    'evidence_sentences': screening_parsed.evidence_sentences,
+                    'evidence_tables': screening_parsed.evidence_tables,
+                    'evidence_figures': screening_parsed.evidence_figures,
+                },
+                'critical': None,
+            })
+            continue
 
         # 2) critical
         critical_additions = ''
@@ -2026,7 +2099,7 @@ async def run_fulltext_agentic(
             llm_col = snake_case_column(q)
             llm_payload = {
                 'selected': screening_answer,
-                'confidence': screening_parsed.confidence,
+                'confidence': screening_confidence,
                 'explanation': screening_parsed.rationale or '',
                 'evidence_sentences': screening_parsed.evidence_sentences or [],
                 'evidence_tables': screening_parsed.evidence_tables or [],
@@ -2034,6 +2107,9 @@ async def run_fulltext_agentic(
                 'source': 'agentic',
                 'pipeline': 'fulltext',
                 'fulltext_md5': fulltext_md5,
+                'partial': bool(screening_missing_fields),
+                'repair_failed': screening_repair_failed,
+                'missing_fields': screening_missing_fields,
             }
             await run_in_threadpool(
                 cits_dp_service.update_jsonb_column,
@@ -2052,9 +2128,11 @@ async def run_fulltext_agentic(
                 'screening': {
                     'run_id': screening_run_id,
                     'answer': screening_answer,
-                    'confidence': screening_parsed.confidence,
+                    'confidence': screening_confidence,
                     'rationale': screening_parsed.rationale,
-                    'parse_ok': screening_parsed.parse_ok,
+                    'parse_ok': not screening_missing_fields,
+                    'partial': bool(screening_missing_fields),
+                    'missing_fields': screening_missing_fields,
                     'evidence_sentences': screening_parsed.evidence_sentences,
                     'evidence_tables': screening_parsed.evidence_tables,
                     'evidence_figures': screening_parsed.evidence_figures,

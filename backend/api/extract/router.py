@@ -701,6 +701,20 @@ async def extract_fulltext_from_storage(
             [f"[{i}] {x}" for i, x in enumerate(full_text_arr)],
         )
 
+        # A structurally valid PDF can still yield no machine-readable text
+        # (for example, an image-only scan or an unsupported text encoding).
+        # Do not persist this as a successful extraction: downstream screening
+        # would otherwise misdiagnose absent context as an LLM response failure.
+        if not full_text_str.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    'No machine-readable text could be extracted from this PDF. '
+                    'The file may be scanned, image-only, or use an unsupported '
+                    'encoding. Upload a searchable/OCR-processed PDF and try again.'
+                ),
+            )
+
         # -------------------------
         # Upload Azure DI artifacts
         # -------------------------
@@ -825,6 +839,17 @@ async def extract_fulltext_from_storage(
         coords_for_overlay = list(annotations) + list(artifact_coords)
         updated1 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'fulltext', full_text_str, table_name)
         updated2 = await run_in_threadpool(cits_dp_service.update_text_column, citation_id, 'fulltext_md5', current_md5, table_name)
+        try:
+            from ..services.fulltext_attachment_service import (
+                ensure_legacy_document, record_active_extracted_text,
+            )
+            await run_in_threadpool(ensure_legacy_document, citation_id, table_name, row)
+            await run_in_threadpool(
+                record_active_extracted_text, citation_id, table_name, full_text_str,
+            )
+        except Exception:
+            # Multi-document indexing is additive and must not fail extraction.
+            pass
         updated3 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_coords', coords_for_overlay, table_name)
         updated4 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_pages', pages, table_name)
         updated5 = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, 'fulltext_figures', fulltext_figures, table_name)

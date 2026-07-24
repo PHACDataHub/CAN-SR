@@ -60,6 +60,8 @@ async def test_screening_repairs_missing_rationale_once():
     assert raw.endswith('</rationale>')
     assert len(prompts) == 2
     assert 'Previous response:' in prompts[1]
+    assert 'Original task and allowed options:' in prompts[1]
+    assert 'original prompt' in prompts[1]
 
 
 @pytest.mark.asyncio
@@ -67,7 +69,13 @@ async def test_screening_raises_after_failed_repair():
     async def call_llm(_prompt):
         return '<answer>Yes</answer><confidence>0.8</confidence>', None
 
-    with pytest.raises(AgentResponseError, match='rationale'):
+    with pytest.raises(AgentResponseError, match='rationale') as exc_info:
         await call_and_parse_agent_response(
             'original prompt', stage='screening', call_llm=call_llm,
         )
+
+    assert exc_info.value.missing_fields == ['rationale']
+    assert exc_info.value.parsed is not None
+    assert exc_info.value.parsed.answer == 'Yes'
+    assert exc_info.value.parsed.confidence == 0.8
+    assert exc_info.value.raw_response.startswith('<answer>Yes</answer>')

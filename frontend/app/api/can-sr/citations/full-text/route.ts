@@ -16,9 +16,8 @@ import { BACKEND_URL } from '@/lib/config'
  *    -> stream the stored PDF associated with the citation (calls backend citation endpoint to resolve document_id/storage_path,
  *       then proxies to backend download endpoint or streams the storage URL)
  *
- * - GET  /api/can-sr/citations/full-text?document_id=<document_id>
- *    -> stream the document directly from backend download endpoint:
- *       GET {BACKEND_URL}/api/files/documents/{document_id}/download
+ * - GET with sr_id, citation_id, and document_id streams a citation-scoped
+ *   attachment after backend membership and linkage checks.
  *
  * Authentication: forwards Authorization header for all backend calls (required).
  */
@@ -56,6 +55,7 @@ export async function GET(request: NextRequest) {
     const srId = params.get('sr_id')
     const citationId = params.get('citation_id')
     const documentIdParam = params.get('document_id')
+    const action = params.get('action')
 
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
@@ -63,6 +63,15 @@ export async function GET(request: NextRequest) {
         { error: 'Authorization header is required' },
         { status: 401 },
       )
+    }
+
+    if (action === 'documents' && srId && citationId) {
+      const res = await fetch(
+        `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/citations/${encodeURIComponent(citationId)}/fulltext-documents`,
+        { headers: { Authorization: authHeader }, cache: 'no-store' },
+      )
+      const data = await res.json().catch(() => ({}))
+      return NextResponse.json(data, { status: res.status })
     }
 
     let fileFetchUrl: string | null = null
@@ -73,11 +82,15 @@ export async function GET(request: NextRequest) {
       },
     }
 
-    if (documentIdParam) {
-      // Prefer direct document_id -> backend files download route
-      fileFetchUrl = `${BACKEND_URL}/api/files/documents/${encodeURIComponent(
-        documentIdParam,
-      )}/download`
+    if (documentIdParam && srId && citationId) {
+      // Resolve inside the authorized SR/citation scope. This permits review
+      // collaborators to view attachments uploaded by another member.
+      fileFetchUrl = `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/citations/${encodeURIComponent(citationId)}/fulltext-documents/${encodeURIComponent(documentIdParam)}/download`
+    } else if (documentIdParam) {
+      return NextResponse.json(
+        { error: 'sr_id and citation_id are required with document_id' },
+        { status: 400 },
+      )
     } else if (srId && citationId) {
       // Fetch the citation row to locate document_id or storage_path
       const citationUrl = `${BACKEND_URL}/api/cite/${encodeURIComponent(
@@ -241,8 +254,8 @@ export async function POST(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams
     const srId = params.get('sr_id')
+    const action = params.get('action')
     const citationId = params.get('citation_id')
-    const action = params.get('action') // optional; if 'extract' will call backend extract endpoint
 
     if (!srId || !citationId) {
       return NextResponse.json(
@@ -252,19 +265,29 @@ export async function POST(request: NextRequest) {
     }
 
     const authHeader = request.headers.get('authorization')
+    if (!authHeader) {
+      return NextResponse.json({ error: 'Authorization header is required' }, { status: 401 })
+    }
+
+    if (action === 'activate') {
+      const payload = await request.json()
+      const res = await fetch(
+        `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/citations/${encodeURIComponent(citationId)}/fulltext-documents/activate`,
+        {
+          method: 'POST',
+          headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      return NextResponse.json(data, { status: res.status })
+    }
 
     // If action=extract, call backend extract endpoint which will download PDF from storage and run Grobid
     if (action === 'extract') {
       const url = `${BACKEND_URL}/api/extract/${encodeURIComponent(
         srId,
       )}/citations/${encodeURIComponent(citationId)}/extract-fulltext`
-
-      if (!authHeader) {
-        return NextResponse.json(
-          { error: 'Authorization header is required' },
-          { status: 401 },
-        )
-      }
 
       const res = await fetch(url, {
         method: 'POST',
@@ -297,16 +320,10 @@ export async function POST(request: NextRequest) {
     const backendForm = new FormData()
     backendForm.append('file', file)
 
+    const mode = params.get('mode') || 'replace'
     const url = `${BACKEND_URL}/api/cite/${encodeURIComponent(
       srId,
-    )}/citations/${encodeURIComponent(citationId)}/upload-fulltext`
-
-    if (!authHeader) {
-      return NextResponse.json(
-        { error: 'Authorization header is required' },
-        { status: 401 },
-      )
-    }
+    )}/citations/${encodeURIComponent(citationId)}/upload-fulltext?mode=${encodeURIComponent(mode)}`
 
     const res = await fetch(url, {
       method: 'POST',
@@ -332,4 +349,22 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     )
   }
+}
+
+export async function DELETE(request: NextRequest) {
+  const params = request.nextUrl.searchParams
+  const srId = params.get('sr_id')
+  const citationId = params.get('citation_id')
+  const documentId = params.get('document_id')
+  const authHeader = request.headers.get('authorization')
+  if (!authHeader) return NextResponse.json({ error: 'Authorization header is required' }, { status: 401 })
+  if (!srId || !citationId || !documentId) {
+    return NextResponse.json({ error: 'sr_id, citation_id and document_id are required' }, { status: 400 })
+  }
+  const res = await fetch(
+    `${BACKEND_URL}/api/cite/${encodeURIComponent(srId)}/citations/${encodeURIComponent(citationId)}/fulltext-documents/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE', headers: { Authorization: authHeader } },
+  )
+  const data = await res.json().catch(() => ({}))
+  return NextResponse.json(data, { status: res.status })
 }
