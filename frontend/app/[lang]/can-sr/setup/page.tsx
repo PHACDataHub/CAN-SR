@@ -6,6 +6,7 @@ import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
 import { SAMPLE_YAML } from '@/components/can-sr/setup/sample-yaml'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
+import CriteriaEditor from '@/components/can-sr/setup/criteria-editor'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -410,6 +411,12 @@ export default function CanSrSetupPage() {
             ) : null}
 
           </div>
+
+          <CriteriaEditor
+            srId={srId || ''}
+            hasScreeningData={hasExistingScreeningData}
+            labels={dict.setup.criteriaBuilder as unknown as Record<string, string>}
+          />
 
           {/* YAML editor */}
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
