@@ -76,7 +76,6 @@ class ScreeningAnswer(StrictModel):
 class ScreeningQuestion(StrictModel):
     id: CriteriaId
     question: NonEmptyText
-    context: str | None = Field(default=None, max_length=10000)
     answers: list[ScreeningAnswer] = Field(min_length=2, max_length=50)
     trigger: Trigger = Field(default_factory=Trigger)
 

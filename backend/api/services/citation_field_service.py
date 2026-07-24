@@ -1,7 +1,6 @@
 """Discover user-authored citation columns for criteria configuration."""
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from .cit_db_service import cits_dp_service
@@ -18,21 +17,6 @@ def _is_user_field(name: str) -> bool:
     return folded not in SYSTEM_NAMES and not any(folded.startswith(prefix) for prefix in SYSTEM_PREFIXES)
 
 
-def _doi_score(name: str) -> int:
-    tokens = [
-        token for token in re.split(
-            r'[^a-z0-9]+', name.casefold(),
-        ) if token
-    ]
-    if name.casefold() == 'doi':
-        return 100
-    if 'doi' in tokens:
-        return 80
-    if 'digital' in tokens and 'object' in tokens and 'identifier' in tokens:
-        return 60
-    return 0
-
-
 def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str, Any]]) -> dict[str, Any]:
     fields = []
     for column in columns:
@@ -42,11 +26,10 @@ def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str
         ).strip()
         if not name or not _is_user_field(name):
             continue
-        score = _doi_score(name)
         fields.append({
             'name': name, 'data_type': str(
                 column.get('data_type') or 'text',
-            ), 'doi_likelihood': score,
+            ),
         })
 
     criteria = review.get('criteria') if isinstance(
@@ -68,12 +51,10 @@ def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str
         value for value in [*selected, doi]
         if value and value not in available
     ]
-    suggestions = [
-        field['name'] for field in sorted(
-            fields, key=lambda field: -field['doi_likelihood'],
-        ) if field['doi_likelihood'] > 0
-    ]
-    return {'fields': fields, 'doi_suggestions': suggestions, 'unavailable_configured_fields': list(dict.fromkeys(unavailable))}
+    return {
+        'fields': fields,
+        'unavailable_configured_fields': list(dict.fromkeys(unavailable)),
+    }
 
 
 def discover_citation_fields(review: dict[str, Any]) -> dict[str, Any]:

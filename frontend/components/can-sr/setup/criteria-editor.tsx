@@ -4,12 +4,20 @@ import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import { authenticatedFetch } from '@/lib/auth'
 import CriteriaBuilder from './criteria-builder'
 import { criteriaDraftReducer, emptyCriteria, type CriteriaConfig } from './criteria-types'
-import CriteriaPreview from './criteria-preview'
 import { backendDiagnostics, type CriteriaDiagnostic, validateCriteriaDraft } from './criteria-validation'
 import YamlImportPreview, { type CriteriaImportPreview } from './yaml-import-preview'
 import CriteriaRecoveryDialog, { type RecoveryMode } from './criteria-recovery-dialog'
 import { downloadCriteriaDraft } from './criteria-download'
 import type { CitationFieldContract } from './citation-field-selector'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 type Props = { srId: string; labels: Record<string, string>; hasScreeningData: boolean }
 
@@ -21,7 +29,8 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
   const [serverDiagnostics, setServerDiagnostics] = useState<CriteriaDiagnostic[]>([])
   const [importPreview, setImportPreview] = useState<CriteriaImportPreview | null>(null)
   const [recoveryMode, setRecoveryMode] = useState<RecoveryMode | null>(null)
-  const [citationFields, setCitationFields] = useState<CitationFieldContract>({ fields: [], doi_suggestions: [], unavailable_configured_fields: [] })
+  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
+  const [citationFields, setCitationFields] = useState<CitationFieldContract>({ fields: [], unavailable_configured_fields: [] })
   const clientDiagnostics = useMemo(() => validateCriteriaDraft(state.criteria), [state.criteria])
   const diagnostics = [...clientDiagnostics, ...serverDiagnostics]
 
@@ -36,7 +45,7 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
     if (fieldsResponse.ok) setCitationFields(await fieldsResponse.json())
     setMigrationFingerprint(data?.migration?.fingerprint || null)
     setStatus(data?.migration?.requires_confirmation ? labels.migrationWarning : '')
-  }, [endpoint, labels])
+  }, [endpoint, labels, srId])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => { setServerDiagnostics([]) }, [state.criteria])
@@ -89,6 +98,14 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
     setMigrationFingerprint(null); setForce(false); setStatus(labels.saved)
   }
 
+  const requestSave = () => {
+    if (hasScreeningData) {
+      setSaveConfirmOpen(true)
+      return
+    }
+    void save()
+  }
+
   const importYaml = async (file: File | null) => {
     if (!file) return
     const response = await authenticatedFetch(`${endpoint}&operation=import-yaml`, {
@@ -119,24 +136,38 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
   }
 
   return (
-    <section aria-labelledby="visual-criteria-heading">
+    <section aria-labelledby="criteria-heading">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="mr-auto"><h3 id="visual-criteria-heading" className="text-lg font-semibold">{labels.visualBuilder}</h3><p className="text-sm text-gray-600">{labels.visualBuilderDesc}</p></div>
+        <div className="mr-auto"><h3 id="criteria-heading" className="text-lg font-semibold">{labels.builderTitle}</h3><p className="text-sm text-gray-600">{labels.builderDescription}</p></div>
         <label className="cursor-pointer rounded-md border px-3 py-2 text-sm">{labels.importYaml}<input className="sr-only" type="file" accept=".yaml,.yml,text/yaml" onChange={(event) => void importYaml(event.target.files?.[0] || null)} /></label>
         <button type="button" onClick={() => void downloadYaml()} className="rounded-md border px-3 py-2 text-sm">{labels.downloadYaml}</button>
         <button type="button" onClick={() => state.dirty ? setRecoveryMode('reload') : void load()} className="rounded-md border px-3 py-2 text-sm">{labels.reload}</button>
-        <button type="button" disabled={!state.dirty || clientDiagnostics.length > 0} onClick={() => void save()} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
+        <button type="button" disabled={!state.dirty || clientDiagnostics.length > 0} onClick={requestSave} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
       </div>
-      {hasScreeningData ? <label className="mb-4 flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm"><input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />{labels.confirmInvalidation}</label> : null}
       <div role="status" aria-live="polite" className="mb-3 text-sm text-gray-600">{status}{state.dirty ? ` · ${labels.unsaved}` : ''}</div>
       <div className={`mb-4 rounded-md p-3 text-sm ${diagnostics.length ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`} role={diagnostics.length ? 'alert' : 'status'}>
         <strong>{diagnostics.length ? labels.validationErrors.replace('{count}', String(diagnostics.length)) : labels.validationPassed}</strong>
         {diagnostics.length ? <ul className="mt-2 list-disc pl-5">{diagnostics.map((item, index) => <li key={`${item.path}-${index}`}><button type="button" className="text-left underline" onClick={() => document.getElementById(item.itemId ? `criteria-item-${item.itemId}` : 'criteria-l1-fields')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>{item.message}</button></li>)}</ul> : null}
       </div>
-      <CriteriaPreview criteria={state.criteria} labels={labels} />
       <div className="mt-6"><CriteriaBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} /></div>
       <YamlImportPreview preview={importPreview} labels={labels} onCancel={() => { setImportPreview(null); setStatus(labels.importCancelled) }} onAccept={acceptImport} />
       <CriteriaRecoveryDialog mode={recoveryMode} labels={labels} onCancel={() => setRecoveryMode(null)} onExport={() => downloadCriteriaDraft(state.criteria)} onReload={() => { setRecoveryMode(null); void load() }} />
+      <AlertDialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{labels.confirmSaveTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{labels.confirmSaveDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
+            {labels.confirmInvalidation}
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{labels.cancel}</AlertDialogCancel>
+            <button type="button" disabled={!force} onClick={() => { setSaveConfirmOpen(false); void save() }} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }

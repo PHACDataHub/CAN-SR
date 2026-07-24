@@ -13,7 +13,7 @@ async function auth(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const downloadYaml = request.nextUrl.searchParams.get('download') === 'yaml'
-  const url = target(request, downloadYaml ? '/yaml' : '')
+  const url = target(request, downloadYaml ? '/export-yaml' : '')
   const authorization = await auth(request)
   if (!url) return NextResponse.json({ error: 'sr_id query parameter is required' }, { status: 400 })
   if (!authorization) return NextResponse.json({ error: 'Authorization header is required' }, { status: 401 })

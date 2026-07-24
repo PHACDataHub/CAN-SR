@@ -24,6 +24,7 @@ from ..citations import router as citations_router
 from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
+from ..criteria.runtime import item_is_visible
 from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
 from ..services.cit_db_service import snake_case
@@ -815,6 +816,24 @@ async def classify_citation(
             status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
         )
 
+    # Direct classify calls must honor canonical conditional visibility too.
+    canonical = sr.get('criteria') if isinstance(
+        sr.get('criteria'), dict,
+    ) else {}
+    stage = 'l2' if (payload.screening_step or '').lower() == 'l2' else 'l1'
+    source_item = next(
+        (
+            item for item in (canonical.get(stage) or [])
+            if isinstance(item, dict) and item.get('question') == payload.question
+        ),
+        None,
+    )
+    if source_item and not item_is_visible(canonical, source_item, row):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='This criterion is conditionally hidden by the configured criteria.',
+        )
+
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
     citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(
         row, payload.include_columns,
@@ -1097,6 +1116,22 @@ async def human_classify_citation(
             status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
         )
 
+    canonical = sr.get('criteria') if isinstance(
+        sr.get('criteria'), dict,
+    ) else {}
+    source_item = next(
+        (
+            item for item in [*(canonical.get('l1') or []), *(canonical.get('l2') or [])]
+            if isinstance(item, dict) and item.get('question') == payload.question
+        ),
+        None,
+    )
+    if source_item and not item_is_visible(canonical, source_item, row):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='This criterion is conditionally hidden by the configured criteria.',
+        )
+
     citation_text = payload.citation_text
     confidence = payload.confidence
 
@@ -1252,6 +1287,25 @@ async def run_title_abstract_agentic(
 
     for i, q in enumerate(questions):
         if not isinstance(q, str) or not q.strip():
+            continue
+
+        canonical = sr.get('criteria') if isinstance(
+            sr.get('criteria'), dict,
+        ) else {}
+        question_item = next(
+            (
+                item for item in (canonical.get('l1') or [])
+                if isinstance(item, dict) and item.get('question') == q
+            ),
+            None,
+        )
+        if question_item and not item_is_visible(canonical, question_item, row):
+            results.append({
+                'question': q,
+                'criterion_key': snake_case(q, max_len=56),
+                'skipped': True,
+                'reason': 'conditional_trigger_not_met',
+            })
             continue
 
         opts = possible[i] if i < len(
@@ -1840,6 +1894,25 @@ async def run_fulltext_agentic(
 
     for q, source_step, idx in merged_questions:
         if not isinstance(q, str) or not q.strip():
+            continue
+
+        canonical = sr.get('criteria') if isinstance(
+            sr.get('criteria'), dict,
+        ) else {}
+        question_item = next(
+            (
+                item for item in (canonical.get(source_step) or [])
+                if isinstance(item, dict) and item.get('question') == q
+            ),
+            None,
+        )
+        if question_item and not item_is_visible(canonical, question_item, row):
+            results.append({
+                'question': q,
+                'criterion_key': snake_case(q, max_len=56),
+                'skipped': True,
+                'reason': 'conditional_trigger_not_met',
+            })
             continue
 
         if source_step == 'l1':

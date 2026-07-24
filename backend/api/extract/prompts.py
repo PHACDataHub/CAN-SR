@@ -2,6 +2,8 @@ from __future__ import annotations
 PARAMETER_PROMPT_JSON = """
 You are an expert information extractor for scientific full-text articles. You will be given:
 - A short description of a parameter to extract (what the parameter is and how it is defined).
+- Optional reporting/unit instructions and calculation instructions.
+- For selection parameters, the allowed options and their guidance.
 - The full text of a paper with each sentence numbered like: [0] First sentence. [1] Second sentence. etc.
 - Optionally, numbered tables (as markdown) and numbered figure captions (with the corresponding figure images provided alongside this message).
 
@@ -25,6 +27,9 @@ Requirements:
 Inputs available for formatting:
 - {parameter_name}  (a short name for the parameter)
 - {parameter_description}  (detailed description of what to look for)
+- {unit_instructions}
+- {calculation}
+- {options}
 - {fulltext}  (the numbered sentences string; e.g. "[0] First sentence\n[1] Next sentence\n...")
 - {tables} (numbered markdown tables)
 - {figures} (numbered figure captions)
@@ -35,6 +40,9 @@ Example valid output:
 Do not output anything besides the JSON object.
 \n\nParameter name: {parameter_name}
 \nParameter description: {parameter_description}
+\nUnit/reporting instructions: {unit_instructions}
+\nCalculation instructions: {calculation}
+\nAllowed selection options:\n{options}
 \n\nFull text (numbered sentences):\n{fulltext}
 \n\nTables (numbered):\n{tables}
 \n\nFigures (numbered; captions correspond to images provided alongside this message):\n{figures}

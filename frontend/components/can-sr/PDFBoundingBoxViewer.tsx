@@ -19,6 +19,7 @@ interface PDFBoundingBoxViewerProps {
   // AI evidence and toggle state from sidebar
   aiPanels?: Record<string, any>
   panelOpen?: Record<string, boolean>
+  artifacts?: { tables?: any[]; figures?: any[] }
   // Numbered fulltext string "[0] ...\n\n[1] ...", for mapping indices->text
   fulltext?: string
   // Start with fit-to-width enabled
@@ -98,6 +99,7 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
     pages = [],
     aiPanels = {},
     panelOpen = {},
+    artifacts = {},
     fulltext,
     defaultFitToWidth = true,
   }: PDFBoundingBoxViewerProps,
@@ -618,15 +620,28 @@ const PDFBoundingBoxViewer = forwardRef<PDFBoundingBoxViewerHandle, PDFBoundingB
           }
           // Union of open and closed for filtering (style handled per state)
           const evidenceCoordKeys = new Set<string>([...openEvidenceCoordKeys, ...closedEvidenceCoordKeys])
+          const artifactEvidenceKeys = new Set<string>()
+          for (const pname of allParams) {
+            for (const [kind, list] of [['table', artifacts.tables || []], ['figure', artifacts.figures || []]] as const) {
+              const evidence = aiPanels?.[pname]?.[kind === 'table' ? 'evidence_tables' : 'evidence_figures']
+              if (!Array.isArray(evidence)) continue
+              for (const index of evidence) {
+                const artifact = list.find((item: any) => Number(item?.index) === Number(index))
+                for (const box of artifact?.bounding_box || []) {
+                  if (box && typeof box === 'object') artifactEvidenceKeys.add(buildCoordKey(box))
+                }
+              }
+            }
+          }
 
           const filtered = showBoundingBoxes
             ? pageCoords.filter((c: any) => {
                 const t = String(c?.text || '').trim()
                 const textMatch = !!t && Array.isArray(textToParams[t]) && textToParams[t].length > 0
-                const coordMatch = evidenceCoordKeys.has(buildCoordKey(c))
+                const coordMatch = evidenceCoordKeys.has(buildCoordKey(c)) || artifactEvidenceKeys.has(buildCoordKey(c))
                 return textMatch || coordMatch
               })
-            : []
+            : pageCoords.filter((c: any) => openEvidenceCoordKeys.has(buildCoordKey(c)) || artifactEvidenceKeys.has(buildCoordKey(c)))
 
           // Add an explicitly selected coordinate (e.g., table/figure chip click)
           if (selectedCoord) {

@@ -6,7 +6,7 @@ from api.services.citation_field_service import build_citation_field_contract
 
 
 class CitationFieldServiceTests(unittest.TestCase):
-    def test_preserves_order_filters_runtime_columns_and_suggests_doi(self):
+    def test_preserves_order_filters_runtime_columns_and_reports_unavailable(self):
         result = build_citation_field_contract(
             {
                 'criteria': {
@@ -20,20 +20,13 @@ class CitationFieldServiceTests(unittest.TestCase):
             ]],
         )
         self.assertEqual(
-            [field['name'] for field in result['fields']], [
-                'Title', 'Abstract', 'DOI',
+            result['fields'], [
+                {'name': 'Title', 'data_type': 'text'},
+                {'name': 'Abstract', 'data_type': 'text'},
+                {'name': 'DOI', 'data_type': 'text'},
             ],
         )
-        self.assertEqual(result['doi_suggestions'], ['DOI'])
         self.assertEqual(result['unavailable_configured_fields'], ['Missing'])
 
-    def test_supports_likely_doi_header_and_review_without_upload(self):
-        result = build_citation_field_contract(
-            {}, [{'column_name': 'Digital Object Identifier', 'data_type': 'text'}],
-        )
-        self.assertEqual(
-            result['doi_suggestions'], [
-                'Digital Object Identifier',
-            ],
-        )
+    def test_supports_review_without_upload(self):
         self.assertEqual(build_citation_field_contract({}, [])['fields'], [])

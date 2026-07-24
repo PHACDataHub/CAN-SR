@@ -31,7 +31,7 @@ class CriteriaConfigRouterTests(unittest.IsolatedAsyncioTestCase):
         review = {'screening_db': {'table_name': 'review_citations'}}
         load_review.return_value = review
         discover.return_value = {
-            'fields': [], 'doi_suggestions': [], 'unavailable_configured_fields': [],
+            'fields': [], 'unavailable_configured_fields': [],
         }
         response = await get_citation_fields('review-id', USER)
         load_review.assert_awaited_once_with('review-id', USER)

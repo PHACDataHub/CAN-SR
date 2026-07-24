@@ -7,19 +7,36 @@ import { emptyCriteria } from './criteria-types'
 const labels = new Proxy({}, { get: (_target, property) => String(property) }) as Record<string, string>
 
 describe('CitationFieldSelector', () => {
-  it('selects and reorders fields and shows DOI suggestions', async () => {
+  it('adds, removes, and reorders configured title/abstract fields', async () => {
     const user = userEvent.setup()
     const dispatch = vi.fn()
     const criteria = emptyCriteria()
     criteria.citation_fields.l1_include = ['Title', 'Missing']
     render(<CitationFieldSelector state={{ criteria, revision: 1, dirty: false }} dispatch={dispatch} labels={labels} contract={{ fields: [
-      { name: 'Title', data_type: 'text', doi_likelihood: 0 }, { name: 'DOI', data_type: 'text', doi_likelihood: 100 },
-    ], doi_suggestions: ['DOI'], unavailable_configured_fields: ['Missing'] }} />)
-    expect(screen.getByText(/Missing.*unavailableField/)).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'DOI · likelyDoi' })).toBeInTheDocument()
+      { name: 'Title', data_type: 'text' }, { name: 'Abstract', data_type: 'text' }, { name: 'DOI', data_type: 'text' },
+    ], unavailable_configured_fields: ['Missing'] }} />)
+    expect(screen.getByRole('heading', { name: 'citationFields (2)' })).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: /Missing unavailableField/ })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'moveUp Missing' }))
     expect(dispatch).toHaveBeenCalledWith({ type: 'set-citation-fields', value: ['Missing', 'Title'] })
-    await user.click(screen.getByRole('checkbox', { name: 'DOI' }))
-    expect(dispatch).toHaveBeenLastCalledWith({ type: 'set-citation-fields', value: ['Title', 'Missing', 'DOI'] })
+    await user.click(screen.getByRole('button', { name: 'addField' }))
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Title' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', { name: 'Abstract' }))
+    expect(dispatch).toHaveBeenLastCalledWith({ type: 'set-citation-fields', value: ['Title', 'Missing', 'Abstract'] })
+    await user.click(screen.getByRole('button', { name: 'removeField Missing' }))
+    expect(dispatch).toHaveBeenLastCalledWith({ type: 'set-citation-fields', value: ['Title'] })
+    expect(screen.getByLabelText('doiField')).toHaveDisplayValue('noDoiField')
+    expect(screen.getByLabelText('doiField')).toContainHTML('<option value="DOI">DOI</option>')
+    expect(screen.queryByText('likelyDoi')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'collapse citationFields' }))
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('doiField')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'addField' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'expand citationFields' }))
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByLabelText('doiField')).toBeInTheDocument()
   })
 })

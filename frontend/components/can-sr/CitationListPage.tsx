@@ -86,7 +86,9 @@ export default function CitationsListPage({
 
   // Phase 1 single-threshold is deprecated; kept for backward compatibility.
   const [threshold, setThreshold] = useState<number>(0.9)
-  const [filterMode, setFilterMode] = useState<'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'>('all')
+  const [filterMode, setFilterMode] = useState<
+    'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
+  >('all')
   const [filterHydrated, setFilterHydrated] = useState<boolean>(false)
 
   const filterParam = searchParams?.get('filter')
@@ -97,8 +99,18 @@ export default function CitationsListPage({
   }, [srId, screeningStep])
 
   const normalizeFilter = useCallback(
-    (v: any): 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all' | null => {
-      const s = String(v || '').toLowerCase().trim()
+    (
+      v: any,
+    ):
+      | 'needs'
+      | 'validated'
+      | 'unvalidated'
+      | 'not_screened'
+      | 'all'
+      | null => {
+      const s = String(v || '')
+        .toLowerCase()
+        .trim()
       if (s === 'needs') return 'needs'
       if (s === 'validated') return 'validated'
       if (s === 'unvalidated') return 'unvalidated'
@@ -128,7 +140,8 @@ export default function CitationsListPage({
       try {
         const stored = window.localStorage.getItem(filterStorageKey)
         const fromStore = normalizeFilter(stored)
-        if (fromStore) setFilterMode((prev) => (prev === fromStore ? prev : fromStore))
+        if (fromStore)
+          setFilterMode((prev) => (prev === fromStore ? prev : fromStore))
       } catch {
         // ignore
       }
@@ -152,14 +165,26 @@ export default function CitationsListPage({
     }
   }, [srId, screeningStep, filterMode, filterStorageKey])
   // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
-  const [_pageStats, setPageStats] = useState<ScreeningMetricsStats | undefined>(undefined)
+  const [_pageStats, setPageStats] = useState<
+    ScreeningMetricsStats | undefined
+  >(undefined)
 
   // Phase 2 metrics (SR-wide)
-  const [srMetricsSummary, setSrMetricsSummary] = useState<ScreeningMetricsSummary | undefined>(undefined)
-  const [srCriterionMetrics, setSrCriterionMetrics] = useState<ScreeningCriterionMetrics[] | undefined>(undefined)
-  const [srCalibration, setSrCalibration] = useState<CalibrationCriterion[] | undefined>(undefined)
-  const [srLiveHistogram, setSrLiveHistogram] = useState<LiveConfidenceHistogramCriterion[] | undefined>(undefined)
-  const [_srThresholds, setSrThresholds] = useState<Record<string, any> | null>(null)
+  const [srMetricsSummary, setSrMetricsSummary] = useState<
+    ScreeningMetricsSummary | undefined
+  >(undefined)
+  const [srCriterionMetrics, setSrCriterionMetrics] = useState<
+    ScreeningCriterionMetrics[] | undefined
+  >(undefined)
+  const [srCalibration, setSrCalibration] = useState<
+    CalibrationCriterion[] | undefined
+  >(undefined)
+  const [srLiveHistogram, setSrLiveHistogram] = useState<
+    LiveConfidenceHistogramCriterion[] | undefined
+  >(undefined)
+  const [_srThresholds, setSrThresholds] = useState<Record<string, any> | null>(
+    null,
+  )
 
   // Backend warnings (e.g., legacy data needs run-all)
   const [srWarnings, setSrWarnings] = useState<any[] | null>(null)
@@ -167,8 +192,10 @@ export default function CitationsListPage({
   const legacyWarning = useMemo(() => {
     const ws = Array.isArray(srWarnings) ? srWarnings : []
     return (
-      ws.find((w) => String(w?.code || '').toUpperCase() === 'LEGACY_DATA_NEEDS_RUN_ALL') ||
-      null
+      ws.find(
+        (w) =>
+          String(w?.code || '').toUpperCase() === 'LEGACY_DATA_NEEDS_RUN_ALL',
+      ) || null
     )
   }, [srWarnings])
 
@@ -180,7 +207,10 @@ export default function CitationsListPage({
   const [metricsDrawerOpen, setMetricsDrawerOpen] = useState<boolean>(false)
 
   // Draft editing: user can adjust thresholds locally, then click Save.
-  const [draftThresholds, setDraftThresholds] = useState<Record<string, any> | null>(null)
+  const [draftThresholds, setDraftThresholds] = useState<Record<
+    string,
+    any
+  > | null>(null)
   const [thresholdsDirty, setThresholdsDirty] = useState<boolean>(false)
   const [savingThresholds, setSavingThresholds] = useState<boolean>(false)
 
@@ -213,14 +243,21 @@ export default function CitationsListPage({
     let alive = true
     let wasActive = false
     const refreshJobs = async () => {
-      const res = await fetch('/api/can-sr/jobs/active', { headers: getAuthHeaders() })
+      const res = await fetch('/api/can-sr/jobs/active', {
+        headers: getAuthHeaders(),
+      })
       const data = await res.json().catch(() => ({}))
       if (!alive || !res.ok) return
       const matching = (Array.isArray(data?.jobs) ? data.jobs : []).find(
-        (job: any) => String(job?.sr_id) === String(srId) && job?.pipeline_key === 'pdf_linkage',
+        (job: any) =>
+          String(job?.sr_id) === String(srId) &&
+          job?.pipeline_key === 'pdf_linkage',
       )
       const active = Boolean(
-        matching && ['queued', 'running', 'paused'].includes(String(matching.status).toLowerCase()),
+        matching &&
+        ['queued', 'running', 'paused'].includes(
+          String(matching.status).toLowerCase(),
+        ),
       )
       if (wasActive && !active) setCitationRefreshKey((value) => value + 1)
       wasActive = active
@@ -280,7 +317,9 @@ export default function CitationsListPage({
             setError(errMsg)
             setCitationIds([])
           } else {
-            setCitationIds(Array.isArray(data?.citation_ids) ? data.citation_ids : [])
+            setCitationIds(
+              Array.isArray(data?.citation_ids) ? data.citation_ids : [],
+            )
           }
         } else {
           // extract view still uses legacy list endpoint (server eligibility differs)
@@ -362,8 +401,12 @@ export default function CitationsListPage({
         )
         const tJson = await tRes.json().catch(() => ({}))
         const thresholds = (tRes.ok ? tJson?.screening_thresholds : null) || {}
-        setSrThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
-        setDraftThresholds(typeof thresholds === 'object' && thresholds ? thresholds : {})
+        setSrThresholds(
+          typeof thresholds === 'object' && thresholds ? thresholds : {},
+        )
+        setDraftThresholds(
+          typeof thresholds === 'object' && thresholds ? thresholds : {},
+        )
         setThresholdsDirty(false)
 
         // 2) metrics
@@ -408,7 +451,9 @@ export default function CitationsListPage({
         )
         const hJson = await hRes.json().catch(() => ({}))
         if (hRes.ok && Array.isArray(hJson?.criteria)) {
-          setSrLiveHistogram(hJson.criteria as LiveConfidenceHistogramCriterion[])
+          setSrLiveHistogram(
+            hJson.criteria as LiveConfidenceHistogramCriterion[],
+          )
         } else {
           setSrLiveHistogram(undefined)
         }
@@ -429,7 +474,10 @@ export default function CitationsListPage({
       if (!srId) return
       try {
         setSavingThresholds(true)
-        const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
+        const headers = {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json',
+        }
         const res = await fetch(
           `/api/can-sr/reviews/thresholds?sr_id=${encodeURIComponent(srId)}`,
           {
@@ -479,7 +527,9 @@ export default function CitationsListPage({
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `Status failed (${res.status})`)
+        throw new Error(
+          data?.detail || data?.error || `Status failed (${res.status})`,
+        )
       }
       return data
     }
@@ -509,7 +559,6 @@ export default function CitationsListPage({
     }
   }, [runAllJobId, runAllStorageKey, clearRunAll])
 
-
   const hasActiveRunAll = useMemo(() => {
     const st = String(runAllJob?.status || '').toLowerCase()
     return !!runAllJobId && ['queued', 'running', 'paused'].includes(st)
@@ -524,9 +573,13 @@ export default function CitationsListPage({
     setRunAllStarting(true)
     setError(null)
     try {
-      const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' }
+      const headers = {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      }
       const sendExplicitIds = screeningStep === 'l1'
-      const res = await fetch(`/api/can-sr/jobs/run-all/start?sr_id=${encodeURIComponent(srId)}`,
+      const res = await fetch(
+        `/api/can-sr/jobs/run-all/start?sr_id=${encodeURIComponent(srId)}`,
         {
           method: 'POST',
           headers,
@@ -538,13 +591,15 @@ export default function CitationsListPage({
             // For l1 we explicitly send the filtered list IDs (entire list, not just page).
             // For l2/extract we let the backend compute eligible IDs so it can enforce
             // the PDF/fulltext requirement.
-            citation_ids: sendExplicitIds ? (citationIds || []) : undefined,
+            citation_ids: sendExplicitIds ? citationIds || [] : undefined,
           }),
         },
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(data?.detail || data?.error || `Start failed (${res.status})`)
+        throw new Error(
+          data?.detail || data?.error || `Start failed (${res.status})`,
+        )
       }
 
       // Notify floating panel to refresh once (it stops polling when empty/paused).
@@ -560,9 +615,13 @@ export default function CitationsListPage({
       // If server says a job already exists, attach UI to that job and warn.
       const alreadyRunning = Boolean(data?.already_running || data?.existing)
       if (alreadyRunning) {
-        toast.error(dict?.screening?.onlyOneJobAtATime || 'Only one job can be running at a time', {
-          duration: 5000,
-        })
+        toast.error(
+          dict?.screening?.onlyOneJobAtATime ||
+            'Only one job can be running at a time',
+          {
+            duration: 5000,
+          },
+        )
       }
 
       setRunAllJobId(jid)
@@ -594,11 +653,19 @@ export default function CitationsListPage({
     setPdfLinkStarting(true)
     setError(null)
     try {
-      const res = await fetch(`/api/can-sr/jobs/pdf-linkage/start?sr_id=${encodeURIComponent(srId)}`, {
-        method: 'POST', headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' }, body: '{}',
-      })
+      const res = await fetch(
+        `/api/can-sr/jobs/pdf-linkage/start?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'POST',
+          headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+          body: '{}',
+        },
+      )
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.detail || data?.error || `Start failed (${res.status})`)
+      if (!res.ok)
+        throw new Error(
+          data?.detail || data?.error || `Start failed (${res.status})`,
+        )
       setPdfLinkageActive(true)
       window.dispatchEvent(new Event('jobs:changed'))
       toast.success('PDF linkage started')
@@ -626,7 +693,10 @@ export default function CitationsListPage({
         title={displayMap[screeningStep]}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId || '')}`}
         right={
-          <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
+          <ModelSelector
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+          />
         }
       />
 
@@ -639,11 +709,14 @@ export default function CitationsListPage({
           <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             <div className="font-medium">Legacy screening data detected</div>
             <div className="mt-1 text-amber-800">
-              {String(legacyWarning?.message ||
-                'This SR has legacy llm_* outputs but no agentic runs. Please run Run-all to regenerate results.')}
+              {String(
+                legacyWarning?.message ||
+                  'This SR has legacy llm_* outputs but no agentic runs. Please run Run-all to regenerate results.',
+              )}
             </div>
             <div className="mt-2 text-[12px] text-amber-800">
-              Tip: when legacy data is detected, Run-all will automatically force overwrite to generate real agent runs.
+              Tip: when legacy data is detected, Run-all will automatically
+              force overwrite to generate real agent runs.
             </div>
           </div>
         ) : null}
@@ -661,10 +734,13 @@ export default function CitationsListPage({
           step={screeningStep}
         />
 
-        <Dialog open={runAllModalOpen} onOpenChange={() => setRunAllModalOpen(false)}>
+        <Dialog
+          open={runAllModalOpen}
+          onOpenChange={() => setRunAllModalOpen(false)}
+        >
           <DialogContent className="sm:max-w-[560px]">
             <DialogHeader>
-              <DialogTitle>{dict?.screening?.runAllAI || 'Run all AI'}</DialogTitle>
+              <DialogTitle>Run All</DialogTitle>
               <DialogDescription>
                 {screeningStep === 'l1'
                   ? dict?.screening?.runAllL1Desc ||
@@ -688,10 +764,18 @@ export default function CitationsListPage({
             </label>
 
             <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => setRunAllModalOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => setRunAllModalOpen(false)}
+              >
                 {dict?.common?.close || 'Close'}
               </Button>
-              <Button onClick={startRunAll} disabled={!canRunAllServerSide || runAllStarting || hasActiveRunAll}>
+              <Button
+                onClick={startRunAll}
+                disabled={
+                  !canRunAllServerSide || runAllStarting || hasActiveRunAll
+                }
+              >
                 {runAllStarting
                   ? dict?.screening?.starting || 'Starting…'
                   : dict?.screening?.startRunAll || 'Start'}
@@ -700,54 +784,75 @@ export default function CitationsListPage({
           </DialogContent>
         </Dialog>
         <div className="grid grid-cols-12 gap-6">
-          <aside className="col-span-12 md:col-span-5">
-            <div className="sticky top-6">
-              <ScreeningMetricsPanel
-                title={dict?.screening?.metricsTitle || 'Screening metrics'}
-                filterMode={filterMode}
-                onFilterModeChange={setFilterMode}
-                onOpenDetails={() => setMetricsDrawerOpen(true)}
-                stats={undefined}
-                summary={srMetricsSummary}
-                criterionMetrics={srCriterionMetrics}
-                calibration={srCalibration}
-                showFilter={false}
-                thresholdsDirty={thresholdsDirty}
-                savingThresholds={savingThresholds}
-                onSaveThresholds={() => {
-                  const next = draftThresholds && typeof draftThresholds === 'object' ? draftThresholds : {}
-                  void persistThresholds(next)
-                }}
-                onCriterionThresholdChange={(criterionKey, v) => {
-                  // Update draft per-step thresholds
-                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
-                  const stepKey = String(screeningStep)
-                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
-                    ? { ...(base as any)[stepKey] }
-                    : {}
-                  stepMap[criterionKey] = v
-                  ;(base as any)[stepKey] = stepMap
-                  setDraftThresholds(base)
-                  setThresholdsDirty(true)
-                }}
-                onCriterionThresholdCommit={(criterionKey, v) => {
-                  // Ensure draft is updated and then persist.
-                  const base = draftThresholds && typeof draftThresholds === 'object' ? { ...draftThresholds } : {}
-                  const stepKey = String(screeningStep)
-                  const stepMap = (base as any)[stepKey] && typeof (base as any)[stepKey] === 'object'
-                    ? { ...(base as any)[stepKey] }
-                    : {}
-                  stepMap[criterionKey] = v
-                  ;(base as any)[stepKey] = stepMap
-                  setDraftThresholds(base)
-                  setThresholdsDirty(true)
-                  void persistThresholds(base)
-                }}
-              />
-            </div>
-          </aside>
+          {screeningStep !== 'extract' ? (
+            <aside className="col-span-12 md:col-span-5">
+              <div className="sticky top-6">
+                <ScreeningMetricsPanel
+                  title={dict?.screening?.metricsTitle || 'Screening metrics'}
+                  filterMode={filterMode}
+                  onFilterModeChange={setFilterMode}
+                  onOpenDetails={() => setMetricsDrawerOpen(true)}
+                  stats={undefined}
+                  summary={srMetricsSummary}
+                  criterionMetrics={srCriterionMetrics}
+                  calibration={srCalibration}
+                  showFilter={false}
+                  thresholdsDirty={thresholdsDirty}
+                  savingThresholds={savingThresholds}
+                  onSaveThresholds={() => {
+                    const next =
+                      draftThresholds && typeof draftThresholds === 'object'
+                        ? draftThresholds
+                        : {}
+                    void persistThresholds(next)
+                  }}
+                  onCriterionThresholdChange={(criterionKey, v) => {
+                    // Update draft per-step thresholds
+                    const base =
+                      draftThresholds && typeof draftThresholds === 'object'
+                        ? { ...draftThresholds }
+                        : {}
+                    const stepKey = String(screeningStep)
+                    const stepMap =
+                      (base as any)[stepKey] &&
+                      typeof (base as any)[stepKey] === 'object'
+                        ? { ...(base as any)[stepKey] }
+                        : {}
+                    stepMap[criterionKey] = v
+                    ;(base as any)[stepKey] = stepMap
+                    setDraftThresholds(base)
+                    setThresholdsDirty(true)
+                  }}
+                  onCriterionThresholdCommit={(criterionKey, v) => {
+                    // Ensure draft is updated and then persist.
+                    const base =
+                      draftThresholds && typeof draftThresholds === 'object'
+                        ? { ...draftThresholds }
+                        : {}
+                    const stepKey = String(screeningStep)
+                    const stepMap =
+                      (base as any)[stepKey] &&
+                      typeof (base as any)[stepKey] === 'object'
+                        ? { ...(base as any)[stepKey] }
+                        : {}
+                    stepMap[criterionKey] = v
+                    ;(base as any)[stepKey] = stepMap
+                    setDraftThresholds(base)
+                    setThresholdsDirty(true)
+                    void persistThresholds(base)
+                  }}
+                />
+              </div>
+            </aside>
+          ) : null}
 
-          <div className="col-span-12 md:col-span-7">
+          <div
+            className={
+              screeningStep === 'extract'
+                ? 'col-span-12 md:col-span-7 md:col-start-4'
+                : 'col-span-12 md:col-span-7'
+            }
+          >
             <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -765,39 +870,44 @@ export default function CitationsListPage({
                       type="button"
                       disabled={!srId || pdfLinkStarting || hasActiveRunAll}
                       onClick={() => void startPdfLinkage()}
-                      className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:bg-gray-100 disabled:text-gray-400"
+                      className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
                       title="Find openly available PDFs for citations without full text"
                     >
-                      {pdfLinkStarting ? 'Starting…' : 'Find PDFs'}
+                      {pdfLinkStarting ? 'Starting…' : 'Link PDFs'}
                     </button>
                   ) : null}
                   <button
                     type="button"
                     disabled={!canRunAllServerSide || hasActiveRunAll}
                     onClick={() => setRunAllModalOpen(true)}
-                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
-                    title={dict.screening.runAllAI}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                    title="Run All"
                   >
                     <span className="inline-flex items-center gap-1">
-                      {dict.screening.runAllAI}
+                      Run All
                       <Wand2 className="h-4 w-4" />
                     </span>
                   </button>
-
-                  <button
-                    type="button"
-                    disabled={!srId}
-                    onClick={() => setExportOpen(true)}
-                    className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
-                  >
-                    {dict.common.export}
-                  </button>
-                  {srId ? <CitationExportDialog
-                    srId={srId}
-                    open={exportOpen}
-                    onOpenChange={setExportOpen}
-                    currentViewIds={citationIds || undefined}
-                  /> : null}
+                  {screeningStep === 'extract' ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={!srId}
+                        onClick={() => setExportOpen(true)}
+                        className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:bg-emerald-300"
+                      >
+                        {dict.common.export}
+                      </button>
+                      {srId ? (
+                        <CitationExportDialog
+                          srId={srId}
+                          open={exportOpen}
+                          onOpenChange={setExportOpen}
+                          currentViewIds={citationIds || undefined}
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
 
                   <div className="flex max-w-xs flex-col items-center space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
                     <div className="flex items-center space-x-2">
@@ -820,7 +930,7 @@ export default function CitationsListPage({
 
               <div className="mt-6">
                 {/* Filter bar moved above the list view */}
-                {(screeningStep === 'l1' || screeningStep === 'l2') ? (
+                {screeningStep === 'l1' || screeningStep === 'l2' ? (
                   <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
                     <label className="text-sm text-gray-700">Filter</label>
                     <select
@@ -830,7 +940,9 @@ export default function CitationsListPage({
                         setFilterMode(next)
                         // Keep URL in sync on *user intent* (safe, avoids effect-driven loops).
                         try {
-                          const params = new URLSearchParams(searchParams?.toString() || '')
+                          const params = new URLSearchParams(
+                            searchParams?.toString() || '',
+                          )
                           params.set('sr_id', String(srId || ''))
                           params.set('filter', String(next))
                           router.replace(
@@ -878,7 +990,9 @@ export default function CitationsListPage({
                           : null) || undefined
                       }
                       filterMode={filterMode}
-                      serverFiltered={screeningStep === 'l1' || screeningStep === 'l2'}
+                      serverFiltered={
+                        screeningStep === 'l1' || screeningStep === 'l2'
+                      }
                       pdfLinkageActive={pdfLinkageActive}
                       refreshKey={citationRefreshKey}
                       onThresholdChange={setThreshold}

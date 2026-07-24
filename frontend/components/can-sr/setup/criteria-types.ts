@@ -10,7 +10,6 @@ export type ScreeningAnswer = {
 export type ScreeningQuestion = {
   id: string
   question: string
-  context?: string | null
   answers: ScreeningAnswer[]
   trigger: { all: Array<{ source_item_id: string; option_id: string }> }
 }
@@ -60,7 +59,7 @@ export type CriteriaDraftAction =
   | { type: 'add-question'; stage: 'l1' | 'l2' }
   | { type: 'delete-question'; stage: 'l1' | 'l2'; questionId: string }
   | { type: 'move-question'; stage: 'l1' | 'l2'; questionId: string; direction: -1 | 1 }
-  | { type: 'update-question'; stage: 'l1' | 'l2'; questionId: string; field: 'question' | 'context'; value: string }
+  | { type: 'update-question'; stage: 'l1' | 'l2'; questionId: string; field: 'question'; value: string }
   | { type: 'add-answer'; stage: 'l1' | 'l2'; questionId: string }
   | { type: 'delete-answer'; stage: 'l1' | 'l2'; questionId: string; answerId: string }
   | { type: 'update-answer'; stage: 'l1' | 'l2'; questionId: string; answerId: string; field: 'label' | 'context' | 'decision'; value: string }
@@ -103,7 +102,6 @@ const createAnswer = (label: string, decision: Decision): ScreeningAnswer => ({
 const createQuestion = (): ScreeningQuestion => ({
   id: createId('question'),
   question: 'New screening question',
-  context: '',
   answers: [createAnswer('Yes', 'include'), createAnswer('No', 'exclude')],
   trigger: { all: [] },
 })

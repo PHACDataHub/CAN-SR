@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from copy import deepcopy
 from typing import Any
 from typing import Literal
 
@@ -92,9 +93,12 @@ class CriteriaConfigurationService:
                 raise ValueError(
                     f'v2 criteria cannot contain legacy keys: {sorted(mixed)}',
                 )
+            normalized = deepcopy(raw)
+            diagnostics = self._move_question_context_to_answers(normalized)
             return CriteriaLoadResult(
-                criteria=CriteriaConfigV2.model_validate(raw),
+                criteria=CriteriaConfigV2.model_validate(normalized),
                 source_format='criteria_v2',
+                diagnostics=diagnostics,
             )
         if version is not None:
             raise ValueError(
@@ -103,6 +107,42 @@ class CriteriaConfigurationService:
         if not LEGACY_KEYS.intersection(raw):
             raise ValueError('unrecognized criteria format')
         return self._migrate_legacy(raw, source_kind=source_kind)
+
+    @staticmethod
+    def _move_question_context_to_answers(raw: dict[str, Any]) -> list[Diagnostic]:
+        """Preserve obsolete v2 question guidance by applying it to every answer."""
+        diagnostics: list[Diagnostic] = []
+        for stage in ('l1', 'l2'):
+            items = raw.get(stage)
+            if not isinstance(items, list):
+                continue
+            for question_index, item in enumerate(items):
+                if not isinstance(item, dict) or 'context' not in item:
+                    continue
+                context = item.pop('context')
+                if not isinstance(context, str) or not context.strip():
+                    continue
+                answers = item.get('answers')
+                if not isinstance(answers, list):
+                    continue
+                for answer in answers:
+                    if not isinstance(answer, dict):
+                        continue
+                    answer_context = answer.get('context')
+                    parts = [context.strip()]
+                    if isinstance(answer_context, str) and answer_context.strip():
+                        parts.append(answer_context.strip())
+                    answer['context'] = '\n\n'.join(parts)
+                diagnostics.append(
+                    Diagnostic(
+                        severity='warning',
+                        code='question_context_moved_to_answers',
+                        source_path=[stage, question_index, 'context'],
+                        target_path=[stage, question_index, 'answers'],
+                        message='Question-level context was copied to each answer because screening guidance is answer-specific.',
+                    ),
+                )
+        return diagnostics
 
     def export_yaml(self, criteria: CriteriaConfigV2 | dict[str, Any]) -> str:
         model = criteria if isinstance(

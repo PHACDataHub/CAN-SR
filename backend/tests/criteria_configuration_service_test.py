@@ -123,6 +123,39 @@ parameters:
                 'parameters': [], 'include': ['Title'],
             })
 
+    def test_obsolete_question_context_is_preserved_on_every_answer(self) -> None:
+        result = self.service.normalize({
+            'schema_version': 2,
+            'citation_fields': {},
+            'l1': [{
+                'id': 'q_primary',
+                'question': 'Primary research?',
+                'context': 'Guidance shared by the old question.',
+                'answers': [
+                    {
+                        'id': 'yes', 'label': 'Yes', 'context': 'Yes-specific guidance.',
+                        'decision': 'include',
+                    },
+                    {'id': 'no_answer', 'label': 'No', 'decision': 'exclude'},
+                ],
+            }],
+            'l2': [],
+            'parameters': [],
+        })
+
+        self.assertEqual(
+            result.criteria.l1[0].answers[0].context,
+            'Guidance shared by the old question.\n\nYes-specific guidance.',
+        )
+        self.assertEqual(
+            result.criteria.l1[0].answers[1].context,
+            'Guidance shared by the old question.',
+        )
+        self.assertEqual(
+            [item.code for item in result.diagnostics],
+            ['question_context_moved_to_answers'],
+        )
+
     def test_projection_retains_legacy_arrays_and_adds_stable_items(self) -> None:
         migrated = self.service.normalize({
             'include': ['Title'],
@@ -137,6 +170,14 @@ parameters:
         self.assertEqual(projection['schema_version'], 2)
         self.assertEqual(projection['l1']['questions'], ['Eligible?'])
         self.assertEqual(projection['l1']['include'], ['Title'])
+        self.assertIn(
+            '<Yes>\nInclude it\n</Yes>',
+            projection['l1']['additional_infos'][0],
+        )
+        self.assertIn(
+            '<No (exclude)>\nExclude it\n</No (exclude)>',
+            projection['l1']['additional_infos'][0],
+        )
         self.assertEqual(
             projection['l1']['items']
             [0]['id'], migrated.criteria.l1[0].id,
