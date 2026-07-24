@@ -640,11 +640,14 @@ export default function CanSrL2ScreenViewPage() {
       // A Full Text AI panel must only exist when there is a persisted fulltext
       // screening run. Never display a shared/legacy L1 llm_* value as L2 output.
       if (fulltextRun && isCurrentFulltextRun) {
-        const llmMatchesFulltext = llmParsed && typeof llmParsed === 'object' &&
-          String((llmParsed as any).selected ?? '') === String(fulltextRun.answer ?? '') &&
-          ((llmParsed as any).pipeline === 'fulltext' || !(llmParsed as any).pipeline)
+        // The latest agent-run endpoint returns the audit answer, while the
+        // persisted llm_* payload contains the evidence arrays. Do not discard
+        // that payload merely because answer normalization changed the value.
+        const persistedFulltext = llmParsed && typeof llmParsed === 'object' &&
+          ((llmParsed as any).pipeline === 'fulltext' || !(llmParsed as any).pipeline) &&
+          (!(llmParsed as any).fulltext_md5 || (llmParsed as any).fulltext_md5 === citationFulltextMd5)
         newAiPanels[idx] = {
-          ...(llmMatchesFulltext ? llmParsed : {}),
+          ...(persistedFulltext ? llmParsed : {}),
           selected: fulltextRun.answer ?? '',
           confidence: fulltextRun.confidence,
           explanation: fulltextRun.rationale ?? '',
@@ -906,12 +909,13 @@ export default function CanSrL2ScreenViewPage() {
         pages={fulltextPages || []}
         aiPanels={panelsKeyed.panels}
         panelOpen={panelsKeyed.open}
+        artifacts={{ tables: parsedTables, figures: parsedFigures }}
         fulltext={fulltextStr || ''}
         defaultFitToWidth={true}
         ref={viewerRef}
       />
     )
-  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, dict, error])
+  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, parsedTables, parsedFigures, dict, error])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render

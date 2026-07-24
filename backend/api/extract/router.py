@@ -27,6 +27,7 @@ from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.docint_coords import normalize_bounding_regions_to_boxes
 from ..core.security import get_current_active_user
+from ..criteria.runtime import item_is_visible
 from ..services.azure_docint_client import azure_docint_client
 from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
@@ -54,6 +55,10 @@ class ParameterExtractRequest(BaseModel):
     parameter_description: str = Field(
         ..., description='Human-friendly description of what to extract',
     )
+    unit_instructions: str = ''
+    calculation: str = ''
+    options: list[str] = Field(default_factory=list)
+    option_contexts: dict[str, str] = Field(default_factory=dict)
     model: str | None = Field(None, description='Model to use')
     temperature: float | None = Field(0.0, ge=0.0, le=1.0)
     max_tokens: int | None = Field(512, ge=1, le=4000)
@@ -131,6 +136,17 @@ async def extract_parameter_endpoint(
 
     table_name = (screening or {}).get('table_name') or 'citations'
 
+    # Enforce builder conditional visibility at the execution boundary.
+    canonical = sr.get('criteria') if isinstance(
+        sr.get('criteria'), dict,
+    ) else {}
+    parameter = next(
+        (
+            item for item in (canonical.get('parameters') or [])
+            if isinstance(item, dict) and item.get('name') == payload.parameter_name
+        ), None,
+    )
+
     # Obtain fulltext: prefer payload, otherwise read from DB row
     fulltext = payload.fulltext
     row = None
@@ -160,6 +176,12 @@ async def extract_parameter_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail='Full text not provided and not available for this citation',
             )
+
+    if parameter and not item_is_visible(canonical, parameter, row or {}):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='This parameter is conditionally hidden by the configured criteria.',
+        )
 
     # Build tables/figures context: prefer payload fields, else fetch from DB row (if loaded)
     tables_text = payload.tables
@@ -242,6 +264,11 @@ async def extract_parameter_endpoint(
     prompt = PARAMETER_PROMPT_JSON.format(
         parameter_name=payload.parameter_name,
         parameter_description=payload.parameter_description,
+        unit_instructions=payload.unit_instructions,
+        calculation=payload.calculation,
+        options='\n'.join(
+            f'- {option}: {payload.option_contexts.get(option, "")}' for option in payload.options
+        ),
         fulltext=fulltext,
         tables=tables_text,
         figures=figures_text,

@@ -1,6 +1,7 @@
 'use client'
 
 import CitationsListPage from '@/components/can-sr/CitationListPage'
+import { flattenExtractionParameters } from '@/components/can-sr/extraction-parameters'
 
 import type {
   AiCall,
@@ -11,6 +12,7 @@ type ParametersParsed = {
   categories: string[]
   possible_parameters: any[][]
   descriptions: any[][]
+  items?: any[]
 }
 
 const buildCitationAiCalls: BuildCitationAiCalls = async ({
@@ -42,7 +44,7 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
 
   // Load parameter definitions (criteria_parsed.parameters) for this SR.
   // This is per-citation today (simple + correct); we can cache later if needed.
-  let paramsFlat: Array<{ name: string; description: string }> = []
+  let paramsFlat = [] as ReturnType<typeof flattenExtractionParameters>
   try {
     const res = await fetch(
       `/api/can-sr/reviews/create?sr_id=${encodeURIComponent(srId)}&criteria_parsed=1`,
@@ -50,29 +52,11 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
     )
     const data = await res.json().catch(() => ({}))
     const parsed = data?.criteria_parsed || data?.criteria || {}
-    const paramsInfo: ParametersParsed | null = (parsed?.parameters as any) || null
+    const paramsInfo: ParametersParsed | null =
+      (parsed?.parameters as any) || null
 
-    if (paramsInfo?.categories && paramsInfo?.possible_parameters) {
-      const out: Array<{ name: string; description: string }> = []
-      paramsInfo.categories.forEach((_cat, i) => {
-        const arr = paramsInfo.possible_parameters?.[i] || []
-        const descs = paramsInfo.descriptions?.[i] || []
-        arr.forEach((param: any, j: number) => {
-          const rawName =
-            typeof param === 'string'
-              ? param
-              : Array.isArray(param)
-                ? param[0]
-                : String(param)
-          const rawDesc =
-            typeof descs?.[j] === 'string' ? (descs[j] as string) : ''
-          const cleanDesc = rawDesc.replace(/<\/?desc>/g, '')
-          if (rawName && rawName.trim()) {
-            out.push({ name: rawName.trim(), description: cleanDesc || rawName })
-          }
-        })
-      })
-      paramsFlat = out
+    if (paramsInfo) {
+      paramsFlat = flattenExtractionParameters(paramsInfo)
     }
   } catch (e) {
     console.warn('Failed to load parameters for extraction', e)
@@ -113,6 +97,10 @@ const buildCitationAiCalls: BuildCitationAiCalls = async ({
             body: JSON.stringify({
               parameter_name: p.name,
               parameter_description: p.description,
+              unit_instructions: p.unit_instructions,
+              calculation: p.calculation,
+              options: p.options,
+              option_contexts: p.option_contexts,
               model,
               temperature: 0.0,
               max_tokens: 512,

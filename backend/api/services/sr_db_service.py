@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from fastapi import status
 
 from ..core.config import settings
+from ..criteria.service import criteria_configuration_service
 from .postgres_auth import postgres_server
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ class SRDBService:
                     criteria JSONB,
                     criteria_yaml TEXT,
                     criteria_parsed JSONB,
+                    criteria_revision INTEGER NOT NULL DEFAULT 0,
                     screening_thresholds JSONB,
                     critical_prompt_additions JSONB,
                     screening_db JSONB,
@@ -67,6 +69,18 @@ class SRDBService:
 
             # Runtime schema evolution for existing deployments.
             # (No migrations philosophy: add columns if missing.)
+            try:
+                cur.execute(
+                    'ALTER TABLE systematic_reviews ADD COLUMN IF NOT EXISTS criteria_revision INTEGER NOT NULL DEFAULT 0',
+                )
+            except Exception:
+                try:
+                    cur.execute(
+                        'ALTER TABLE systematic_reviews ADD COLUMN criteria_revision INTEGER NOT NULL DEFAULT 0',
+                    )
+                except Exception:
+                    pass
+
             try:
                 cur.execute(
                     'ALTER TABLE systematic_reviews ADD COLUMN IF NOT EXISTS screening_thresholds JSONB',
@@ -116,6 +130,11 @@ class SRDBService:
         parsed: dict[str, Any] = {'l1': {}, 'l2': {}, 'parameters': {}}
         if not criteria_obj or not isinstance(criteria_obj, dict):
             return parsed
+
+        if criteria_obj.get('schema_version') == 2:
+            return criteria_configuration_service.build_compatibility_projection(
+                criteria_obj,
+            )
 
         # include list (columns)
         include = criteria_obj.get('include', [])
@@ -517,7 +536,8 @@ class SRDBService:
 
             update_sql = """
                 UPDATE systematic_reviews
-                SET criteria = %s, criteria_yaml = %s, criteria_parsed = %s, updated_at = %s
+                SET criteria = %s, criteria_yaml = %s, criteria_parsed = %s,
+                    criteria_revision = criteria_revision + 1, updated_at = %s
                 WHERE id = %s
             """
 
@@ -564,6 +584,65 @@ class SRDBService:
         finally:
             if conn:
                 pass
+
+    def save_criteria_config(
+        self,
+        sr_id: str,
+        criteria_obj: dict[str, Any],
+        criteria_str: str,
+        expected_revision: int,
+        requester_id: str,
+    ) -> dict[str, Any]:
+        """Atomically save all canonical criteria representations with optimistic locking."""
+        sr = self.get_systematic_review(sr_id)
+        if not sr or not sr.get('visible', True):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
+            )
+        if not self.user_has_sr_permission(sr_id, requester_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Not authorized to modify this systematic review',
+            )
+
+        projection = self.build_criteria_parsed(criteria_obj)
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE systematic_reviews
+                SET criteria = %s, criteria_yaml = %s, criteria_parsed = %s,
+                    criteria_revision = criteria_revision + 1, updated_at = %s
+                WHERE id = %s AND criteria_revision = %s
+                RETURNING criteria_revision
+                """,
+                (
+                    json.dumps(criteria_obj), criteria_str, json.dumps(
+                        projection,
+                    ),
+                    datetime.utcnow().isoformat(), sr_id, expected_revision,
+                ),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail='Criteria revision conflict. Reload the latest configuration and retry.',
+                )
+            conn.commit()
+            return {'revision': row[0], 'criteria_parsed': projection}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if conn:
+                conn.rollback()
+            logger.exception(
+                'Failed to save canonical criteria config: %s', exc,
+            )
+            raise
 
     def list_systematic_reviews_for_user(self, user_email: str) -> list[dict[str, Any]]:
         """
