@@ -725,6 +725,7 @@ class AzureOpenAIClient:
         return {
             'user_id': str(track.get('user_id') or '').strip() or 'unknown',
             'sr_id': str(track.get('sr_id') or '').strip() or None,
+            'area': str(track.get('area') or '').strip() or None,
             'model': model,
             'prompt_tokens': int(track.get('prompt_tokens') or 0),
             'completion_tokens': int(track.get('completion_tokens') or 0),
@@ -834,6 +835,7 @@ class AzureOpenAIClient:
             await self._record_usage(
                 user_id=track['user_id'],
                 sr_id=track['sr_id'],
+                area=track['area'],
                 model=track['model'],
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

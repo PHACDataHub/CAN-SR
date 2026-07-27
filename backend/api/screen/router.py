@@ -760,6 +760,7 @@ def _build_llm_tracking(
     current_user: dict[str, Any],
     sr_id: str,
     model: str | None = None,
+    area: str | None = None,
 ) -> dict[str, Any]:
     user_id = str(
         current_user.get('email') or
@@ -771,6 +772,7 @@ def _build_llm_tracking(
     tracking: dict[str, Any] = {
         'user_id': user_id,
         'sr_id': str(sr_id).strip() or None,
+        'area': str(area).strip() or None,
     }
 
     if model:
@@ -885,6 +887,7 @@ async def classify_citation(
         current_user=current_user,
         sr_id=sr_id,
         model=payload.model,
+        area='l2_screen' if (payload.screening_step or '').lower() == 'l2' else 'l1_screen'
     )
 
     if (payload.screening_step or '').lower() == 'l2':
@@ -1308,6 +1311,7 @@ async def run_title_abstract_agentic(
             current_user=current_user,
             sr_id=sr_id,
             model=payload.model,
+            area='l1_screen'
         )
 
         resp = await azure_openai_client.chat_completion(
@@ -1936,6 +1940,7 @@ async def run_fulltext_agentic(
             current_user=current_user,
             sr_id=sr_id,
             model=payload.model,
+            area='l2_screen'
         )
 
         # Use multimodal API when we have figure images
