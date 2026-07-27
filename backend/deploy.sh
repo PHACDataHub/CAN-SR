@@ -158,6 +158,17 @@ sleep 10
 
 # Start main API
 echo -e "${BLUE}🌐 Starting main API...${NC}"
+# Read the feature flag from the compose environment (.env), not only from
+# the shell running this script. The migration job is deliberately explicit;
+# the API container itself only verifies the schema at startup.
+docker compose run --rm --no-deps api sh -lc '\
+    if [ "$$ENABLE_MULTI_REVIEWER_SCHEMA" = "true" ]; then \
+        echo "🧱 Applying database migrations..."; \
+        python -m api.migrations migrate; \
+        echo "✅ Database migrations applied"; \
+    else \
+        echo "ℹ️  Multi-reviewer migrations disabled"; \
+    fi'
 if [ "$DEV" = true ]; then
     docker compose up -d api --remove-orphans
 else
