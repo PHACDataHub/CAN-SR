@@ -29,6 +29,11 @@ from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
 from ..services.cit_db_service import snake_case
 from ..services.cit_db_service import snake_case_column
+from ..services.postgres_auth import postgres_server
+from ..services.review_service import reviewer_identity
+from ..services.review_service import ReviewerIdentity
+from ..services.review_service import ReviewRepository
+from ..services.review_service import WorkUnit
 from ..services.screening_eligibility_service import compute_screening_decisions
 from ..services.screening_eligibility_service import screening_eligibility_service
 from ..services.sr_db_service import srdb_service
@@ -1638,6 +1643,33 @@ async def validate_screening_step(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Citation not found to update',
         )
+
+    # Feature-gated canonical dual-write. The legacy write above remains the
+    # compatibility projection and continues to define the response contract.
+    if settings.ENABLE_MULTI_REVIEWER_SCHEMA:
+        canonical_step = 'extract' if step == 'parameters' else step
+        try:
+            identity = reviewer_identity(current_user)
+            unit = WorkUnit(
+                sr_id=sr_id,
+                stage=canonical_step,
+                source_table_name=table_name,
+                citation_id=citation_id,
+                criteria_revision=int(
+                    (_sr or {}).get('criteria_revision') or 1,
+                ),
+            )
+            repository = ReviewRepository(postgres_server.conn)
+            if checked:
+                repository.validate(unit, identity, {'checked': True})
+            else:
+                repository.remove_current(unit, identity)
+        except Exception as e:
+            logger.exception('Canonical multi-reviewer dual-write failed')
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f'Canonical review storage unavailable: {e}',
+            )
 
     return {
         'status': 'success',

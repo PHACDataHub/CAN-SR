@@ -139,7 +139,9 @@ class Settings(BaseSettings):
     PDF_LINKAGE_MAX_BYTES: int = int(
         os.getenv('PDF_LINKAGE_MAX_BYTES', str(50 * 1024 * 1024)),
     )
-    PDF_LINKAGE_MAX_RETRIES: int = int(os.getenv('PDF_LINKAGE_MAX_RETRIES', '3'))
+    PDF_LINKAGE_MAX_RETRIES: int = int(
+        os.getenv('PDF_LINKAGE_MAX_RETRIES', '3'),
+    )
     PDF_LINKAGE_MAX_CONCURRENCY: int = int(
         os.getenv('PDF_LINKAGE_MAX_CONCURRENCY', '4'),
     )
@@ -153,6 +155,21 @@ class Settings(BaseSettings):
         os.getenv('ALLOW_USER_REGISTRATION', 'true').lower() == 'true'
     )
     DEBUG: bool = os.getenv('DEBUG', 'false').lower() == 'true'
+
+    # Multi-reviewer foundation. Keep disabled until schema and compatibility
+    # verification has passed in the target environment.
+    ENABLE_MULTI_REVIEWER_SCHEMA: bool = os.getenv(
+        'ENABLE_MULTI_REVIEWER_SCHEMA', 'false',
+    ).lower().strip() == 'true'
+    MULTI_REVIEWER_SHADOW_MODE: bool = os.getenv(
+        'MULTI_REVIEWER_SHADOW_MODE', 'false',
+    ).lower().strip() == 'true'
+    # Schema-changing work is performed by the deployment migration command.
+    # This is intentionally false in production; it is available for local
+    # development when an explicit startup bootstrap is desired.
+    AUTO_MIGRATE: bool = os.getenv(
+        'AUTO_MIGRATE', 'true',
+    ).lower().strip() == 'true'
 
     # -------------------------------------------------------------------------
     # Postgres configuration
