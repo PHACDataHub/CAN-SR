@@ -52,6 +52,9 @@ class Trigger(StrictModel):
 
 
 class CitationFields(StrictModel):
+    # Nullable while loading legacy criteria; save/use preflight requires both.
+    title: NonEmptyText | None = None
+    abstract: NonEmptyText | None = None
     l1_include: list[NonEmptyText] = Field(
         default_factory=list, max_length=100,
     )
@@ -77,7 +80,9 @@ class ScreeningQuestion(StrictModel):
     id: CriteriaId
     question: NonEmptyText
     answers: list[ScreeningAnswer] = Field(min_length=2, max_length=50)
+    context: str | None = Field(default=None, max_length=10000)
     trigger: Trigger = Field(default_factory=Trigger)
+    answer_column: NonEmptyText | None = None
 
     @model_validator(mode='after')
     def answer_ids_are_unique(self) -> ScreeningQuestion:
@@ -97,17 +102,20 @@ class TextParameter(StrictModel):
     id: CriteriaId
     name: NonEmptyText
     description: NonEmptyText
+    context: str | None = Field(default=None, max_length=10000)
     type: Literal['text']
     unit_instructions: str | None = Field(default=None, max_length=10000)
     calculation: str | None = Field(default=None, max_length=10000)
     trigger: Trigger = Field(default_factory=Trigger)
     legacy_category: str | None = Field(default=None, max_length=1000)
+    answer_column: NonEmptyText | None = None
 
 
 class SelectionParameter(StrictModel):
     id: CriteriaId
     name: NonEmptyText
     description: NonEmptyText
+    context: str | None = Field(default=None, max_length=10000)
     type: Literal['selection']
     selection_mode: Literal['single', 'multiple']
     options: list[ParameterOption] = Field(min_length=1, max_length=100)
@@ -115,6 +123,7 @@ class SelectionParameter(StrictModel):
     calculation: str | None = Field(default=None, max_length=10000)
     trigger: Trigger = Field(default_factory=Trigger)
     legacy_category: str | None = Field(default=None, max_length=1000)
+    answer_column: NonEmptyText | None = None
 
     @model_validator(mode='after')
     def option_ids_are_unique(self) -> SelectionParameter:

@@ -6,6 +6,7 @@ import type { CriteriaDraftAction, CriteriaDraftState, Parameter, ParameterOptio
 import type { CriteriaDiagnostic } from './criteria-validation'
 import ContextEditorDialog from './context-editor-dialog'
 import ParameterDetailsDialog, { type ParameterDetails } from './parameter-details-dialog'
+import type { CitationFieldContract } from './citation-field-selector'
 
 type TriggerSource = { stage: 'l1' | 'l2' | 'parameters'; id: string; label: string; options: ParameterOption[] }
 
@@ -14,7 +15,7 @@ const questionSource = (stage: 'l1' | 'l2', question: ScreeningQuestion): Trigge
   options: question.answers.map(({ id, label, context }) => ({ id, label, context })),
 })
 
-function ParameterCard({ parameter, index, count, sources, dependants, referencedOptionIds, dispatch, labels, diagnostics, collapsed, onToggle }: {
+function ParameterCard({ parameter, index, count, sources, dependants, referencedOptionIds, dispatch, labels, diagnostics, collapsed, onToggle, citationFields }: {
   parameter: Parameter
   index: number
   count: number
@@ -26,6 +27,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
   diagnostics: CriteriaDiagnostic[]
   collapsed: boolean
   onToggle: () => void
+  citationFields: CitationFieldContract
 }) {
   const prefix = `parameter-${parameter.id}`
   const [contextOptionId, setContextOptionId] = useState<string | null>(null)
@@ -55,6 +57,11 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
       <div><label className="block text-sm font-medium" htmlFor={`${prefix}-name`}>{labels.parameterName}</label><input id={`${prefix}-name`} value={parameter.name} onChange={(event) => update('name', event.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" /></div>
       <div><label className="block text-sm font-medium" htmlFor={`${prefix}-type`}>{labels.parameterType}</label><select id={`${prefix}-type`} value={parameter.type} onChange={(event) => dispatch({ type: 'set-parameter-type', parameterId: parameter.id, value: event.target.value as 'text' | 'selection' })} className="mt-1 w-full rounded-md border px-3 py-2"><option value="text" disabled={typeChangeBlocked}>{labels.freeText}</option><option value="selection">{labels.selectionList}</option></select></div>
     </div>
+    <div className="mt-3 rounded-md border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
+      <label className="block text-sm font-medium" htmlFor={`${prefix}-answer-column`}>{parameter.answer_column ? labels.answerColumn : `+ ${labels.addAnswerColumn}`}</label>
+      <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
+      <select id={`${prefix}-answer-column`} value={parameter.answer_column || ''} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.value || null })} title={labels.answerColumnTooltip} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm"><option value="">{labels.noAnswerColumn}</option>{parameter.answer_column && !citationFields.fields.some((field) => field.name === parameter.answer_column) ? <option value={parameter.answer_column}>{parameter.answer_column} · {labels.unavailableField}</option> : null}{citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select>
+    </div>
     {typeChangeBlocked ? <p role="alert" className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-900">{labels.typeChangeBlocked}: {dependants.join(', ')}</p> : null}
     <div className="mt-3 flex items-center gap-3 rounded-md bg-gray-50 p-3">
       <div className="min-w-0"><p className="text-sm font-medium">{labels.parameterDetails}</p><p className="text-xs text-gray-600">{detailCount ? `${detailCount} ${labels.detailsConfigured}` : labels.noDetailsConfigured}</p></div>
@@ -62,7 +69,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
     </div>
     {parameter.type === 'selection' ? <fieldset className="mt-4 space-y-3">
       <legend className="text-sm font-semibold">{labels.selectionOptions}</legend>
-      <label className="block text-sm font-medium" htmlFor={`${prefix}-mode`}>{labels.selectionMode}</label><select id={`${prefix}-mode`} value={parameter.selection_mode} onChange={(event) => dispatch({ type: 'set-selection-mode', parameterId: parameter.id, value: event.target.value as 'single' | 'multiple' })} className="w-full rounded-md border px-3 py-2 md:w-64"><option value="single">{labels.singleSelection}</option><option value="multiple">{labels.multipleSelection}</option></select>
+      <label className="block text-sm font-medium" htmlFor={`${prefix}-mode`}>{labels.selectionMode}</label><select id={`${prefix}-mode`} value={parameter.selection_mode} onChange={(event) => dispatch({ type: 'set-selection-mode', parameterId: parameter.id, value: event.target.value as 'single' | 'multiple' })} className="w-full rounded-md border px-3 py-2 md:w-64"><option value="single">Select one answer</option><option value="multiple">Select multiple answers</option></select>
       {parameter.options.map((option, optionIndex) => <div key={option.id} className="grid gap-2 rounded-md bg-gray-50 p-3 md:grid-cols-[1fr_auto_auto]">
         <div><label className="block text-xs font-medium" htmlFor={`${prefix}-${option.id}-label`}>{labels.optionLabel} {optionIndex + 1}</label><input id={`${prefix}-${option.id}-label`} value={option.label} onChange={(event) => dispatch({ type: 'update-option', parameterId: parameter.id, optionId: option.id, field: 'label', value: event.target.value })} className="mt-1 w-full rounded border px-2 py-1.5" />{option.context?.trim() ? <p className="mt-1 text-xs font-medium text-emerald-700">{labels.contextAdded}</p> : null}</div>
         <button type="button" aria-label={`${labels.editOptionContext} ${optionIndex + 1}`} onClick={() => setContextOptionId(option.id)} className="self-end rounded border p-2 text-gray-700" title={labels.editOptionContext}><Pencil className="h-4 w-4" /></button>
@@ -94,7 +101,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
   </article>
 }
 
-export default function ParameterBuilder({ state, dispatch, labels, diagnostics = [] }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[] }) {
+export default function ParameterBuilder({ state, dispatch, labels, diagnostics = [], citationFields = { fields: [], unavailable_configured_fields: [] } }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[]; citationFields?: CitationFieldContract }) {
   const [sectionCollapsed, setSectionCollapsed] = useState(false)
   const [collapsedParameters, setCollapsedParameters] = useState<Set<string>>(() => new Set())
   const pendingParameterCount = useRef<number | null>(null)
@@ -141,7 +148,7 @@ export default function ParameterBuilder({ state, dispatch, labels, diagnostics 
     {state.criteria.parameters.map((parameter, index) => {
       const earlierParameters: TriggerSource[] = state.criteria.parameters.slice(0, index).filter((item) => item.type === 'selection').map((item) => ({ stage: 'parameters', id: item.id, label: item.name, options: item.options }))
       const dependants = state.criteria.parameters.filter((item) => item.id !== parameter.id && item.trigger.all.some((condition) => condition.source_item_id === parameter.id)).map((item) => itemLabels.get(item.id) || item.id)
-      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} referencedOptionIds={new Set(allConditions.filter((condition) => condition.source_item_id === parameter.id).map((condition) => condition.option_id))} dispatch={dispatch} labels={labels} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} collapsed={collapsedParameters.has(parameter.id)} onToggle={() => setCollapsedParameters((current) => { const next = new Set(current); if (next.has(parameter.id)) next.delete(parameter.id); else next.add(parameter.id); return next })} />
+      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} referencedOptionIds={new Set(allConditions.filter((condition) => condition.source_item_id === parameter.id).map((condition) => condition.option_id))} dispatch={dispatch} labels={labels} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} collapsed={collapsedParameters.has(parameter.id)} onToggle={() => setCollapsedParameters((current) => { const next = new Set(current); if (next.has(parameter.id)) next.delete(parameter.id); else next.add(parameter.id); return next })} />
     })}
     <div className="flex justify-end"><button type="button" onClick={addParameter} className="inline-flex items-center gap-2 rounded-md border border-emerald-600 px-3 py-2 text-sm font-medium text-emerald-700"><Plus className="h-4 w-4" />{labels.addParameter}</button></div>
     </div> : null}

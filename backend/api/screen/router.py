@@ -24,6 +24,8 @@ from ..citations import router as citations_router
 from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
+from ..criteria.context import format_item_context
+from ..criteria.context import format_title_abstract_context
 from ..criteria.runtime import item_is_visible
 from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
@@ -866,8 +868,21 @@ async def classify_citation(
         )
 
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
-    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(
-        row, payload.include_columns,
+    citation_fields = canonical.get('citation_fields') or {}
+    if payload.citation_text:
+        citation_text = payload.citation_text
+    elif citation_fields.get('title') or citation_fields.get('abstract'):
+        citation_text = format_title_abstract_context(row, citation_fields)
+    else:
+        citation_text = citations_router._build_combined_citation_from_row(
+            row, payload.include_columns,
+        )
+
+    item_context = format_item_context(
+        source_item or {
+            'question': payload.question,
+            'answers': [{'label': option} for option in payload.options],
+        },
     )
 
     # Ensure LLM client is available
@@ -945,7 +960,11 @@ async def classify_citation(
         prompt = PROMPT_JSON_TEMPLATE_FULLTEXT.format(
             question=payload.question,
             options=options_listed,
-            xtra=payload.xtra or '',
+            xtra='\n\n'.join(
+                part for part in (
+                    item_context, payload.xtra or '',
+                ) if part
+            ),
             fulltext=fulltext or citation_text,
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
@@ -974,7 +993,11 @@ async def classify_citation(
             question=payload.question,
             cit=citation_text,
             options=options_listed,
-            xtra=payload.xtra or '',
+            xtra='\n\n'.join(
+                part for part in (
+                    item_context, payload.xtra or '',
+                ) if part
+            ),
         )
         llm_response = await azure_openai_client.simple_chat(
             user_message=prompt,

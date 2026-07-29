@@ -46,9 +46,11 @@ def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str
         ) or criteria.get('include') or []
     ]
     doi = configured.get('doi')
+    title = configured.get('title')
+    abstract = configured.get('abstract')
     available = {field['name'] for field in fields}
     unavailable = [
-        value for value in [*selected, doi]
+        value for value in [*selected, title, abstract, doi]
         if value and value not in available
     ]
     return {

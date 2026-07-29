@@ -10,6 +10,9 @@ export function validateCriteriaDraft(criteria: CriteriaConfig): CriteriaDiagnos
   const available = new Map<string, Set<string> | null>()
   const add = (path: string, message: string, itemId?: string) => diagnostics.push({ path, message, itemId })
 
+  if (!criteria.citation_fields.title?.trim()) add('citation_fields.title', 'A Title source column is required.')
+  if (!criteria.citation_fields.abstract?.trim()) add('citation_fields.abstract', 'An Abstract source column is required.')
+
   const validateId = (id: string, path: string, itemId: string) => {
     if (!idPattern.test(id)) add(path, 'The stable ID has an invalid format.', itemId)
     if (seenIds.has(id)) add(path, 'The stable ID must be unique across the review.', itemId)
