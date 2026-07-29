@@ -9,6 +9,7 @@ import { Wand2 } from 'lucide-react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
+import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue } from '@/components/can-sr/screening-citation-context'
 
 type ValidationEntry = { user: string; validated_at: string }
 
@@ -107,6 +108,8 @@ type CriteriaData = {
   questions: string[]
   possible_answers: string[][]
   additional_infos?: (string | null)[] // optional per-question extra guidance when available
+  items?: Array<{ answer_column?: string | null }>
+  citation_fields?: { title?: string | null; abstract?: string | null; l1_include?: string[] }
 }
 
 type LatestAgentRun = {
@@ -553,11 +556,17 @@ export default function CanSrL2ScreenViewPage() {
           const mergedQuestions = [...l1Parsed.questions, ...l2Parsed.questions]
           const mergedAnswers = [...l1Parsed.possible_answers, ...l2Parsed.possible_answers]
           const mergedInfos = [...l1Parsed.additional_infos, ...l2Parsed.additional_infos]
+          const mergedItems = [
+            ...(Array.isArray(l1Block?.items) ? l1Block.items : []),
+            ...(Array.isArray(l2Block?.items) ? l2Block.items : []),
+          ]
 
           setCriteriaData({
             questions: mergedQuestions,
             possible_answers: mergedAnswers,
             additional_infos: mergedInfos,
+            items: mergedItems,
+            citation_fields: parsed?.citation_fields || {},
           })
           setSourceFlags([
             ...l1Parsed.questions.map(() => 'l1'),
@@ -586,7 +595,7 @@ export default function CanSrL2ScreenViewPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
-      const humanCol = humanScreenColumn(q)
+      const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
       const criterionKey = llmCol.replace(/^llm_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
       const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
@@ -597,7 +606,7 @@ export default function CanSrL2ScreenViewPage() {
         fulltextRun && citationFulltextMd5 && runFulltextMd5 === citationFulltextMd5,
       )
 
-      const humanRaw = (citation as any)?.[humanCol]
+      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
       const llmRaw = (citation as any)?.[llmCol]
 
       // Parse possible JSON payloads from DB
@@ -627,6 +636,8 @@ export default function CanSrL2ScreenViewPage() {
       )
       if (isFulltextHuman && (humanParsed as any).selected !== undefined) {
         newSelections[idx] = (humanParsed as any).selected
+      } else if (sourceFlags[idx] === 'l2' && extractHumanAnswer(humanParsed)) {
+        newSelections[idx] = extractHumanAnswer(humanParsed)
       }
 
       // 2) For L1 questions: show hint from prior L1 screening (llm_*), but do not prefill from it
@@ -895,7 +906,9 @@ export default function CanSrL2ScreenViewPage() {
       return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
 
     return (
-      <PDFBoundingBoxViewer
+      <div className="space-y-4">
+        <ScreeningCitationContext citation={citation} fields={criteriaData?.citation_fields} />
+        <PDFBoundingBoxViewer
         srId={srId || ''}
         citationId={citationId ?? ''}
         conversionId={null}
@@ -913,9 +926,10 @@ export default function CanSrL2ScreenViewPage() {
         fulltext={fulltextStr || ''}
         defaultFitToWidth={true}
         ref={viewerRef}
-      />
+        />
+      </div>
     )
-  }, [citation, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, parsedTables, parsedFigures, dict, error])
+  }, [citation, criteriaData, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, parsedTables, parsedFigures, dict, error])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
@@ -1008,6 +1022,8 @@ export default function CanSrL2ScreenViewPage() {
                   <div className="space-y-4">
                   {criteriaData.questions.map((q, idx) => {
                     const options = criteriaData.possible_answers[idx] || []
+                    const answerColumn = criteriaData.items?.[idx]?.answer_column || null
+                    const answerStatus = humanAnswerStatus(citation!, answerColumn, options)
                     const current = selections[idx] ?? ''
                     const aiData = aiPanels[idx]
                     const aiSelected =
@@ -1105,6 +1121,13 @@ export default function CanSrL2ScreenViewPage() {
                                 </option>
                               ))}
                             </select>
+                            {answerStatus !== 'unconfigured' && answerStatus !== 'matched' ? (
+                              <p className="mt-1 text-xs text-amber-700" role="status">
+                                Human answer column “{answerColumn}”: {answerStatus === 'missing' ? 'not found in this citation' : answerStatus === 'blank' ? 'blank for this citation' : 'value does not match an available answer'}.
+                              </p>
+                            ) : answerStatus === 'matched' ? (
+                              <p className="mt-1 text-xs text-emerald-700">Human answer loaded from “{answerColumn}”.</p>
+                            ) : null}
                           </div>
 
                           <div className="ml-3 flex flex-col items-end space-y-2">

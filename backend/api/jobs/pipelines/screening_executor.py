@@ -5,6 +5,9 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 
 from ...citations import router as citations_router
+from ...criteria.context import format_item_context
+from ...criteria.context import format_title_abstract_context
+from ...criteria.context import resolve_existing_human_value
 from ...extract.prompts import PARAMETER_PROMPT_JSON
 from ...extract.router import extract_fulltext_from_storage
 from ...screen.agentic_utils import build_critical_options
@@ -94,15 +97,19 @@ async def _run_l1_for_citation(
     if not row:
         return (0, 0, 1)
 
-    include_cols = cits_dp_service.load_include_columns_from_criteria(sr)
-    if not include_cols:
-        include_cols = ['title', 'abstract']
-
-    citation_text = citations_router._build_combined_citation_from_row(
-        row, include_cols,
-    )
-
     cp = sr.get('criteria_parsed') or sr.get('criteria') or {}
+    citation_fields = cp.get(
+        'citation_fields',
+    ) if isinstance(cp, dict) else None
+    if isinstance(citation_fields, dict) and (citation_fields.get('title') or citation_fields.get('abstract')):
+        citation_text = format_title_abstract_context(row, citation_fields)
+    else:
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
+            'title', 'abstract',
+        ]
+        citation_text = citations_router._build_combined_citation_from_row(
+            row, include_cols,
+        )
     l1 = cp.get('l1') if isinstance(cp, dict) else None
     questions = (l1 or {}).get('questions') if isinstance(l1, dict) else []
     possible = (l1 or {}).get(
@@ -114,6 +121,8 @@ async def _run_l1_for_citation(
     questions = questions if isinstance(questions, list) else []
     possible = possible if isinstance(possible, list) else []
     addinfos = addinfos if isinstance(addinfos, list) else []
+    l1_items = (l1 or {}).get('items') if isinstance(l1, dict) else []
+    l1_items = l1_items if isinstance(l1_items, list) else []
 
     if not questions:
         return (0, 1, 0)
@@ -130,6 +139,13 @@ async def _run_l1_for_citation(
         xtra = addinfos[i] if i < len(
             addinfos,
         ) and isinstance(addinfos[i], str) else ''
+        item = l1_items[i] if i < len(l1_items) and isinstance(l1_items[i], dict) else {
+            'question': q, 'answers': [{'label': opt} for opt in opts],
+        }
+        xtra = format_item_context(item) or xtra
+        human = resolve_existing_human_value(row, item)
+        if human.get('status') == 'matched':
+            continue
         col = snake_case_column(q)
         existing = row.get(col)
         if _should_skip_ai_output(existing, force=force):
@@ -358,6 +374,10 @@ async def _run_l2_for_citation(
     l2_possible = l2_possible if isinstance(l2_possible, list) else []
     l1_addinfos = l1_addinfos if isinstance(l1_addinfos, list) else []
     l2_addinfos = l2_addinfos if isinstance(l2_addinfos, list) else []
+    l1_items = (l1 or {}).get('items') if isinstance(l1, dict) else []
+    l2_items = (l2 or {}).get('items') if isinstance(l2, dict) else []
+    l1_items = l1_items if isinstance(l1_items, list) else []
+    l2_items = l2_items if isinstance(l2_items, list) else []
 
     merged: list[tuple[str, str, int]] = []  # (question, source_step, idx)
     seen_q: set[str] = set()
@@ -375,12 +395,18 @@ async def _run_l2_for_citation(
     if not merged:
         return (0, 1, 0)
 
-    include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
-        'title', 'abstract',
-    ]
-    citation_text = citations_router._build_combined_citation_from_row(
-        row, include_cols,
-    )
+    citation_fields = cp.get(
+        'citation_fields',
+    ) if isinstance(cp, dict) else None
+    if isinstance(citation_fields, dict) and (citation_fields.get('title') or citation_fields.get('abstract')):
+        citation_text = format_title_abstract_context(row, citation_fields)
+    else:
+        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
+            'title', 'abstract',
+        ]
+        citation_text = citations_router._build_combined_citation_from_row(
+            row, include_cols,
+        )
     fulltext = row.get('fulltext') or citation_text
 
     # Tables/Figures context from row
@@ -452,6 +478,9 @@ async def _run_l2_for_citation(
             xtra = l1_addinfos[idx] if idx < len(
                 l1_addinfos,
             ) and isinstance(l1_addinfos[idx], str) else ''
+            item = l1_items[idx] if idx < len(l1_items) and isinstance(l1_items[idx], dict) else {
+                'question': q, 'answers': [{'label': opt} for opt in opts],
+            }
         else:
             opts = l2_possible[idx] if idx < len(
                 l2_possible,
@@ -459,6 +488,13 @@ async def _run_l2_for_citation(
             xtra = l2_addinfos[idx] if idx < len(
                 l2_addinfos,
             ) and isinstance(l2_addinfos[idx], str) else ''
+            item = l2_items[idx] if idx < len(l2_items) and isinstance(l2_items[idx], dict) else {
+                'question': q, 'answers': [{'label': opt} for opt in opts],
+            }
+        xtra = format_item_context(item) or xtra
+        human = resolve_existing_human_value(row, item)
+        if human.get('status') == 'matched':
+            continue
         col = snake_case_column(q)
         existing = row.get(col)
         if _should_skip_ai_output(existing, force=force):
@@ -652,8 +688,14 @@ async def _run_extract_for_citation(
     categories = categories if isinstance(categories, list) else []
     possible = possible if isinstance(possible, list) else []
     descs = descs if isinstance(descs, list) else []
+    parameter_items = (params or {}).get(
+        'items',
+    ) if isinstance(params, dict) else []
+    parameter_items = parameter_items if isinstance(
+        parameter_items, list,
+    ) else []
 
-    params_flat: list[tuple[str, str]] = []
+    params_flat: list[tuple[str, str, dict[str, Any]]] = []
     for i, _cat in enumerate(categories):
         arr = possible[i] if i < len(possible) and isinstance(
             possible[i], list,
@@ -669,7 +711,14 @@ async def _run_extract_for_citation(
             if j < len(darr):
                 d = str(darr[j])
                 d = d.replace('<desc>', '').replace('</desc>', '')
-            params_flat.append((name, d or name))
+            item = next(
+                (
+                    candidate for candidate in parameter_items if isinstance(
+                        candidate, dict,
+                    ) and candidate.get('name') == name
+                ), {'name': name, 'description': d or name},
+            )
+            params_flat.append((name, d or name, item))
 
     if not params_flat:
         return (0, 1, 0)
@@ -761,7 +810,7 @@ async def _run_extract_for_citation(
                     return t[start: i + 1]
         return None
 
-    for name, desc in params_flat:
+    for name, desc, item in params_flat:
         # More responsive pause/cancel: check between parameters
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise PipelineCanceled()
@@ -770,10 +819,13 @@ async def _run_extract_for_citation(
         existing = row.get(col)
         if _should_skip_ai_output(existing, force=force):
             continue
+        human = resolve_existing_human_value(row, item)
+        if human.get('status') == 'matched':
+            continue
 
         prompt = PARAMETER_PROMPT_JSON.format(
             parameter_name=name,
-            parameter_description=desc,
+            parameter_description=format_item_context(item) or desc,
             fulltext=fulltext,
             tables=tables_text,
             figures=figures_text,

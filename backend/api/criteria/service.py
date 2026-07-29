@@ -110,39 +110,14 @@ class CriteriaConfigurationService:
 
     @staticmethod
     def _move_question_context_to_answers(raw: dict[str, Any]) -> list[Diagnostic]:
-        """Preserve obsolete v2 question guidance by applying it to every answer."""
-        diagnostics: list[Diagnostic] = []
-        for stage in ('l1', 'l2'):
-            items = raw.get(stage)
-            if not isinstance(items, list):
-                continue
-            for question_index, item in enumerate(items):
-                if not isinstance(item, dict) or 'context' not in item:
-                    continue
-                context = item.pop('context')
-                if not isinstance(context, str) or not context.strip():
-                    continue
-                answers = item.get('answers')
-                if not isinstance(answers, list):
-                    continue
-                for answer in answers:
-                    if not isinstance(answer, dict):
-                        continue
-                    answer_context = answer.get('context')
-                    parts = [context.strip()]
-                    if isinstance(answer_context, str) and answer_context.strip():
-                        parts.append(answer_context.strip())
-                    answer['context'] = '\n\n'.join(parts)
-                diagnostics.append(
-                    Diagnostic(
-                        severity='warning',
-                        code='question_context_moved_to_answers',
-                        source_path=[stage, question_index, 'context'],
-                        target_path=[stage, question_index, 'answers'],
-                        message='Question-level context was copied to each answer because screening guidance is answer-specific.',
-                    ),
-                )
-        return diagnostics
+        """Keep item context separate from answer-specific guidance.
+
+        Older code copied question context into every answer. That loses the
+        distinction required by the current prompt contract and duplicates
+        guidance. Reading is intentionally non-mutating and therefore safe for
+        both legacy and current v2 configurations.
+        """
+        return []
 
     def export_yaml(self, criteria: CriteriaConfigV2 | dict[str, Any]) -> str:
         model = criteria if isinstance(
@@ -150,6 +125,30 @@ class CriteriaConfigurationService:
         ) else CriteriaConfigV2.model_validate(criteria)
         payload = model.model_dump(mode='json', exclude_none=True)
         return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100)
+
+    @staticmethod
+    def required_citation_field_errors(
+        criteria: CriteriaConfigV2,
+        available_fields: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return save/use errors while allowing legacy criteria to be loaded."""
+        errors: list[dict[str, Any]] = []
+        fields = criteria.citation_fields
+        for key, label in (('title', 'Title'), ('abstract', 'Abstract')):
+            value = getattr(fields, key)
+            if not value:
+                errors.append({
+                    'code': f'missing_required_{key}_field', 'path': [
+                        'citation_fields', key,
+                    ], 'message': f'{label} source column is required.',
+                })
+            elif available_fields is not None and value not in available_fields:
+                errors.append({
+                    'code': 'unavailable_required_citation_field', 'path': [
+                        'citation_fields', key,
+                    ], 'message': f'{label} source column {value!r} is not available.',
+                })
+        return errors
 
     def build_compatibility_projection(
         self, criteria: CriteriaConfigV2 | dict[str, Any],
@@ -188,6 +187,10 @@ class CriteriaConfigurationService:
             grouped[category].append(item)
         return {
             'schema_version': 2,
+            # Keep the canonical mappings/items alongside the legacy-shaped
+            # projection so batch pipelines can use the same source columns
+            # and guidance as the interactive endpoints.
+            'citation_fields': model.citation_fields.model_dump(mode='json', exclude_none=True),
             'l1': {'include': model.citation_fields.l1_include, **stage(model.l1)},
             'l2': stage(model.l2),
             'parameters': {

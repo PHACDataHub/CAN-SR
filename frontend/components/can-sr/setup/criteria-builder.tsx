@@ -31,6 +31,7 @@ function QuestionCard({
   referencedAnswerIds,
   collapsed,
   onToggle,
+  citationFields,
 }: {
   question: ScreeningQuestion
   index: number
@@ -44,6 +45,7 @@ function QuestionCard({
   referencedAnswerIds: Set<string>
   collapsed: boolean
   onToggle: () => void
+  citationFields: CitationFieldContract
 }) {
   const prefix = `${stage}-${question.id}`
   const [contextAnswerId, setContextAnswerId] = useState<string | null>(null)
@@ -69,6 +71,15 @@ function QuestionCard({
       {!collapsed ? <div id={`${prefix}-body`}>
       <label className="mt-3 block text-sm font-medium" htmlFor={`${prefix}-question`}>{labels.questionText}</label>
       <input id={`${prefix}-question`} value={question.question} onChange={(event) => dispatch({ type: 'update-question', stage, questionId: question.id, field: 'question', value: event.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+      <div className="mt-3 rounded-md border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
+        <label className="block text-sm font-medium" htmlFor={`${prefix}-answer-column`}>{question.answer_column ? labels.answerColumn : `+ ${labels.addAnswerColumn}`}</label>
+        <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
+        <select id={`${prefix}-answer-column`} value={question.answer_column || ''} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.value || null })} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm" title={labels.answerColumnTooltip}>
+          {question.answer_column && !citationFields.fields.some((field) => field.name === question.answer_column) ? <option value={question.answer_column}>{question.answer_column} · {labels.unavailableField}</option> : null}
+          <option value="">{labels.noAnswerColumn}</option>
+          {citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}
+        </select>
+      </div>
       <fieldset className="mt-4 space-y-3">
         <legend className="text-sm font-semibold">{labels.answers}</legend>
         {question.answers.map((answer, answerIndex) => (
@@ -222,13 +233,13 @@ export default function CriteriaBuilder({ state, dispatch, labels, diagnostics =
           {state.criteria[stage].length === 0 ? <p className="rounded-md border border-dashed p-4 text-sm text-gray-500">{labels.noQuestions}</p> : null}
           {state.criteria[stage].map((question, index) => {
             const position = ordered.findIndex((item) => item.question.id === question.id)
-            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} sourceReferenced={conditions.some((condition) => condition.source_item_id === question.id)} referencedAnswerIds={new Set(conditions.filter((condition) => condition.source_item_id === question.id).map((condition) => condition.option_id))} collapsed={collapsedQuestions.has(question.id)} onToggle={() => setCollapsedQuestions((current) => { const next = new Set(current); if (next.has(question.id)) next.delete(question.id); else next.add(question.id); return next })} />
+            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} sourceReferenced={conditions.some((condition) => condition.source_item_id === question.id)} referencedAnswerIds={new Set(conditions.filter((condition) => condition.source_item_id === question.id).map((condition) => condition.option_id))} collapsed={collapsedQuestions.has(question.id)} onToggle={() => setCollapsedQuestions((current) => { const next = new Set(current); if (next.has(question.id)) next.delete(question.id); else next.add(question.id); return next })} />
           })}
           <div className="flex justify-end"><button type="button" onClick={() => addQuestion(stage)} className="inline-flex items-center gap-2 rounded-md border border-emerald-600 px-3 py-2 text-sm font-medium text-emerald-700"><Plus className="h-4 w-4" />{labels.addQuestion}</button></div>
           </div> : null}
         </section>
       ))}
-      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} />
+      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} />
     </div>
   )
 }

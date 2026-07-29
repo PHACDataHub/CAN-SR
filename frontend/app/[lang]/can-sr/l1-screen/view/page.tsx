@@ -8,6 +8,7 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
+import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue } from '@/components/can-sr/screening-citation-context'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -92,6 +93,8 @@ function extractXmlTag(text: string, tag: string): string {
 type CriteriaData = {
   questions: string[]
   possible_answers: string[][]
+  items?: Array<{ answer_column?: string | null }>
+  citation_fields?: { title?: string | null; abstract?: string | null; l1_include?: string[] }
 }
 
 type LatestAgentRun = {
@@ -403,6 +406,8 @@ export default function CanSrL1ScreenPage() {
             setCriteriaData({
               questions: l1.questions,
               possible_answers: l1.possible_answers,
+              items: Array.isArray(l1.items) ? l1.items : [],
+              citation_fields: parsed?.citation_fields || {},
             })
           } else {
             // If structure is different attempt best-effort mapping
@@ -413,6 +418,8 @@ export default function CanSrL1ScreenPage() {
               possible_answers: Array.isArray(possible_answers)
                 ? possible_answers
                 : [],
+              items: Array.isArray(l1?.items) ? l1.items : [],
+              citation_fields: parsed?.citation_fields || {},
             })
           }
         }
@@ -440,9 +447,9 @@ export default function CanSrL1ScreenPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
-      const humanCol = humanScreenColumn(q)
+      const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
 
-      const humanRaw = (citation as any)?.[humanCol]
+      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
       const llmRaw = (citation as any)?.[llmCol]
 
       const parseMaybeJson = (v: any) => {
@@ -463,8 +470,8 @@ export default function CanSrL1ScreenPage() {
       // 1) Prefer human_* for dropdown
       if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
         newSelections[idx] = (humanParsed as any).selected
-      } else if (typeof humanParsed === 'string' && humanParsed) {
-        newSelections[idx] = humanParsed
+      } else if (extractHumanAnswer(humanParsed)) {
+        newSelections[idx] = extractHumanAnswer(humanParsed)
       }
 
       // 2) Always populate AI panel from llm_* when available
@@ -659,22 +666,10 @@ export default function CanSrL1ScreenPage() {
 
     return (
       <div className="space-y-3">
-        <div>
-          <p className="text-xs text-gray-600">Citation #{citation.id}</p>
-          <h2 className="text-lg font-semibold text-gray-900">
-            {citation.title}
-          </h2>
-        </div>
-
-        <div className="rounded-md border border-gray-200 bg-white p-4">
-          <h3 className="text-sm font-medium text-gray-800">{dict.screening.abstract}</h3>
-          <p className="mt-2 text-sm whitespace-pre-wrap text-gray-800">
-            {citation.abstract || dict.screening.noAbstract}
-          </p>
-        </div>
+        <ScreeningCitationContext citation={citation} fields={criteriaData?.citation_fields} />
       </div>
     )
-  }, [citation, loadingCitation, dict, error])
+  }, [citation, loadingCitation, dict, error, criteriaData])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
@@ -763,6 +758,8 @@ export default function CanSrL1ScreenPage() {
                 <div className="space-y-4">
                   {criteriaData.questions.map((q, idx) => {
                     const options = criteriaData.possible_answers[idx] || []
+                    const answerColumn = criteriaData.items?.[idx]?.answer_column || null
+                    const answerStatus = humanAnswerStatus(citation!, answerColumn, options)
                     const current = selections[idx] ?? ''
                     const aiData = aiPanels[idx]
                     const aiSelected =
@@ -832,6 +829,13 @@ export default function CanSrL1ScreenPage() {
                                 </option>
                               ))}
                             </select>
+                            {answerStatus !== 'unconfigured' && answerStatus !== 'matched' ? (
+                              <p className="mt-1 text-xs text-amber-700" role="status">
+                                Human answer column “{answerColumn}”: {answerStatus === 'missing' ? 'not found in this citation' : answerStatus === 'blank' ? 'blank for this citation' : 'value does not match an available answer'}.
+                              </p>
+                            ) : answerStatus === 'matched' ? (
+                              <p className="mt-1 text-xs text-emerald-700">Human answer loaded from “{answerColumn}”.</p>
+                            ) : null}
                           </div>
 
                           <div className="ml-3 flex flex-col items-end space-y-2">
