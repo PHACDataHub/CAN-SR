@@ -81,7 +81,7 @@ class LLMCostTracker:
                     cost_cad,
                     created_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (

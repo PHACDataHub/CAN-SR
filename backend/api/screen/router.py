@@ -883,13 +883,6 @@ async def classify_citation(
     )
     llm_response: str
 
-    tracking = _build_llm_tracking(
-        current_user=current_user,
-        sr_id=sr_id,
-        model=payload.model,
-        area='l2_screen' if (payload.screening_step or '').lower() == 'l2' else 'l1_screen'
-    )
-
     if (payload.screening_step or '').lower() == 'l2':
         fulltext = row.get('fulltext') or ''
 
@@ -967,7 +960,6 @@ async def classify_citation(
                 model=payload.model,
                 max_tokens=payload.max_tokens or 2000,
                 temperature=payload.temperature or 0.0,
-                tracking=tracking,
             )
         else:
             llm_response = await azure_openai_client.simple_chat(
@@ -976,7 +968,6 @@ async def classify_citation(
                 model=payload.model,
                 max_tokens=payload.max_tokens or 2000,
                 temperature=payload.temperature or 0.0,
-                tracking=tracking,
             )
     else:
         prompt = PROMPT_JSON_TEMPLATE.format(
@@ -991,7 +982,6 @@ async def classify_citation(
             model=payload.model,
             max_tokens=payload.max_tokens or 2000,
             temperature=payload.temperature or 0.0,
-            tracking=tracking,
         )
 
     # Parse JSON (assume valid JSON) - try/except only
@@ -1300,7 +1290,7 @@ async def run_title_abstract_agentic(
             detail='SR has no L1 criteria questions configured',
         )
 
-    async def _call_llm(prompt: str) -> tuple[str, dict[str, Any], int]:
+    async def _call_llm(prompt: str, *, area: str) -> tuple[str, dict[str, Any], int]:
         """Return (content, usage, latency_ms)."""
         import time
 
@@ -1311,7 +1301,7 @@ async def run_title_abstract_agentic(
             current_user=current_user,
             sr_id=sr_id,
             model=payload.model,
-            area='l1_screen'
+            area=area,
         )
 
         resp = await azure_openai_client.chat_completion(
@@ -1334,6 +1324,12 @@ async def run_title_abstract_agentic(
 
     # Normalize per-criterion filter (if provided, only run that criterion)
     filter_criterion_key = str(payload.criterion_key or '').strip() or None
+
+    def _call_with_metadata(area: str):
+        async def _call(prompt: str):
+            raw, usage, latency = await _call_llm(prompt, area=area)
+            return raw, (usage, latency)
+        return _call
 
     for i, q in enumerate(questions):
         if not isinstance(q, str) or not q.strip():
@@ -1392,15 +1388,12 @@ async def run_title_abstract_agentic(
             xtra=xtra or '',
         )
 
-        async def _call_with_metadata(prompt: str):
-            raw, usage, latency = await _call_llm(prompt)
-            return raw, (usage, latency)
-
         try:
+            screening_call = _call_with_metadata('l1_screening')
             screening_raw, screening_parsed, screening_meta, _ = await call_and_parse_agent_response(
                 screening_prompt,
                 stage='screening',
-                call_llm=_call_with_metadata,
+                call_llm=screening_call,
             )
         except AgentResponseError as exc:
             raise HTTPException(
@@ -1470,10 +1463,11 @@ async def run_title_abstract_agentic(
             critical_additions=critical_additions,
         )
         try:
+            critical_call = _call_with_metadata('l1_critical')
             critical_raw, critical_parsed, critical_meta, _ = await call_and_parse_agent_response(
                 critical_prompt,
                 stage='critical',
-                call_llm=_call_with_metadata,
+                call_llm=critical_call,
             )
         except AgentResponseError as exc:
             raise HTTPException(
@@ -1931,7 +1925,7 @@ async def run_fulltext_agentic(
             detail='SR has no L2 criteria questions configured',
         )
 
-    async def _call_llm(prompt: str) -> tuple[str, dict[str, Any], int]:
+    async def _call_llm(prompt: str, *, area: str) -> tuple[str, dict[str, Any], int]:
         import time
 
         t0 = time.time()
@@ -1940,7 +1934,7 @@ async def run_fulltext_agentic(
             current_user=current_user,
             sr_id=sr_id,
             model=payload.model,
-            area='l2_screen'
+            area=area,
         )
 
         # Use multimodal API when we have figure images
@@ -1978,6 +1972,12 @@ async def run_fulltext_agentic(
 
     # Normalize per-criterion filter (if provided, only run that criterion)
     filter_criterion_key = str(payload.criterion_key or '').strip() or None
+
+    def _call_with_metadata(area: str):
+        async def _call(prompt: str):
+            raw, usage, latency = await _call_llm(prompt, area=area)
+            return raw, (usage, latency)
+        return _call
 
     for q, source_step, idx in merged_questions:
         if not isinstance(q, str) or not q.strip():
@@ -2044,17 +2044,14 @@ async def run_fulltext_agentic(
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
 
-        async def _call_with_metadata(prompt: str):
-            raw, usage, latency = await _call_llm(prompt)
-            return raw, (usage, latency)
-
         screening_missing_fields: list[str] = []
         screening_repair_failed = False
         try:
+            screening_call = _call_with_metadata('l2_screening')
             screening_raw, screening_parsed, screening_meta, _ = await call_and_parse_agent_response(
                 screening_prompt,
                 stage='screening',
-                call_llm=_call_with_metadata,
+                call_llm=screening_call,
             )
         except AgentResponseError as exc:
             if exc.parsed is None or exc.metadata is None:
@@ -2202,10 +2199,11 @@ async def run_fulltext_agentic(
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
         )
         try:
+            critical_call = _call_with_metadata('l2_critical')
             critical_raw, critical_parsed, critical_meta, _ = await call_and_parse_agent_response(
                 critical_prompt,
                 stage='critical',
-                call_llm=_call_with_metadata,
+                call_llm=critical_call,
             )
         except AgentResponseError as exc:
             raise HTTPException(
