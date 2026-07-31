@@ -107,38 +107,48 @@ class LLMCostTracker:
             result = await conn.fetch(
                 """
                 SELECT
-                    COALESCE(area, '') AS area,
+                    COALESCE(NULLIF(TRIM(area), ''), 'uncategorized') AS area,
                     COALESCE(SUM(cost_cad), 0) AS total_cost_cad
                 FROM llm_cost_usage
                 WHERE sr_id = %s
-                GROUP BY area
+                GROUP BY COALESCE(NULLIF(TRIM(area), ''), 'uncategorized')
                 ORDER BY area
                 """,
                 (sr_id,),
             )
 
-        breakdown: dict[str, float] = {}
+        breakdown: dict[str, Decimal] = {}
         totals = {
-            'l1': 0.0,
-            'l2': 0.0,
+            'l1': Decimal('0'),
+            'l2': Decimal('0'),
+            'other': Decimal('0'),
         }
+        grand_total = Decimal('0')
 
         for row in result or []:
             area = str(row['area'] or '').strip()
-            total = float(row['total_cost_cad'] or 0.0)
+            total = row['total_cost_cad'] or Decimal('0')
+            if not isinstance(total, Decimal):
+                total = Decimal(str(total))
+
             breakdown[area] = total
+            grand_total += total
 
             if area.startswith('l1_'):
                 totals['l1'] += total
             elif area.startswith('l2_'):
                 totals['l2'] += total
+            else:
+                totals['other'] += total
 
         return {
             'sr_id': sr_id,
             'currency': 'CAD',
             'totals': {
-                'l1': round(totals['l1'], 4),
-                'l2': round(totals['l2'], 4),
+                'l1': round(float(totals['l1']), 4),
+                'l2': round(float(totals['l2']), 4),
+                'other': round(float(totals['other']), 4),
+                'grand_total': round(float(grand_total), 4),
             },
             'breakdown': {k: round(v, 4) for k, v in breakdown.items()},
         }
