@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from datetime import timezone
 from decimal import Decimal
+from typing import Any
 
 from .postgres_auth import postgres_server
 
@@ -98,6 +99,49 @@ class LLMCostTracker:
                 ),
             )
             await conn.commit()
+
+    async def summarize_costs_for_sr(self, sr_id: str) -> dict[str, Any]:
+        await self.ensure_table()
+
+        async with postgres_server.aconn() as conn:
+            result = await conn.fetch(
+                """
+                SELECT
+                    COALESCE(area, '') AS area,
+                    COALESCE(SUM(cost_cad), 0) AS total_cost_cad
+                FROM llm_cost_usage
+                WHERE sr_id = %s
+                GROUP BY area
+                ORDER BY area
+                """,
+                (sr_id,),
+            )
+
+        breakdown: dict[str, float] = {}
+        totals = {
+            'l1': 0.0,
+            'l2': 0.0,
+        }
+
+        for row in result or []:
+            area = str(row['area'] or '').strip()
+            total = float(row['total_cost_cad'] or 0.0)
+            breakdown[area] = total
+
+            if area.startswith('l1_'):
+                totals['l1'] += total
+            elif area.startswith('l2_'):
+                totals['l2'] += total
+
+        return {
+            'sr_id': sr_id,
+            'currency': 'CAD',
+            'totals': {
+                'l1': round(totals['l1'], 4),
+                'l2': round(totals['l2'], 4),
+            },
+            'breakdown': {k: round(v, 4) for k, v in breakdown.items()},
+        }
 
 
 llm_cost_tracker = LLMCostTracker()
