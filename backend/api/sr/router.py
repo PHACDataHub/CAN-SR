@@ -32,6 +32,7 @@ from ..criteria.service import criteria_configuration_service
 from ..services.citation_field_service import discover_citation_fields
 from ..services.sr_db_service import srdb_service
 from ..services.user_db import user_db_service
+from ..services.llm_cost_tracker import llm_cost_tracker
 
 router = APIRouter()
 
@@ -117,6 +118,18 @@ class SystematicReviewRead(BaseModel):
     #   "l2": {"criterion_key": "..."}
     # }
     critical_prompt_additions: dict[str, Any] | None = None
+
+class SRCostTotalsRead(BaseModel):
+    l1: float
+    l2: float
+    other: float
+    grand_total: float
+
+class SRCostSummaryRead(BaseModel):
+    sr_id: str
+    currency: str
+    totals: SRCostTotalsRead
+    breakdown: dict[str, float]
 
 
 @router.post('/create', response_model=SystematicReviewRead, status_code=status.HTTP_201_CREATED)
@@ -766,6 +779,27 @@ async def get_critical_prompt_additions(sr_id: str, current_user: dict[str, Any]
     if not isinstance(cpa, dict):
         cpa = {}
     return {'sr_id': sr_id, 'critical_prompt_additions': cpa}
+
+
+@router.get('/{sr_id}/costs', response_model=SRCostSummaryRead)
+async def get_sr_cost_summary(
+    sr_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """
+    Return aggregated LLM cost for a specific systematic review.
+    """
+    try:
+        await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+        return await llm_cost_tracker.summarize_costs_for_sr(sr_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load systematic review or summarize costs: {e}",
+        )
+    
 
 
 @router.put('/{sr_id}/critical_prompt_additions')

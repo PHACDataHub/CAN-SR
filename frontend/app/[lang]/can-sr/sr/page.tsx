@@ -9,6 +9,29 @@ import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
 import { Settings } from 'lucide-react'
 import { useDictionary } from '../../DictionaryProvider'
 
+interface SRCostSummary {
+  sr_id: string,
+  currency: string,
+  totals: {
+    l1: number,
+    l2: number,
+    other: number,
+    grand_total: number
+  }
+  breakdown: Record<string, number>
+}
+
+const COST_POLL_INTERVAL_MS = 15000
+
+function formatCAD(amount: number): string {
+  return new Intl.NumberFormat('en-CA', {
+    style: 'currency',
+    currency: 'CAD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
+}
+
 export default function CanSrLandingPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -24,6 +47,10 @@ export default function CanSrLandingPage() {
   const [sr, setSr] = useState<any>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+
+  const [costs, setCosts] = useState<SRCostSummary | null>(null)
+  const [costsLoading, setCostsLoading] = useState<boolean>(true)
+  const [costsError, setCostsError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!srId) {
