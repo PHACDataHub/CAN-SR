@@ -104,7 +104,7 @@ class LLMCostTracker:
         await self.ensure_table()
 
         async with postgres_server.aconn() as conn:
-            result = await conn.fetch(
+            cur = await conn.execute(
                 """
                 SELECT
                     COALESCE(NULLIF(TRIM(area), ''), 'uncategorized') AS area,
@@ -116,6 +116,7 @@ class LLMCostTracker:
                 """,
                 (sr_id,),
             )
+            result = await cur.fetchall()
 
         breakdown: dict[str, Decimal] = {}
         totals = {

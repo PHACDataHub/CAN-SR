@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { useParams } from 'next/navigation'
@@ -11,9 +11,10 @@ interface StackingCardProps {
   description?: string
   href: string
   className?: string
+  expandedMeta?: ReactNode
 }
 
-export default function StackingCard({ title, description, href, className }: StackingCardProps) {
+export default function StackingCard({ title, description, href, className, expandedMeta }: StackingCardProps) {
   const [open, setOpen] = useState(false)
   const dict = useDictionary()
 
@@ -54,6 +55,12 @@ export default function StackingCard({ title, description, href, className }: St
             <p className="mb-3">
               {description || dict.cansr.viewDetails}
             </p>
+
+            {expandedMeta ? (
+              <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2">
+                {expandedMeta}
+              </div>
+            ) : null}
             {/* <div className="flex justify-end">
               <Link href={href}>
                 <Button className="rounded-md bg-emerald-600 text-white hover:bg-emerald-700">Go to step</Button>

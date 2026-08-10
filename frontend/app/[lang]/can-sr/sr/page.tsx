@@ -87,6 +87,81 @@ export default function CanSrLandingPage() {
     fetchSr()
   }, [srId, router])
 
+  useEffect(() => {
+    if (!srId) return
+
+    let cancelled = false
+
+    const fetchCosts = async (isInitialLoad = false) => {
+      if (isInitialLoad) {
+        setCostsLoading(true)
+      }
+
+      try {
+        const res = await authenticatedFetch(
+          `/api/can-sr/reviews/costs?sr_id=${encodeURIComponent(srId)}`,
+        )
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}))
+          throw new Error(
+            errBody?.detail ||
+              errBody?.error ||
+              `Failed to fetch costs (${res.status})`,
+          )
+        }
+
+        const data: SRCostSummary = await res.json().catch(() => ({}))
+        if (!cancelled) {
+          setCosts(data)
+          setCostsError(null)
+        }
+      } catch (err: any) {
+        console.error('Error fetching costs:', err)
+        if (!cancelled) {
+          setCostsError(err?.message || 'Unable to load costs')
+        }
+      } finally {
+        if (!cancelled) {
+          setCostsLoading(false)
+        }
+      }
+    }
+
+    fetchCosts(true)
+
+    const intervalId = setInterval(() => fetchCosts(false), COST_POLL_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+    }
+  }, [srId])
+
+  const renderCostMeta = (amount?: number) => {
+    if (costsLoading) {
+      return (
+        <p className="text-sm text-emerald-800">
+          Total Cost: <span className="font-medium">Loading...</span>
+        </p>
+      )
+    }
+
+    if (costsError) {
+      return (
+        <p className="text-sm text-amber-800">
+          Total Cost is unavailable.
+        </p>
+      )
+    }
+
+    return (
+      <p className="text-sm text-emerald-800">
+        Total Cost: <span className="font-medium">{formatCAD(amount || 0)}</span>
+      </p>
+    )
+  }
+
   // console.log(sr)
 
   return (
@@ -162,6 +237,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/l1-screen?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/l1-screen'
             }
+            expandedMeta={renderCostMeta(costs?.totals?.l1)}
           />
 
           <StackingCard
@@ -172,6 +248,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/l2-screen'
             }
+            expandedMeta={renderCostMeta(costs?.totals?.l2)}
           />
 
           <StackingCard
