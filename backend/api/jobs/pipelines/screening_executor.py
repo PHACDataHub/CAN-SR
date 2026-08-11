@@ -30,9 +30,11 @@ from .control import PipelineCanceled
 from .control import wait_if_paused
 
 
-def _should_skip_ai_output(existing_value: Any, *, force: bool) -> bool:
+def _should_skip_ai_output(
+    existing_value: Any, *, force: bool, skip_existing_ai: bool,
+) -> bool:
     """Return True if we should skip doing work because output already exists."""
-    if force:
+    if force or not skip_existing_ai:
         return False
     # Missing output is NULL/empty per planning doc.
     if existing_value is None:
@@ -40,6 +42,13 @@ def _should_skip_ai_output(existing_value: Any, *, force: bool) -> bool:
     if isinstance(existing_value, str) and existing_value.strip() == '':
         return False
     return True
+
+
+def _should_skip_human_answer(
+    human_status: Any, *, force: bool, skip_existing_human: bool,
+) -> bool:
+    """Return True only when the explicit human-answer skip option is enabled."""
+    return not force and skip_existing_human and human_status == 'matched'
 
 
 def _eligible_ids(*, sr_id: str, table_name: str, step: str) -> list[int]:
@@ -91,6 +100,8 @@ async def _run_l1_for_citation(
     citation_id: int,
     model: str | None,
     force: bool,
+    skip_existing_ai: bool = False,
+    skip_existing_human: bool = False,
 ) -> tuple[int, int, int]:
     """Returns (done, skipped, failed) increments for this citation."""
     row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
@@ -144,11 +155,17 @@ async def _run_l1_for_citation(
         }
         xtra = format_item_context(item) or xtra
         human = resolve_existing_human_value(row, item)
-        if human.get('status') == 'matched':
+        if _should_skip_human_answer(
+            human.get('status'),
+            force=force,
+            skip_existing_human=skip_existing_human,
+        ):
             continue
         col = snake_case_column(q)
         existing = row.get(col)
-        if _should_skip_ai_output(existing, force=force):
+        if _should_skip_ai_output(
+            existing, force=force, skip_existing_ai=skip_existing_ai,
+        ):
             continue
 
         if not azure_openai_client.is_configured():
@@ -262,25 +279,6 @@ async def _run_l1_for_citation(
 
         await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)
 
-        # Best-effort autofill human_ if empty
-        try:
-            core = snake_case(q, max_len=56)
-            human_col = f"human_{core}" if core else 'human_col'
-            human_payload = {
-                **classification_json,
-                'autofilled': True, 'source': 'llm',
-            }
-            await run_in_threadpool(
-                cits_dp_service.copy_jsonb_if_empty,
-                citation_id,
-                col,
-                human_col,
-                human_payload,
-                table_name,
-            )
-        except Exception:
-            pass
-
         any_ran = True
 
     # Update derived decisions (uses fresh row inside)
@@ -332,6 +330,8 @@ async def _run_l2_for_citation(
     citation_id: int,
     model: str | None,
     force: bool,
+    skip_existing_ai: bool = False,
+    skip_existing_human: bool = False,
 ) -> tuple[int, int, int]:
     row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
     if not row or not row.get('fulltext_url'):
@@ -493,11 +493,17 @@ async def _run_l2_for_citation(
             }
         xtra = format_item_context(item) or xtra
         human = resolve_existing_human_value(row, item)
-        if human.get('status') == 'matched':
+        if _should_skip_human_answer(
+            human.get('status'),
+            force=force,
+            skip_existing_human=skip_existing_human,
+        ):
             continue
         col = snake_case_column(q)
         existing = row.get(col)
-        if _should_skip_ai_output(existing, force=force):
+        if _should_skip_ai_output(
+            existing, force=force, skip_existing_ai=skip_existing_ai,
+        ):
             continue
 
         # --- Agentic (screening + critical) ---
@@ -619,25 +625,6 @@ async def _run_l2_for_citation(
 
         await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, classification_json, table_name)
 
-        # Best-effort autofill human
-        try:
-            core = snake_case(q, max_len=56)
-            human_col = f"human_{core}" if core else 'human_col'
-            human_payload = {
-                **classification_json,
-                'autofilled': True, 'source': 'llm',
-            }
-            await run_in_threadpool(
-                cits_dp_service.copy_jsonb_if_empty,
-                citation_id,
-                col,
-                human_col,
-                human_payload,
-                table_name,
-            )
-        except Exception:
-            pass
-
         any_ran = True
 
     try:
@@ -659,6 +646,8 @@ async def _run_extract_for_citation(
     citation_id: int,
     model: str | None,
     force: bool,
+    skip_existing_ai: bool = False,
+    skip_existing_human: bool = False,
 ) -> tuple[int, int, int]:
     row = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
     if not row or not row.get('fulltext_url'):
@@ -817,10 +806,16 @@ async def _run_extract_for_citation(
         await wait_if_paused(job_id)
         col = snake_case_param(name)
         existing = row.get(col)
-        if _should_skip_ai_output(existing, force=force):
+        if _should_skip_ai_output(
+            existing, force=force, skip_existing_ai=skip_existing_ai,
+        ):
             continue
         human = resolve_existing_human_value(row, item)
-        if human.get('status') == 'matched':
+        if _should_skip_human_answer(
+            human.get('status'),
+            force=force,
+            skip_existing_human=skip_existing_human,
+        ):
             continue
 
         prompt = PARAMETER_PROMPT_JSON.format(
@@ -871,21 +866,6 @@ async def _run_extract_for_citation(
         }
 
         await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col, stored, table_name)
-
-        # best-effort autofill human_param
-        try:
-            human_col = col.replace('llm_param_', 'human_param_', 1)
-            human_payload = {**stored, 'autofilled': True, 'source': 'llm'}
-            await run_in_threadpool(
-                cits_dp_service.copy_jsonb_if_empty,
-                citation_id,
-                col,
-                human_col,
-                human_payload,
-                table_name,
-            )
-        except Exception:
-            pass
 
         any_ran = True
 

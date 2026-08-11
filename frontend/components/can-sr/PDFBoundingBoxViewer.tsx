@@ -80,8 +80,10 @@ function extractSentenceArray(fulltext?: string): string[] {
       out[idx] = m[2]
     }
   }
-  // fill holes if any
-  return out.filter((v) => typeof v === 'string')
+  // Preserve the model-facing indices. Removing sparse entries here would shift
+  // every later evidence index and make a valid sentence chip highlight the
+  // wrong sentence.
+  return out
 }
 
 export type PDFBoundingBoxViewerHandle = {

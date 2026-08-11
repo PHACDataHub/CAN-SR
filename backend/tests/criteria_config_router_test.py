@@ -113,6 +113,34 @@ class CriteriaConfigRouterTests(unittest.IsolatedAsyncioTestCase):
             caught.exception.detail['fingerprint'].startswith('sha256:'),
         )
 
+    @patch('api.sr.router.srdb_service.save_criteria_config')
+    @patch('api.sr.router.discover_citation_fields')
+    @patch('api.sr.router._load_criteria_review', new_callable=AsyncMock)
+    async def test_save_initial_config_when_criteria_is_missing(
+        self,
+        load_review: AsyncMock,
+        discover,
+        save,
+    ) -> None:
+        load_review.return_value = {
+            'criteria': None,
+            'criteria_revision': 0,
+        }
+        discover.return_value = {
+            'fields': [{'name': 'Title'}, {'name': 'Abstract'}],
+            'unavailable_configured_fields': [],
+        }
+        save.return_value = {'revision': 1}
+        payload = CriteriaConfigSaveRequest(
+            expected_revision=0,
+            criteria=CriteriaConfigV2.model_validate(EMPTY_CONFIG),
+        )
+
+        response = await save_criteria_config('review-id', payload, USER)
+
+        self.assertEqual(response['revision'], 1)
+        save.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

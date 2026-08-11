@@ -72,13 +72,23 @@ function QuestionCard({
       <label className="mt-3 block text-sm font-medium" htmlFor={`${prefix}-question`}>{labels.questionText}</label>
       <input id={`${prefix}-question`} value={question.question} onChange={(event) => dispatch({ type: 'update-question', stage, questionId: question.id, field: 'question', value: event.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
       <div className="mt-3 rounded-md border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
-        <label className="block text-sm font-medium" htmlFor={`${prefix}-answer-column`}>{question.answer_column ? labels.answerColumn : `+ ${labels.addAnswerColumn}`}</label>
-        <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
-        <select id={`${prefix}-answer-column`} value={question.answer_column || ''} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.value || null })} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm" title={labels.answerColumnTooltip}>
-          {question.answer_column && !citationFields.fields.some((field) => field.name === question.answer_column) ? <option value={question.answer_column}>{question.answer_column} · {labels.unavailableField}</option> : null}
-          <option value="">{labels.noAnswerColumn}</option>
-          {citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}
-        </select>
+        <label className="flex items-center gap-2 text-sm font-medium" htmlFor={`${prefix}-retrospective-validation`}>
+          <input
+            id={`${prefix}-retrospective-validation`}
+            type="checkbox"
+            checked={Boolean(question.answer_column)}
+            onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.checked ? citationFields.fields[0]?.name || null : null })}
+          />
+          {labels.enableRetrospectiveValidation || 'Enable retrospective validation'}
+        </label>
+        {question.answer_column ? <>
+          <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
+          <select id={`${prefix}-answer-column`} value={question.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.value || null })} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm" title={labels.answerColumnTooltip}>
+            {!citationFields.fields.some((field) => field.name === question.answer_column) ? <option value={question.answer_column}>{question.answer_column} · {labels.unavailableField}</option> : null}
+            <option value="">{labels.noAnswerColumn}</option>
+            {citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}
+          </select>
+        </> : null}
       </div>
       <fieldset className="mt-4 space-y-3">
         <legend className="text-sm font-semibold">{labels.answers}</legend>

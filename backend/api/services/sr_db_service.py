@@ -642,7 +642,10 @@ class SRDBService:
             logger.exception(
                 'Failed to save canonical criteria config: %s', exc,
             )
-            raise
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f'Failed to save criteria configuration: {exc}',
+            ) from exc
 
     def list_systematic_reviews_for_user(self, user_email: str) -> list[dict[str, Any]]:
         """

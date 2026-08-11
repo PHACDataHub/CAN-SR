@@ -38,7 +38,12 @@ export type ScreeningCriterionMetrics = {
   recall?: number | null
   npv?: number | null
   confusion_matrix?: { tp: number; fp: number; fn: number; tn: number } | null
-  queue_confusion_matrix?: { tp: number; fp: number; fn: number; tn: number } | null
+  queue_confusion_matrix?: {
+    tp: number
+    fp: number
+    fn: number
+    tn: number
+  } | null
   human_total_count_all?: number | null
 }
 
@@ -131,7 +136,9 @@ export type ScreeningMetricsPanelProps = {
   showFilter?: boolean
 
   filterMode: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
-  onFilterModeChange: (v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all') => void
+  onFilterModeChange: (
+    v: 'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all',
+  ) => void
   stats?: ScreeningMetricsStats
 }
 
@@ -159,7 +166,29 @@ export default function ScreeningMetricsPanel({
   onFilterModeChange,
   stats: _stats,
 }: ScreeningMetricsPanelProps) {
-  const [thresholdText, setThresholdText] = React.useState<Record<string, string>>({})
+  const [sliderPercents, setSliderPercents] = React.useState<
+    Record<string, number>
+  >({})
+  const pendingSliderPercents = React.useRef<Record<string, number>>({})
+
+  React.useEffect(() => {
+    if (!criterionMetrics?.length) return
+    setSliderPercents((previous) => {
+      const next = { ...previous }
+      for (const criterion of criterionMetrics) {
+        const incoming = Math.round(
+          Math.max(0, Math.min(1, criterion.threshold)) * 100,
+        )
+        const pending = pendingSliderPercents.current[criterion.criterion_key]
+        if (pending === undefined || incoming === pending) {
+          next[criterion.criterion_key] = incoming
+          if (incoming === pending)
+            delete pendingSliderPercents.current[criterion.criterion_key]
+        }
+      }
+      return next
+    })
+  }, [criterionMetrics])
 
   // Kept for backwards-compatibility with callers that still compute page-local stats.
   void _stats
@@ -170,20 +199,6 @@ export default function ScreeningMetricsPanel({
     return m
   }, [calibration])
 
-  // Keep a stable text representation so users can type freely.
-  React.useEffect(() => {
-    if (!criterionMetrics?.length) return
-    setThresholdText((prev) => {
-      const next = { ...prev }
-      for (const c of criterionMetrics) {
-        const k = c.criterion_key
-        if (!(k in next)) {
-          next[k] = Number.isFinite(c.threshold) ? String(c.threshold) : '0.9'
-        }
-      }
-      return next
-    })
-  }, [criterionMetrics])
   const total = summary?.total_citations ?? 0
   const validatedAll = summary?.validated_all ?? 0
   const notScreened = summary?.not_screened_yet ?? 0
@@ -195,7 +210,10 @@ export default function ScreeningMetricsPanel({
 
   // Everything that is NOT validated, NOT in the remaining queue, and NOT not-screened.
   // (Typically: confident excludes + confident includes at current thresholds.)
-  const resolvedRemaining = Math.max(0, total - validatedAll - queueRemaining - notScreened)
+  const resolvedRemaining = Math.max(
+    0,
+    total - validatedAll - queueRemaining - notScreened,
+  )
 
   const validatedPct = total > 0 ? (validatedAll / total) * 100 : 0
   const queueRemainingPct = total > 0 ? (queueRemaining / total) * 100 : 0
@@ -219,42 +237,81 @@ export default function ScreeningMetricsPanel({
         </div>
 
         {/* Headline metrics */}
-        {criterionMetrics?.length ? (() => {
-          const accVals = criterionMetrics.filter((c) => typeof c.accuracy_all === 'number').map((c) => c.accuracy_all as number)
-          const avgAcc = accVals.length ? Math.round((accVals.reduce((a, b) => a + b, 0) / accVals.length) * 100) : null
-          const f1Vals = criterionMetrics.filter((c) => typeof c.f1_score === 'number').map((c) => c.f1_score as number)
-          const avgF1 = f1Vals.length ? Math.round((f1Vals.reduce((a, b) => a + b, 0) / f1Vals.length) * 100) : null
-          const precVals = criterionMetrics.filter((c) => typeof c.precision === 'number').map((c) => c.precision as number)
-          const avgPrec = precVals.length ? Math.round((precVals.reduce((a, b) => a + b, 0) / precVals.length) * 100) : null
-          const recVals = criterionMetrics.filter((c) => typeof c.recall === 'number').map((c) => c.recall as number)
-          const avgRec = recVals.length ? Math.round((recVals.reduce((a, b) => a + b, 0) / recVals.length) * 100) : null
-          const screened = total - notScreened
-          const wr = screened > 0 ? Math.round((1 - queueTotal / screened) * 100) : null
-          return (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-1">
-                <span className="text-[10px] text-emerald-600">Acc</span>
-                <span className="text-xs font-semibold text-emerald-900">{avgAcc === null ? '—' : `${avgAcc}%`}</span>
+        {criterionMetrics?.length ? (
+          (() => {
+            const accVals = criterionMetrics
+              .filter((c) => typeof c.accuracy_all === 'number')
+              .map((c) => c.accuracy_all as number)
+            const avgAcc = accVals.length
+              ? Math.round(
+                  (accVals.reduce((a, b) => a + b, 0) / accVals.length) * 100,
+                )
+              : null
+            const f1Vals = criterionMetrics
+              .filter((c) => typeof c.f1_score === 'number')
+              .map((c) => c.f1_score as number)
+            const avgF1 = f1Vals.length
+              ? Math.round(
+                  (f1Vals.reduce((a, b) => a + b, 0) / f1Vals.length) * 100,
+                )
+              : null
+            const precVals = criterionMetrics
+              .filter((c) => typeof c.precision === 'number')
+              .map((c) => c.precision as number)
+            const avgPrec = precVals.length
+              ? Math.round(
+                  (precVals.reduce((a, b) => a + b, 0) / precVals.length) * 100,
+                )
+              : null
+            const recVals = criterionMetrics
+              .filter((c) => typeof c.recall === 'number')
+              .map((c) => c.recall as number)
+            const avgRec = recVals.length
+              ? Math.round(
+                  (recVals.reduce((a, b) => a + b, 0) / recVals.length) * 100,
+                )
+              : null
+            const screened = total - notScreened
+            const wr =
+              screened > 0
+                ? Math.round((1 - queueTotal / screened) * 100)
+                : null
+            return (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-1">
+                  <span className="text-[10px] text-emerald-600">Acc</span>
+                  <span className="text-xs font-semibold text-emerald-900">
+                    {avgAcc === null ? '—' : `${avgAcc}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1">
+                  <span className="text-[10px] text-indigo-600">F1</span>
+                  <span className="text-xs font-semibold text-indigo-900">
+                    {avgF1 === null ? '—' : `${avgF1}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 rounded-md bg-sky-50 px-2 py-1">
+                  <span className="text-[10px] text-sky-600">Prec</span>
+                  <span className="text-xs font-semibold text-sky-900">
+                    {avgPrec === null ? '—' : `${avgPrec}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 rounded-md bg-violet-50 px-2 py-1">
+                  <span className="text-[10px] text-violet-600">Recall</span>
+                  <span className="text-xs font-semibold text-violet-900">
+                    {avgRec === null ? '—' : `${avgRec}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1">
+                  <span className="text-[10px] text-amber-600">Workload ↓</span>
+                  <span className="text-xs font-semibold text-amber-900">
+                    {wr === null ? '—' : `${Math.max(0, wr)}%`}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1">
-                <span className="text-[10px] text-indigo-600">F1</span>
-                <span className="text-xs font-semibold text-indigo-900">{avgF1 === null ? '—' : `${avgF1}%`}</span>
-              </div>
-              <div className="flex items-center gap-1.5 rounded-md bg-sky-50 px-2 py-1">
-                <span className="text-[10px] text-sky-600">Prec</span>
-                <span className="text-xs font-semibold text-sky-900">{avgPrec === null ? '—' : `${avgPrec}%`}</span>
-              </div>
-              <div className="flex items-center gap-1.5 rounded-md bg-violet-50 px-2 py-1">
-                <span className="text-[10px] text-violet-600">Recall</span>
-                <span className="text-xs font-semibold text-violet-900">{avgRec === null ? '—' : `${avgRec}%`}</span>
-              </div>
-              <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1">
-                <span className="text-[10px] text-amber-600">Workload ↓</span>
-                <span className="text-xs font-semibold text-amber-900">{wr === null ? '—' : `${Math.max(0, wr)}%`}</span>
-              </div>
-            </div>
-          )
-        })() : (
+            )
+          })()
+        ) : (
           <p className="mt-1 text-xs text-gray-600">
             Threshold + validation workload controls.
           </p>
@@ -262,7 +319,9 @@ export default function ScreeningMetricsPanel({
       </div>
 
       <div className="space-y-3">
-        {typeof threshold === 'number' && onThresholdChange && !criterionMetrics?.length ? (
+        {typeof threshold === 'number' &&
+        onThresholdChange &&
+        !criterionMetrics?.length ? (
           <div className="flex items-center justify-between gap-3">
             <label className="text-sm text-gray-700">Threshold</label>
             <input
@@ -312,7 +371,9 @@ export default function ScreeningMetricsPanel({
                     const screened = total - notScreened
                     if (screened === 0 || total === 0) return '—'
                     // Workload reduction = % of screened citations that don't need human review
-                    const reduction = Math.round((1 - (queueTotal / screened)) * 100)
+                    const reduction = Math.round(
+                      (1 - queueTotal / screened) * 100,
+                    )
                     return `${Math.max(0, Math.min(100, reduction))}%`
                   })()}
                 </span>
@@ -324,8 +385,10 @@ export default function ScreeningMetricsPanel({
               <div className="relative h-3 w-full overflow-hidden rounded bg-gray-200">
                 {/* Validated (green) */}
                 <div
-                  className="absolute left-0 top-0 h-3 bg-emerald-600"
-                  style={{ width: `${Math.min(100, Math.max(0, validatedPct))}%` }}
+                  className="absolute top-0 left-0 h-3 bg-emerald-600"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, validatedPct))}%`,
+                  }}
                 />
 
                 {/* Remaining human review queue (amber) */}
@@ -360,16 +423,23 @@ export default function ScreeningMetricsPanel({
 
             <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-gray-600">
               <div>
-                <span className="font-medium text-gray-700">Validated:</span> {validatedAll} / {total}
+                <span className="font-medium text-gray-700">Validated:</span>{' '}
+                {validatedAll} / {total}
               </div>
               <div>
-                <span className="font-medium text-gray-700">Human review queue:</span> {queueRemaining} remaining (of {queueTotal})
+                <span className="font-medium text-gray-700">
+                  Human review queue:
+                </span>{' '}
+                {queueRemaining} remaining (of {queueTotal})
               </div>
               {/* <div>
                 <span className="font-medium text-gray-700">Resolved (no review needed):</span> {resolvedRemaining}
               </div> */}
               <div>
-                <span className="font-medium text-gray-700">Not screened yet:</span> {notScreened}
+                <span className="font-medium text-gray-700">
+                  Not screened yet:
+                </span>{' '}
+                {notScreened}
               </div>
             </div>
           </div>
@@ -400,126 +470,149 @@ export default function ScreeningMetricsPanel({
 
             <div className="mt-2 space-y-2">
               {criterionMetrics.map((c) => {
-                const textVal = thresholdText[c.criterion_key] ?? (Number.isFinite(c.threshold) ? String(c.threshold) : '0.9')
+                const thresholdPercent =
+                  sliderPercents[c.criterion_key] ??
+                  Math.round(Math.max(0, Math.min(1, c.threshold)) * 100)
                 const cal = calibByKey.get(c.criterion_key)
                 const rec =
                   cal && typeof cal.recommended_threshold === 'number'
-                    ? Math.round(cal.recommended_threshold * 100) / 100
+                    ? Math.max(0, Math.min(1, cal.recommended_threshold))
                     : null
-
-                const curve = Array.isArray(cal?.curve) ? cal!.curve : []
-                const recPoint =
-                  rec === null
-                    ? null
-                    : curve.find((p) => Math.abs(p.threshold - rec) < 1e-9) || null
-                const wr =
-                  typeof recPoint?.workload_reduction === 'number'
-                    ? Math.round(recPoint.workload_reduction * 100)
-                    : null
-                const recall =
-                  typeof recPoint?.recall === 'number' ? Math.round(recPoint.recall * 100) : null
-                const fpr = typeof recPoint?.fpr === 'number' ? Math.round(recPoint.fpr * 100) : null
+                const cm = c.confusion_matrix
+                const npvPct =
+                  typeof c.npv === 'number'
+                    ? Math.round(c.npv * 100)
+                    : cm && cm.fn === 0
+                      ? 100
+                      : null
+                const updateThreshold = (percent: number) => {
+                  const value = Math.max(0, Math.min(100, Math.round(percent)))
+                  pendingSliderPercents.current[c.criterion_key] = value
+                  setSliderPercents((previous) => ({
+                    ...previous,
+                    [c.criterion_key]: value,
+                  }))
+                  onCriterionThresholdChange?.(c.criterion_key, value / 100)
+                }
+                const commitThreshold = (percent: number) => {
+                  const value = Math.max(0, Math.min(100, Math.round(percent)))
+                  onCriterionThresholdCommit?.(c.criterion_key, value / 100)
+                }
 
                 return (
-                  <details key={c.criterion_key} className="rounded border border-gray-100 bg-white p-2">
-                    <summary className="cursor-pointer list-none">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs font-medium text-gray-800">{c.label}</div>
-                          <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
-                            {rec !== null ? <div>Recommended thr: {rec}</div> : null}
-                            {(() => {
-                              // NPV: default to 100% if confusion matrix exists but fn === 0
-                              const cm = c.confusion_matrix
-                              const rawNpv = typeof c.npv === 'number' ? c.npv : null
-                              const npvPct = rawNpv !== null ? Math.round(rawNpv * 100) : (cm && cm.fn === 0 ? 100 : null)
-                              // Corrected NPV delta
-                              const qcm = c.queue_confusion_matrix
-                              let npvDelta: number | null = null
-                              if (npvPct !== null && cm && qcm) {
-                                const corrTn = cm.tn + qcm.fp
-                                const corrFn = cm.fn - qcm.fn
-                                const corrNpv = (corrTn + corrFn) > 0 ? corrTn / (corrTn + corrFn) : 1
-                                npvDelta = Math.round(corrNpv * 100) - npvPct
-                              }
-                              return npvPct !== null ? (
-                                <div>NPV: {npvPct}%{npvDelta !== null && npvDelta > 0 ? <span className="ml-1 text-emerald-600 font-medium">+{npvDelta}%</span> : null}</div>
-                              ) : null
-                            })()}
-                            {(() => {
-                              // Workload ↓ general = 1 - (needs_human_review_count / has_run_count)
-                              if (c.has_run_count <= 0) return null
-                              const wrGen = Math.round((1 - c.needs_human_review_count / c.has_run_count) * 100)
-                              return <div>Workload ↓: {Math.max(0, wrGen)}%</div>
-                            })()}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <label className="text-[11px] text-gray-600">Thr</label>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={textVal}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                              const raw = e.target.value
-                              setThresholdText((p) => ({ ...p, [c.criterion_key]: raw }))
-                              const v = Number(raw)
-                              if (!Number.isFinite(v)) return
-                              onCriterionThresholdChange?.(c.criterion_key, Math.max(0, Math.min(1, v)))
-                            }}
-                            onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                              if (e.key !== 'Enter') return
-                              const v = Number((e.currentTarget as HTMLInputElement).value)
-                              if (!Number.isFinite(v)) return
-                              onCriterionThresholdCommit?.(c.criterion_key, Math.max(0, Math.min(1, v)))
-                            }}
-                            className="w-20 rounded-md border border-gray-200 px-2 py-1 text-xs"
-                          />
-                          <span className="text-[11px] text-gray-400">▾</span>
-                        </div>
+                  <div
+                    key={c.criterion_key}
+                    className="flex items-start gap-4 rounded border border-gray-100 bg-white p-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-gray-800">
+                        {c.label}
                       </div>
-                    </summary>
-
-                    <div className="mt-2 space-y-2 text-[11px] text-gray-700">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                          Low confidence: {c.low_confidence_count}
-                        </div>
-                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                          Critical disagreements: {c.critical_disagreement_count}
-                        </div>
-                      </div>
-
-                      {cal ? (
-                        <div className="rounded border border-gray-100 bg-gray-50 p-2">
-                          <div className="text-[11px] font-medium text-gray-700">Calibration (validated set)</div>
-                          <div className="mt-1 grid grid-cols-2 gap-2">
-                            <div className="rounded border border-gray-100 bg-white p-2">
-                              Recommended thr: {rec === null ? '—' : rec}
-                            </div>
-                            <div className="rounded border border-gray-100 bg-white p-2">
-                              Validated n: {cal.validated_n}
-                            </div>
-                            <div className="rounded border border-gray-100 bg-white p-2">
-                              Recall @ rec: {recall === null ? '—' : `${recall}%`}
-                            </div>
-                            <div className="rounded border border-gray-100 bg-white p-2">
-                              FPR @ rec: {fpr === null ? '—' : `${fpr}%`}
-                            </div>
-                            <div className="col-span-2 rounded border border-gray-100 bg-white p-2">
-                              Workload ↓ @ rec: {wr === null ? '—' : `${wr}%`}
-                            </div>
+                      <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
+                        {npvPct !== null ? <div>NPV: {npvPct}%</div> : null}
+                        {c.has_run_count > 0 ? (
+                          <div>
+                            Workload ↓:{' '}
+                            {Math.max(
+                              0,
+                              Math.round(
+                                (1 -
+                                  c.needs_human_review_count /
+                                    c.has_run_count) *
+                                  100,
+                              ),
+                            )}
+                            %
                           </div>
-                          {cal.recommended_reason ? (
-                            <div className="mt-2 text-[11px] text-gray-500">
-                              {cal.recommended_reason}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
+                        ) : null}
+                      </div>
                     </div>
-                  </details>
+
+                    <div className="w-44 shrink-0">
+                      <div className="mb-1 flex items-center gap-1 text-[10px] text-gray-500">
+                        <span>Threshold</span>
+                        <span className="font-medium text-gray-700">
+                          {thresholdPercent}%
+                        </span>
+                      </div>
+                      <div
+                        className="relative cursor-pointer pt-7"
+                        role="slider"
+                        tabIndex={0}
+                        aria-label={`Threshold for ${c.label}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={thresholdPercent}
+                        onPointerDown={(e) => {
+                          e.currentTarget.setPointerCapture(e.pointerId)
+                          const bounds = e.currentTarget.getBoundingClientRect()
+                          updateThreshold(
+                            ((e.clientX - bounds.left) / bounds.width) * 100,
+                          )
+                        }}
+                        onPointerMove={(e) => {
+                          if (!e.currentTarget.hasPointerCapture(e.pointerId))
+                            return
+                          const bounds = e.currentTarget.getBoundingClientRect()
+                          updateThreshold(
+                            ((e.clientX - bounds.left) / bounds.width) * 100,
+                          )
+                        }}
+                        onPointerUp={(e) => {
+                          const bounds = e.currentTarget.getBoundingClientRect()
+                          commitThreshold(
+                            ((e.clientX - bounds.left) / bounds.width) * 100,
+                          )
+                          e.currentTarget.releasePointerCapture(e.pointerId)
+                        }}
+                        onKeyDown={(e) => {
+                          let next: number | null = null
+                          if (e.key === 'ArrowLeft' || e.key === 'ArrowDown')
+                            next = thresholdPercent - 1
+                          if (e.key === 'ArrowRight' || e.key === 'ArrowUp')
+                            next = thresholdPercent + 1
+                          if (e.key === 'Home') next = 0
+                          if (e.key === 'End') next = 100
+                          if (e.key === 'PageDown') next = thresholdPercent - 10
+                          if (e.key === 'PageUp') next = thresholdPercent + 10
+                          if (next === null) return
+                          e.preventDefault()
+                          updateThreshold(next)
+                          commitThreshold(next)
+                        }}
+                      >
+                        {rec !== null ? (
+                          <div
+                            className="pointer-events-none absolute top-0 bottom-0 z-10 w-px"
+                            style={{ left: `${rec * 100}%` }}
+                            aria-hidden="true"
+                          >
+                            <span className="absolute top-0 left-1/2 -translate-x-1/2 text-[9px] font-medium whitespace-nowrap text-amber-700">
+                              Rec {Math.round(rec * 100)}%
+                            </span>
+                            <span className="absolute top-3 bottom-0 left-0 w-px bg-amber-500" />
+                          </div>
+                        ) : null}
+                        <div className="relative h-1 w-full rounded-full bg-gray-300">
+                          <div
+                            className="absolute inset-y-0 left-0 rounded-full bg-blue-600"
+                            style={{ width: `${thresholdPercent}%` }}
+                          />
+                          <div
+                            className="absolute top-1/2 h-4 w-4 rounded-full bg-blue-600 shadow-sm"
+                            style={{
+                              left: `${thresholdPercent}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-0.5 flex justify-between text-[9px] text-gray-400">
+                        <span>0%</span>
+                        <span>100%</span>
+                      </div>
+                    </div>
+                  </div>
                 )
               })}
             </div>

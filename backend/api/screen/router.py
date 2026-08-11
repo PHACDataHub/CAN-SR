@@ -695,12 +695,16 @@ def _parse_selected_from_human_payload(v: Any) -> str | None:
         try:
             obj = json.loads(s)
             if isinstance(obj, dict):
+                if obj.get('source') == 'llm':
+                    return None
                 sel = obj.get('selected')
                 return str(sel).strip() if isinstance(sel, str) else None
         except Exception:
             return s
         return None
     if isinstance(v, dict):
+        if v.get('source') == 'llm':
+            return None
         sel = v.get('selected')
         return str(sel).strip() if isinstance(sel, str) else None
     return None
@@ -1049,15 +1053,6 @@ async def classify_citation(
     # Persist into Postgres under a dynamic column name derived from question
     col_name = snake_case_column(payload.question)
 
-    # Human mirror column name (same slug as llm_, but prefixed human_)
-    try:
-        col_core_h = snake_case(
-            payload.question, max_len=56,
-        ) if snake_case else ''
-    except Exception:
-        col_core_h = ''
-    human_col_name = f"human_{col_core_h}" if col_core_h else 'human_col'
-
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
@@ -1075,26 +1070,6 @@ async def classify_citation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Citation not found to update',
         )
-
-    # Auto-fill human_* from llm_* if missing (never overwrite)
-    try:
-        human_payload = {
-            **classification_json,
-            'autofilled': True,
-            'source': 'llm',
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
-        }
-        await run_in_threadpool(
-            cits_dp_service.copy_jsonb_if_empty,
-            citation_id,
-            col_name,
-            human_col_name,
-            human_payload,
-            table_name,
-        )
-    except Exception:
-        # best-effort
-        pass
 
     await update_inclusion_decision(sr, citation_id, payload.screening_step, 'llm')
 

@@ -58,9 +58,19 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
       <div><label className="block text-sm font-medium" htmlFor={`${prefix}-type`}>{labels.parameterType}</label><select id={`${prefix}-type`} value={parameter.type} onChange={(event) => dispatch({ type: 'set-parameter-type', parameterId: parameter.id, value: event.target.value as 'text' | 'selection' })} className="mt-1 w-full rounded-md border px-3 py-2"><option value="text" disabled={typeChangeBlocked}>{labels.freeText}</option><option value="selection">{labels.selectionList}</option></select></div>
     </div>
     <div className="mt-3 rounded-md border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
-      <label className="block text-sm font-medium" htmlFor={`${prefix}-answer-column`}>{parameter.answer_column ? labels.answerColumn : `+ ${labels.addAnswerColumn}`}</label>
-      <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
-      <select id={`${prefix}-answer-column`} value={parameter.answer_column || ''} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.value || null })} title={labels.answerColumnTooltip} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm"><option value="">{labels.noAnswerColumn}</option>{parameter.answer_column && !citationFields.fields.some((field) => field.name === parameter.answer_column) ? <option value={parameter.answer_column}>{parameter.answer_column} · {labels.unavailableField}</option> : null}{citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select>
+      <label className="flex items-center gap-2 text-sm font-medium" htmlFor={`${prefix}-retrospective-validation`}>
+        <input
+          id={`${prefix}-retrospective-validation`}
+          type="checkbox"
+          checked={Boolean(parameter.answer_column)}
+          onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.checked ? citationFields.fields[0]?.name || null : null })}
+        />
+        {labels.enableRetrospectiveValidation || 'Enable retrospective validation'}
+      </label>
+      {parameter.answer_column ? <>
+        <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
+        <select id={`${prefix}-answer-column`} value={parameter.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.value || null })} title={labels.answerColumnTooltip} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm"><option value="">{labels.noAnswerColumn}</option>{!citationFields.fields.some((field) => field.name === parameter.answer_column) ? <option value={parameter.answer_column}>{parameter.answer_column} · {labels.unavailableField}</option> : null}{citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select>
+      </> : null}
     </div>
     {typeChangeBlocked ? <p role="alert" className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-900">{labels.typeChangeBlocked}: {dependants.join(', ')}</p> : null}
     <div className="mt-3 flex items-center gap-3 rounded-md bg-gray-50 p-3">

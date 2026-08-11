@@ -30,3 +30,24 @@ class CitationFieldServiceTests(unittest.TestCase):
 
     def test_supports_review_without_upload(self):
         self.assertEqual(build_citation_field_contract({}, [])['fields'], [])
+
+    def test_canonicalizes_normalized_uploaded_title_and_abstract_columns(self):
+        result = build_citation_field_contract(
+            {
+                'criteria': {
+                    'citation_fields': {
+                        'title': 'Title', 'abstract': 'Abstract', 'l1_include': [],
+                    },
+                },
+            },
+            [{'column_name': name, 'data_type': 'text'} for name in [
+                'id', 'title', 'abstract',
+            ]],
+        )
+        self.assertEqual(
+            result['fields'], [
+                {'name': 'Title', 'data_type': 'text'},
+                {'name': 'Abstract', 'data_type': 'text'},
+            ],
+        )
+        self.assertEqual(result['unavailable_configured_fields'], [])

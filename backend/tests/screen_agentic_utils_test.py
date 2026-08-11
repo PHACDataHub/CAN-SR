@@ -34,6 +34,20 @@ def test_invalid_confidence_is_reported_missing():
     assert validate_agent_response(parsed, stage='screening') == ['confidence']
 
 
+def test_fulltext_evidence_is_parsed_and_deduplicated():
+    parsed = parse_agent_xml(
+        '<answer>Include</answer><confidence>0.8</confidence>'
+        '<rationale>Supported by the results.</rationale>'
+        '<evidence_sentences>2, 5, 2, invalid</evidence_sentences>'
+        '<evidence_tables>1, 1</evidence_tables>'
+        '<evidence_figures>3, bad, 4</evidence_figures>',
+    )
+
+    assert parsed.evidence_sentences == [2, 5]
+    assert parsed.evidence_tables == [1]
+    assert parsed.evidence_figures == [3, 4]
+
+
 @pytest.mark.asyncio
 async def test_screening_repairs_missing_rationale_once():
     responses = iter([
