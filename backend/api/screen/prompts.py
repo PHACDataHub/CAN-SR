@@ -98,6 +98,11 @@ Answer the question "{question}" for the following citation.
 Citation:
 {cit}
 
+For title/abstract screening, interpret the citation using this structured metadata format:
+Title: ...
+Abstract: ...
+Other fields: ...
+
 Choose EXACTLY ONE of these options (exact text):
 {options}
 
@@ -128,6 +133,11 @@ Original question:
 
 Citation:
 {cit}
+
+Structured citation metadata:
+Title: ...
+Abstract: ...
+Other fields: ...
 
 The first model answered:
 "{screening_answer}"

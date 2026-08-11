@@ -4,11 +4,16 @@ export type CriteriaDiagnostic = { path: string; message: string; itemId?: strin
 
 const idPattern = /^[a-z][a-z0-9_-]{2,63}$/
 
-export function validateCriteriaDraft(criteria: CriteriaConfig): CriteriaDiagnostic[] {
+export function validateCriteriaDraft(criteria: CriteriaConfig, availableFields?: Set<string>): CriteriaDiagnostic[] {
   const diagnostics: CriteriaDiagnostic[] = []
   const seenIds = new Set<string>()
   const available = new Map<string, Set<string> | null>()
   const add = (path: string, message: string, itemId?: string) => diagnostics.push({ path, message, itemId })
+
+  if (!criteria.citation_fields.title?.trim()) add('citation_fields.title', 'A Title source column is required.')
+  else if (availableFields && !availableFields.has(criteria.citation_fields.title)) add('citation_fields.title', `Title source column ${criteria.citation_fields.title} is not available.`)
+  if (!criteria.citation_fields.abstract?.trim()) add('citation_fields.abstract', 'An Abstract source column is required.')
+  else if (availableFields && !availableFields.has(criteria.citation_fields.abstract)) add('citation_fields.abstract', `Abstract source column ${criteria.citation_fields.abstract} is not available.`)
 
   const validateId = (id: string, path: string, itemId: string) => {
     if (!idPattern.test(id)) add(path, 'The stable ID has an invalid format.', itemId)
@@ -69,6 +74,12 @@ export function backendDiagnostics(detail: unknown): CriteriaDiagnostic[] {
   return (errors || []).map((error) => {
     const value = error as { loc?: Array<string | number>; path?: Array<string | number>; msg?: string; message?: string }
     const location = value.loc?.filter((part) => part !== 'body') || value.path || []
-    return { path: location.join('.'), message: value.message || value.msg || 'Invalid criteria configuration.' }
+    const rawMessage = value.message || value.msg
+    const message = typeof rawMessage === 'string'
+      ? rawMessage
+      : rawMessage == null
+        ? 'Invalid criteria configuration.'
+        : JSON.stringify(rawMessage)
+    return { path: location.join('.'), message }
   })
 }

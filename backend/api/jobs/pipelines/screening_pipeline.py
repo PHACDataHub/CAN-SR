@@ -50,7 +50,9 @@ class ScreeningPipeline:
         try:
             executor = self._executors[context.step]
         except KeyError as exc:
-            raise ValueError(f"Unsupported screening step: '{context.step}'") from exc
+            raise ValueError(
+                f"Unsupported screening step: '{context.step}'",
+            ) from exc
 
         common = {
             'job_id': context.job_id,
@@ -59,6 +61,8 @@ class ScreeningPipeline:
             'citation_id': int(work_item),
             'model': context.model,
             'force': bool(context.config.get('force')),
+            'skip_existing_ai': bool(context.config.get('skip_existing_ai')),
+            'skip_existing_human': bool(context.config.get('skip_existing_human')),
         }
         if context.step in {'l2', 'extract'}:
             common['sr_id'] = context.sr_id

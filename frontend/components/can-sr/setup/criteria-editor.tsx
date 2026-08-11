@@ -19,9 +19,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 
-type Props = { srId: string; labels: Record<string, string>; hasScreeningData: boolean }
+type Props = { srId: string; labels: Record<string, string>; hasScreeningData: boolean; reloadKey?: number }
 
-export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props) {
+export default function CriteriaEditor({ srId, labels, hasScreeningData, reloadKey = 0 }: Props) {
   const [state, dispatch] = useReducer(criteriaDraftReducer, { criteria: emptyCriteria(), revision: 0, dirty: false })
   const [status, setStatus] = useState(labels.loading)
   const [migrationFingerprint, setMigrationFingerprint] = useState<string | null>(null)
@@ -31,21 +31,36 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
   const [recoveryMode, setRecoveryMode] = useState<RecoveryMode | null>(null)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
   const [citationFields, setCitationFields] = useState<CitationFieldContract>({ fields: [], unavailable_configured_fields: [] })
-  const clientDiagnostics = useMemo(() => validateCriteriaDraft(state.criteria), [state.criteria])
+  const availableFieldNames = useMemo(() => new Set(citationFields.fields.map((field) => field.name)), [citationFields.fields])
+  const clientDiagnostics = useMemo(() => validateCriteriaDraft(state.criteria, availableFieldNames), [availableFieldNames, state.criteria])
   const diagnostics = [...clientDiagnostics, ...serverDiagnostics]
 
-  const endpoint = `/api/can-sr/reviews/criteria-config?sr_id=${encodeURIComponent(srId)}`
+  // Include the upload revision in the request URL so the callback is recreated
+  // after a successful upload without changing the effect dependency shape.
+  const endpoint = `/api/can-sr/reviews/criteria-config?sr_id=${encodeURIComponent(srId)}&reload=${reloadKey}`
   const load = useCallback(async () => {
+    if (!srId) return
     setStatus(labels.loading)
-    const response = await authenticatedFetch(endpoint)
+    const fieldsEndpoint = `/api/can-sr/reviews/citation-fields?sr_id=${encodeURIComponent(srId)}&reload=${reloadKey}`
+    const [response, fieldsResponse] = await Promise.all([
+      authenticatedFetch(endpoint, { cache: 'no-store' }),
+      authenticatedFetch(fieldsEndpoint, { cache: 'no-store' }),
+    ])
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) { setStatus(data?.detail || labels.loadFailed); return }
+    const fieldsData = await fieldsResponse.json().catch(() => ({}))
+    if (fieldsResponse.ok) setCitationFields(fieldsData)
+    if (!response.ok) {
+      const detail = data?.detail
+      const message = typeof detail === 'string'
+        ? detail
+        : backendDiagnostics(detail)[0]?.message || labels.loadFailed
+      setStatus(message)
+      return
+    }
     dispatch({ type: 'replace', criteria: data.criteria as CriteriaConfig, revision: data.revision || 0 })
-    const fieldsResponse = await authenticatedFetch(`/api/can-sr/reviews/citation-fields?sr_id=${encodeURIComponent(srId)}`)
-    if (fieldsResponse.ok) setCitationFields(await fieldsResponse.json())
     setMigrationFingerprint(data?.migration?.fingerprint || null)
     setStatus(data?.migration?.requires_confirmation ? labels.migrationWarning : '')
-  }, [endpoint, labels, srId])
+  }, [endpoint, labels, reloadKey, srId])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => { setServerDiagnostics([]) }, [state.criteria])
@@ -66,8 +81,8 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state.criteria),
     })
     const validationData = await validationResponse.json().catch(() => ({}))
-    if (!validationResponse.ok) {
-      const nextDiagnostics = backendDiagnostics(validationData?.detail).map((diagnostic) => {
+    if (!validationResponse.ok || validationData?.valid === false) {
+      const nextDiagnostics = backendDiagnostics(validationData?.detail ?? validationData).map((diagnostic) => {
         const parts = diagnostic.path.split('.')
         const collection = parts[0] as 'l1' | 'l2' | 'parameters'
         const index = Number(parts[1])
@@ -91,7 +106,9 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
         setStatus(labels.conflictDetected)
         return
       }
-      setStatus(typeof detail === 'string' ? detail : detail?.message || labels.saveFailed)
+      setStatus(typeof detail === 'string'
+        ? detail
+        : detail?.message || backendDiagnostics(detail)[0]?.message || labels.saveFailed)
       return
     }
     dispatch({ type: 'replace', criteria: data.criteria, revision: data.revision })
@@ -112,7 +129,7 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData }: Props
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ criteria_yaml: await file.text() }),
     })
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) { setStatus(data?.detail?.errors?.[0]?.message || labels.importFailed); return }
+    if (!response.ok) { setStatus(backendDiagnostics(data?.detail)[0]?.message || labels.importFailed); return }
     setImportPreview(data as CriteriaImportPreview)
     setStatus(labels.importReady)
   }

@@ -24,6 +24,8 @@ from ..citations import router as citations_router
 from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
+from ..criteria.context import format_item_context
+from ..criteria.context import format_title_abstract_context
 from ..criteria.runtime import item_is_visible
 from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
@@ -693,12 +695,16 @@ def _parse_selected_from_human_payload(v: Any) -> str | None:
         try:
             obj = json.loads(s)
             if isinstance(obj, dict):
+                if obj.get('source') == 'llm':
+                    return None
                 sel = obj.get('selected')
                 return str(sel).strip() if isinstance(sel, str) else None
         except Exception:
             return s
         return None
     if isinstance(v, dict):
+        if v.get('source') == 'llm':
+            return None
         sel = v.get('selected')
         return str(sel).strip() if isinstance(sel, str) else None
     return None
@@ -840,8 +846,21 @@ async def classify_citation(
         )
 
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
-    citation_text = payload.citation_text or citations_router._build_combined_citation_from_row(
-        row, payload.include_columns,
+    citation_fields = canonical.get('citation_fields') or {}
+    if payload.citation_text:
+        citation_text = payload.citation_text
+    elif citation_fields.get('title') or citation_fields.get('abstract'):
+        citation_text = format_title_abstract_context(row, citation_fields)
+    else:
+        citation_text = citations_router._build_combined_citation_from_row(
+            row, payload.include_columns,
+        )
+
+    item_context = format_item_context(
+        source_item or {
+            'question': payload.question,
+            'answers': [{'label': option} for option in payload.options],
+        },
     )
 
     # Ensure LLM client is available
@@ -919,7 +938,11 @@ async def classify_citation(
         prompt = PROMPT_JSON_TEMPLATE_FULLTEXT.format(
             question=payload.question,
             options=options_listed,
-            xtra=payload.xtra or '',
+            xtra='\n\n'.join(
+                part for part in (
+                    item_context, payload.xtra or '',
+                ) if part
+            ),
             fulltext=fulltext or citation_text,
             tables='\n'.join(tables_md_lines) if tables_md_lines else '(none)',
             figures='\n'.join(figures_lines) if figures_lines else '(none)',
@@ -948,7 +971,11 @@ async def classify_citation(
             question=payload.question,
             cit=citation_text,
             options=options_listed,
-            xtra=payload.xtra or '',
+            xtra='\n\n'.join(
+                part for part in (
+                    item_context, payload.xtra or '',
+                ) if part
+            ),
         )
         llm_response = await azure_openai_client.simple_chat(
             user_message=prompt,
@@ -1026,15 +1053,6 @@ async def classify_citation(
     # Persist into Postgres under a dynamic column name derived from question
     col_name = snake_case_column(payload.question)
 
-    # Human mirror column name (same slug as llm_, but prefixed human_)
-    try:
-        col_core_h = snake_case(
-            payload.question, max_len=56,
-        ) if snake_case else ''
-    except Exception:
-        col_core_h = ''
-    human_col_name = f"human_{col_core_h}" if col_core_h else 'human_col'
-
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
     except RuntimeError as rexc:
@@ -1052,26 +1070,6 @@ async def classify_citation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Citation not found to update',
         )
-
-    # Auto-fill human_* from llm_* if missing (never overwrite)
-    try:
-        human_payload = {
-            **classification_json,
-            'autofilled': True,
-            'source': 'llm',
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
-        }
-        await run_in_threadpool(
-            cits_dp_service.copy_jsonb_if_empty,
-            citation_id,
-            col_name,
-            human_col_name,
-            human_payload,
-            table_name,
-        )
-    except Exception:
-        # best-effort
-        pass
 
     await update_inclusion_decision(sr, citation_id, payload.screening_step, 'llm')
 

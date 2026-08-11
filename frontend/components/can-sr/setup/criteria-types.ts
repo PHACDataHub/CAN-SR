@@ -12,6 +12,7 @@ export type ScreeningQuestion = {
   question: string
   answers: ScreeningAnswer[]
   trigger: { all: Array<{ source_item_id: string; option_id: string }> }
+  answer_column?: string | null
 }
 
 export type ParameterOption = {
@@ -28,6 +29,7 @@ type ParameterBase = {
   calculation?: string | null
   trigger: ScreeningQuestion['trigger']
   legacy_category?: string | null
+  answer_column?: string | null
 }
 
 export type TextParameter = ParameterBase & { type: 'text' }
@@ -40,7 +42,7 @@ export type Parameter = TextParameter | SelectionParameter
 
 export type CriteriaConfig = {
   schema_version: 2
-  citation_fields: { l1_include: string[]; doi?: string | null }
+  citation_fields: { l1_include: string[]; title?: string | null; abstract?: string | null; doi?: string | null }
   l1: ScreeningQuestion[]
   l2: ScreeningQuestion[]
   parameters: Parameter[]
@@ -55,7 +57,10 @@ export type CriteriaDraftState = {
 export type CriteriaDraftAction =
   | { type: 'replace'; criteria: CriteriaConfig; revision: number }
   | { type: 'set-citation-fields'; value: string[] }
+  | { type: 'set-title-field'; value: string | null }
+  | { type: 'set-abstract-field'; value: string | null }
   | { type: 'set-doi'; value: string | null }
+  | { type: 'set-answer-column'; itemId: string; value: string | null }
   | { type: 'add-question'; stage: 'l1' | 'l2' }
   | { type: 'delete-question'; stage: 'l1' | 'l2'; questionId: string }
   | { type: 'move-question'; stage: 'l1' | 'l2'; questionId: string; direction: -1 | 1 }
@@ -81,7 +86,7 @@ export type CriteriaDraftAction =
 
 export const emptyCriteria = (): CriteriaConfig => ({
   schema_version: 2,
-  citation_fields: { l1_include: [], doi: null },
+  citation_fields: { l1_include: [], title: 'Title', abstract: 'Abstract', doi: null },
   l1: [],
   l2: [],
   parameters: [],
@@ -146,6 +151,14 @@ export function criteriaDraftReducer(
   }
   if (action.type === 'set-doi') {
     return { ...state, dirty: true, criteria: { ...state.criteria, citation_fields: { ...state.criteria.citation_fields, doi: action.value } } }
+  }
+  if (action.type === 'set-title-field' || action.type === 'set-abstract-field') {
+    const key = action.type === 'set-title-field' ? 'title' : 'abstract'
+    return { ...state, dirty: true, criteria: { ...state.criteria, citation_fields: { ...state.criteria.citation_fields, [key]: action.value } } }
+  }
+  if (action.type === 'set-answer-column') {
+    const updateItem = <T extends { id: string }>(item: T): T => item.id === action.itemId ? { ...item, answer_column: action.value } : item
+    return { ...state, dirty: true, criteria: { ...state.criteria, l1: state.criteria.l1.map(updateItem), l2: state.criteria.l2.map(updateItem), parameters: state.criteria.parameters.map(updateItem) } }
   }
   if (action.type === 'add-question') {
     return updateStage(state, action.stage, (questions) => [...questions, createQuestion()])

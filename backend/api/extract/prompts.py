@@ -12,17 +12,18 @@ Return a single valid JSON object and nothing else. The JSON MUST contain the fo
 - "found": a boolean (true/false) indicating whether the parameter was located or could be confidently derived.
 - "value": the extracted value as a string (or null if not found).
 - "explanation": a concise explanation (1-4 sentences) describing why this value was chosen or how it was derived.
-- "evidence_sentences": an array of integers indicating the sentence indices you used as evidence (e.g. [2, 5]). If there are no supporting sentences, return an empty array.
-- "evidence_tables": an array of integers indicating table numbers used (e.g. [1, 2]) or [].
-- "evidence_figures": an array of integers indicating figure numbers used (e.g. [3]) or [].
+- "evidence_sentences": an array of integers indicating the sentence indices you used as evidence (e.g. [2, 5]). Use this for both positive and negative conclusions.
+- "evidence_tables": an array of integers indicating table numbers used (e.g. [1, 2]) or []. Use this for both positive and negative conclusions.
+- "evidence_figures": an array of integers indicating figure numbers used (e.g. [3]) or []. Use this for both positive and negative conclusions.
 
 Requirements:
 - If the parameter is explicitly present, return the value exactly as found (preserve units/format) and list the sentence indices.
 - If the parameter must be computed or approximated, include the computed value and explain the computation in "explanation", and list the sentences used for calculation.
-- If the parameter is not present and cannot be deduced, set "found": false, "value": null, "explanation": briefly state why not found, and "evidence_sentences": [].
+- If the parameter is not present and cannot be deduced, set "found": false and "value": null, explain what the article does and does not report, and list the sentence indices that support that conclusion. Do not return an empty evidence_sentences array when relevant sentences support the explanation. An empty array is appropriate only when the full text contains no relevant supporting sentence.
+- Every factual claim in "explanation" must be grounded in the supplied full text, tables, or figures. In particular, a negative result still requires evidence for the reported quantities, definitions, or limitations that justify why the parameter cannot be extracted.
 - If a calculation is defined for the parameter, with a description of variables to be computed, find those variables and walk through the computation in the explanation.
 - Do NOT include any extra keys, XML, or human commentary. The output must be parseable by json.loads.
-- If a table or figure is referenced, ensure the explanation references the table/figure number and what was extracted from it.
+- If a sentence, table, or figure is referenced, ensure the explanation references the sentence/table/figure number and what was extracted from it.
 
 Inputs available for formatting:
 - {parameter_name}  (a short name for the parameter)

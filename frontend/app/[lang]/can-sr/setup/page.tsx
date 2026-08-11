@@ -27,6 +27,7 @@ export default function CanSrSetupPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<any>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [criteriaReloadKey, setCriteriaReloadKey] = useState(0)
 
   const [, setSrLoading] = useState<boolean>(true)
   const [, setSrError] = useState<string | null>(null)
@@ -107,6 +108,7 @@ export default function CanSrSetupPage() {
         setUploadError(errMsg)
       } else {
         setUploadResult(data)
+        setCriteriaReloadKey((value) => value + 1)
         void loadSr()
       }
     } catch (err: any) {
@@ -195,6 +197,7 @@ export default function CanSrSetupPage() {
           <CriteriaEditor
             srId={srId || ''}
             hasScreeningData={hasExistingScreeningData}
+            reloadKey={criteriaReloadKey}
             labels={dict.setup.criteriaBuilder as unknown as Record<string, string>}
           />
 

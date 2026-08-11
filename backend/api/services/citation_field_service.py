@@ -10,6 +10,7 @@ SYSTEM_NAMES = {
     'human_l1_decision', 'human_l2_decision',
 }
 SYSTEM_PREFIXES = ('llm_', 'human_', 'fulltext', 'parameters_', 'l1_', 'l2_')
+CANONICAL_FIELD_NAMES = {'title': 'Title', 'abstract': 'Abstract'}
 
 
 def _is_user_field(name: str) -> bool:
@@ -25,6 +26,9 @@ def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str
             or column.get('name') or '',
         ).strip()
         if not name or not _is_user_field(name):
+            continue
+        name = CANONICAL_FIELD_NAMES.get(name.casefold(), name)
+        if any(field['name'] == name for field in fields):
             continue
         fields.append({
             'name': name, 'data_type': str(
@@ -46,9 +50,11 @@ def build_citation_field_contract(review: dict[str, Any], columns: list[dict[str
         ) or criteria.get('include') or []
     ]
     doi = configured.get('doi')
+    title = configured.get('title')
+    abstract = configured.get('abstract')
     available = {field['name'] for field in fields}
     unavailable = [
-        value for value in [*selected, doi]
+        value for value in [*selected, title, abstract, doi]
         if value and value not in available
     ]
     return {

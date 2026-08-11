@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Plus, X } from 'lucide-react'
-import { useEffect, useRef, useState, type Dispatch } from 'react'
+import { useState, type Dispatch } from 'react'
 import type { CriteriaDraftAction, CriteriaDraftState } from './criteria-types'
 
 export type CitationFieldContract = {
@@ -7,80 +7,69 @@ export type CitationFieldContract = {
   unavailable_configured_fields: string[]
 }
 
+type Row = { kind: 'title' | 'abstract' | 'additional'; column: string | null; index?: number }
+
 export default function CitationFieldSelector({ state, dispatch, contract, labels }: {
   state: CriteriaDraftState
   dispatch: Dispatch<CriteriaDraftAction>
   contract: CitationFieldContract
   labels: Record<string, string>
 }) {
-  const selected = state.criteria.citation_fields.l1_include
-  const available = new Set(contract.fields.map((field) => field.name))
-  const addable = contract.fields.filter((field) => !selected.includes(field.name))
-  const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
-  const addMenuRef = useRef<HTMLDivElement>(null)
-  const setSelected = (value: string[]) => dispatch({ type: 'set-citation-fields', value })
-  const move = (index: number, offset: number) => {
-    const next = [...selected]
-    ;[next[index], next[index + offset]] = [next[index + offset], next[index]]
-    setSelected(next)
+  const available = new Set(contract.fields.map((field) => field.name))
+  const title = state.criteria.citation_fields.title || null
+  const abstract = state.criteria.citation_fields.abstract || null
+  const additional = state.criteria.citation_fields.l1_include
+  const rows: Row[] = [
+    { kind: 'title', column: title },
+    { kind: 'abstract', column: abstract },
+    ...additional.map((column, index) => ({ kind: 'additional' as const, column, index })),
+  ]
+  const selected = new Set([title, abstract, ...additional].filter(Boolean) as string[])
+  const options = (current: string | null) => [
+    ...(current && !available.has(current) ? [{ name: current, unavailable: true }] : []),
+    ...contract.fields.filter((field) => !selected.has(field.name) || field.name === current).map((field) => ({ name: field.name, unavailable: false })),
+  ]
+  const setColumn = (row: Row, value: string | null) => {
+    if (row.kind === 'title') dispatch({ type: 'set-title-field', value })
+    else if (row.kind === 'abstract') dispatch({ type: 'set-abstract-field', value })
+    else if (row.index !== undefined) dispatch({ type: 'set-citation-fields', value: additional.map((item, index) => index === row.index ? value || '' : item).filter(Boolean) })
   }
-  useEffect(() => {
-    if (!addMenuOpen) return
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!addMenuRef.current?.contains(event.target as Node)) setAddMenuOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setAddMenuOpen(false)
-    }
-    document.addEventListener('mousedown', closeOnOutsideClick)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [addMenuOpen])
+  const move = (index: number, offset: number) => {
+    const target = index + offset
+    if (target < 0 || target >= additional.length) return
+    const next = [...additional]
+    ;[next[index], next[target]] = [next[target], next[index]]
+    dispatch({ type: 'set-citation-fields', value: next })
+  }
+  const labelFor = (kind: Row['kind']) => kind === 'title' ? labels.titleField : kind === 'abstract' ? labels.abstractField : labels.additionalField
+  const statusFor = (row: Row) => !row.column ? labels.requiredField : available.has(row.column) ? labels.available : labels.unavailableField
+
   return <section id="criteria-l1-fields" tabIndex={-1} className="space-y-3" aria-labelledby="citation-fields-heading">
     <div className="flex items-center gap-2 rounded-md bg-gray-50 p-2">
-      <button type="button" aria-expanded={!collapsed} aria-controls="citation-fields-body" aria-label={`${collapsed ? labels.expand : labels.collapse} ${labels.citationFields}`} title={collapsed ? labels.expand : labels.collapse} onClick={() => { setCollapsed((value) => !value); setAddMenuOpen(false) }} className="rounded p-1 text-gray-600 hover:bg-gray-200">
+      <button type="button" aria-expanded={!collapsed} aria-controls="citation-fields-body" aria-label={`${collapsed ? labels.expand : labels.collapse} ${labels.citationFields}`} title={collapsed ? labels.expand : labels.collapse} onClick={() => setCollapsed((value) => !value)} className="rounded p-1 text-gray-600 hover:bg-gray-200">
         {collapsed ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
       </button>
-      <h4 id="citation-fields-heading" className="font-semibold">{labels.citationFields} <span className="font-normal text-gray-500">({selected.length})</span></h4>
-      <div ref={addMenuRef} className="relative ml-auto">
-        <button type="button" aria-label={labels.addField} aria-haspopup="menu" aria-expanded={addMenuOpen} aria-controls="title-abstract-field-menu" disabled={addable.length === 0} onClick={() => setAddMenuOpen((open) => !open)} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">
-          <Plus className="h-4 w-4" />{labels.addField}
-        </button>
-        {addMenuOpen ? <div id="title-abstract-field-menu" role="menu" className="absolute right-0 z-10 mt-2 min-w-48 overflow-hidden rounded-md border bg-white py-1 shadow-lg">
-          {addable.map((field) => <button key={field.name} type="button" role="menuitem" onClick={() => { setSelected([...selected, field.name]); setAddMenuOpen(false) }} className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-100 focus:bg-gray-100">{field.name}</button>)}
-        </div> : null}
-      </div>
+      <h4 id="citation-fields-heading" className="font-semibold">{labels.citationFields}</h4>
+      {!collapsed && <button type="button" aria-label={labels.addAdditionalField} disabled={options(null).length === 0} onClick={() => dispatch({ type: 'set-citation-fields', value: [...additional, options(null)[0]?.name || ''] })} className="ml-auto inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-4 w-4" />{labels.addAdditionalField}</button>}
     </div>
     {!collapsed ? <div id="citation-fields-body">
-    <p className="text-sm text-gray-600">{labels.titleAbstractFieldsDescription}</p>
-    <div className="mt-4 overflow-x-auto rounded-md border">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-gray-50">
-          <tr><th scope="col" className="px-3 py-2 font-medium">{labels.field}</th><th scope="col" className="px-3 py-2 font-medium">{labels.status}</th><th scope="col" className="px-3 py-2 text-right font-medium">{labels.actions}</th></tr>
-        </thead>
-        <tbody className="divide-y">
-          {selected.length === 0 ? <tr><td colSpan={3} className="px-3 py-4 text-center text-gray-600">{labels.noSelectedFields}</td></tr> : selected.map((name, index) => <tr key={name} className={available.has(name) ? '' : 'bg-amber-50'}>
-            <td className="px-3 py-2 font-medium">{name}</td>
-            <td className="px-3 py-2">{available.has(name) ? labels.available : <span className="text-amber-800">{labels.unavailableField}</span>}</td>
-            <td className="px-3 py-2"><div className="flex justify-end gap-2">
-              <button type="button" disabled={index === 0} aria-label={`${labels.moveUp} ${name}`} onClick={() => move(index, -1)} className="rounded border p-1 disabled:opacity-40"><ArrowUp className="h-4 w-4" /></button>
-              <button type="button" disabled={index === selected.length - 1} aria-label={`${labels.moveDown} ${name}`} onClick={() => move(index, 1)} className="rounded border p-1 disabled:opacity-40"><ArrowDown className="h-4 w-4" /></button>
-              <button type="button" aria-label={`${labels.removeField} ${name}`} onClick={() => setSelected(selected.filter((value) => value !== name))} className="rounded border border-red-200 p-1 text-red-700"><X className="h-4 w-4" /></button>
-            </div></td>
-          </tr>)}
-        </tbody>
-      </table>
-    </div>
-    <label className="mt-4 block text-sm font-medium" htmlFor="criteria-doi-field">{labels.doiField}</label>
-    <select id="criteria-doi-field" value={state.criteria.citation_fields.doi || ''} onChange={(event) => dispatch({ type: 'set-doi', value: event.target.value || null })} className="mt-1 w-full rounded-md border px-3 py-2">
-      <option value="">{labels.noDoiField}</option>
-      {state.criteria.citation_fields.doi && !available.has(state.criteria.citation_fields.doi) ? <option value={state.criteria.citation_fields.doi}>{state.criteria.citation_fields.doi} · {labels.unavailableField}</option> : null}
-      {contract.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}
-    </select>
+      <p className="text-sm text-gray-600">{labels.titleAbstractFieldsDescription}</p>
+      <div className="mt-4 overflow-x-auto rounded-md border">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-gray-50"><tr><th scope="col" className="px-3 py-2 font-medium">{labels.field}</th><th scope="col" className="px-3 py-2 font-medium">{labels.selection}</th><th scope="col" className="px-3 py-2 font-medium">{labels.status}</th><th scope="col" className="px-3 py-2 text-right font-medium">{labels.actions}</th></tr></thead>
+          <tbody className="divide-y">
+            {rows.map((row) => <tr key={`${row.kind}-${row.index ?? 0}`} className={!row.column || !available.has(row.column) ? 'bg-amber-50' : ''}>
+              <td className="px-3 py-2 font-medium">{labelFor(row.kind)}{row.kind !== 'additional' && <span className="ml-2 text-xs font-normal text-gray-500">{labels.required}</span>}</td>
+              <td className="px-3 py-2"><select aria-label={`${labelFor(row.kind)} ${labels.selection}`} value={row.column || ''} onChange={(event) => setColumn(row, event.target.value || null)} className="w-full rounded-md border px-2 py-1"><option value="">{labels.selectColumn}</option>{options(row.column).map((option) => <option key={option.name} value={option.name}>{option.name}{option.unavailable ? ` · ${labels.unavailableField}` : ''}</option>)}</select></td>
+              <td className="px-3 py-2">{!row.column ? <span className="text-amber-800">{statusFor(row)}</span> : available.has(row.column) ? labels.available : <span className="text-amber-800">{labels.unavailableField}</span>}</td>
+              <td className="px-3 py-2"><div className="flex justify-end gap-2">{row.kind === 'additional' && row.index !== undefined && <><button type="button" disabled={row.index === 0} aria-label={`${labels.moveUp} ${row.column || labels.additionalField}`} onClick={() => move(row.index!, -1)} className="rounded border p-1 disabled:opacity-40"><ArrowUp className="h-4 w-4" /></button><button type="button" disabled={row.index === additional.length - 1} aria-label={`${labels.moveDown} ${row.column || labels.additionalField}`} onClick={() => move(row.index!, 1)} className="rounded border p-1 disabled:opacity-40"><ArrowDown className="h-4 w-4" /></button><button type="button" aria-label={`${labels.removeField} ${row.column || labels.additionalField}`} onClick={() => dispatch({ type: 'set-citation-fields', value: additional.filter((_item, index) => index !== row.index) })} className="rounded border border-red-200 p-1 text-red-700"><X className="h-4 w-4" /></button></>}</div></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <label className="mt-4 block text-sm font-medium" htmlFor="criteria-doi-field">{labels.doiField}</label>
+      <select id="criteria-doi-field" value={state.criteria.citation_fields.doi || ''} onChange={(event) => dispatch({ type: 'set-doi', value: event.target.value || null })} className="mt-1 w-full rounded-md border px-3 py-2"><option value="">{labels.noDoiField}</option>{state.criteria.citation_fields.doi && !available.has(state.criteria.citation_fields.doi) ? <option value={state.criteria.citation_fields.doi}>{state.criteria.citation_fields.doi} · {labels.unavailableField}</option> : null}{contract.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select>
     </div> : null}
   </section>
 }
