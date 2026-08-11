@@ -23,9 +23,9 @@ from .procrastinate_app import cancel_enqueued_jobs_for_run_all
 from .procrastinate_app import jobs_enabled
 from .procrastinate_app import worker_concurrency
 from .run_all_repo import run_all_repo
+from .run_all_tasks import enqueue_available_chunks
 from .run_all_tasks import run_all_chunk
 from .run_all_tasks import run_all_start
-from .run_all_tasks import enqueue_available_chunks
 from .scheduler_service import InvalidJobTransition
 from .scheduler_service import SchedulerService
 # Import task objects so we can enqueue via Task.defer_async (Procrastinate 3.2.x)
@@ -63,7 +63,13 @@ class RunAllStartRequest(BaseModel):
     step: str = Field(..., description='l1 | l2 | extract')
     model: str | None = Field(None, description='LLM model name')
     force: bool = Field(
-        False, description='If true, overwrite existing outputs',
+        False, description='Legacy option: overwrite existing AI outputs and ignore human answers',
+    )
+    skip_existing_ai: bool = Field(
+        False, description='Skip criteria that already have an AI answer',
+    )
+    skip_existing_human: bool = Field(
+        False, description='Skip criteria that already have a human answer',
     )
     # NOTE: backend currently forces chunk_size=1 to ensure fair interleaving
     # of multiple active run-all jobs.
@@ -143,6 +149,14 @@ async def start_run_all(
     # If legacy llm_* outputs exist but normalized agent runs are missing, we must
     # regenerate results to populate screening_agent_runs.
     # We enforce this by auto-enabling force overwrite.
+    # The explicit skip options are preferred. Keep `force` as a backwards-
+    # compatible alias for the old behavior, which reruns everything.
+    skip_existing_ai = bool(
+        payload.skip_existing_ai,
+    ) and not bool(payload.force)
+    skip_existing_human = bool(
+        payload.skip_existing_human,
+    ) and not bool(payload.force)
     force = bool(payload.force)
     try:
         table_name = (screening or {}).get('table_name') or 'citations'
@@ -197,6 +211,8 @@ async def start_run_all(
             model=normalized_model,
             meta={
                 'force': force,
+                'skip_existing_ai': skip_existing_ai,
+                'skip_existing_human': skip_existing_human,
                 'chunk_size': int(payload.chunk_size),
                 'explicit_ids': bool(sanitized_ids is not None),
                 'legacy_auto_force': (force and (not bool(payload.force))),
@@ -274,7 +290,9 @@ async def start_job(
     if payload.pipeline_key != 'pdf_linkage':
         raise HTTPException(status_code=400, detail='Unsupported pipeline_key')
     if not jobs_enabled():
-        raise HTTPException(status_code=503, detail='Background jobs are disabled')
+        raise HTTPException(
+            status_code=503, detail='Background jobs are disabled',
+        )
     await load_sr_and_check(sr_id, current_user, srdb_service)
     await run_in_threadpool(run_all_repo.ensure_tables)
     existing = await run_in_threadpool(run_all_repo.get_active_job_for_sr, sr_id)

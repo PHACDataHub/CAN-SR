@@ -6,6 +6,7 @@ from api.criteria.context import format_item_context
 from api.criteria.context import format_title_abstract_context
 from api.criteria.context import match_answer_label
 from api.criteria.context import resolve_existing_human_value
+from api.screen.router import _parse_selected_from_human_payload
 
 
 class CriteriaContextTests(unittest.TestCase):
@@ -55,6 +56,28 @@ class CriteriaContextTests(unittest.TestCase):
         })
         self.assertIn('Context: Item guidance', result)
         self.assertIn('- Yes: Yes guidance', result)
+
+    def test_metrics_ignore_legacy_llm_autofilled_human_values(self) -> None:
+        self.assertIsNone(
+            _parse_selected_from_human_payload(
+                {'selected': 'Yes', 'source': 'llm', 'autofilled': True},
+            ),
+        )
+        self.assertEqual(
+            _parse_selected_from_human_payload(
+                {'selected': 'Yes', 'source': 'csv_upload', 'autofilled': True},
+            ),
+            'Yes',
+        )
+        self.assertEqual(
+            _parse_selected_from_human_payload(
+                {
+                    'selected': 'No', 'human': True,
+                    'reviewer': 'reviewer@example.com',
+                },
+            ),
+            'No',
+        )
 
 
 if __name__ == '__main__':

@@ -19,6 +19,12 @@ from .models import CriteriaConfigV2
 LEGACY_KEYS = {'include', 'criteria', 'l2_criteria', 'parameters'}
 LEGACY_ONLY_KEYS = {'include', 'criteria', 'l2_criteria'}
 MAX_YAML_BYTES = 1_000_000
+DEFAULT_CITATION_FIELDS = ('Title', 'Abstract')
+
+
+def _with_default_citation_fields(values: list[str]) -> list[str]:
+    """Keep the fixed Title and Abstract fields in every criteria document."""
+    return [value for value in dict.fromkeys(values) if value not in DEFAULT_CITATION_FIELDS]
 
 
 class Diagnostic(BaseModel):
@@ -94,6 +100,19 @@ class CriteriaConfigurationService:
                     f'v2 criteria cannot contain legacy keys: {sorted(mixed)}',
                 )
             normalized = deepcopy(raw)
+            citation_fields = normalized.get('citation_fields')
+            if citation_fields is None:
+                normalized['citation_fields'] = {
+                    'title': 'Title', 'abstract': 'Abstract', 'l1_include': [],
+                }
+            elif isinstance(citation_fields, dict):
+                configured = citation_fields.get('l1_include', [])
+                if isinstance(configured, list) and all(isinstance(value, str) for value in configured):
+                    citation_fields['l1_include'] = _with_default_citation_fields(
+                        configured,
+                    )
+                citation_fields.setdefault('title', 'Title')
+                citation_fields.setdefault('abstract', 'Abstract')
             diagnostics = self._move_question_context_to_answers(normalized)
             return CriteriaLoadResult(
                 criteria=CriteriaConfigV2.model_validate(normalized),
@@ -220,6 +239,7 @@ class CriteriaConfigurationService:
                 value.strip() for value in include
             ),
         )
+        normalized_include = _with_default_citation_fields(normalized_include)
         if len(normalized_include) != len(include):
             diagnostics.append(
                 Diagnostic(
@@ -326,7 +346,7 @@ class CriteriaConfigurationService:
         l2 = questions('l2_criteria', 'l2')
         criteria = CriteriaConfigV2.model_validate({
             'schema_version': 2,
-            'citation_fields': {'l1_include': normalized_include, 'doi': None},
+            'citation_fields': {'title': 'Title', 'abstract': 'Abstract', 'l1_include': normalized_include, 'doi': None},
             'l1': l1, 'l2': l2, 'parameters': converted_parameters,
         })
         canonical_source = json.dumps(

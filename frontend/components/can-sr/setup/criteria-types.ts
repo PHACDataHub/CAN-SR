@@ -86,7 +86,7 @@ export type CriteriaDraftAction =
 
 export const emptyCriteria = (): CriteriaConfig => ({
   schema_version: 2,
-  citation_fields: { l1_include: [], title: null, abstract: null, doi: null },
+  citation_fields: { l1_include: [], title: 'Title', abstract: 'Abstract', doi: null },
   l1: [],
   l2: [],
   parameters: [],

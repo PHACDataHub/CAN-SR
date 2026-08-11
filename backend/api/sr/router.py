@@ -410,9 +410,14 @@ async def get_criteria_config(
                 review['criteria_yaml'], source_kind='backend_load',
             )
         else:
-            raise ValueError(
-                'No usable criteria configuration is stored for this review.',
+            empty_criteria = CriteriaConfigV2(
+                citation_fields={'title': 'Title', 'abstract': 'Abstract'},
             )
+            return {
+                'criteria': empty_criteria.model_dump(mode='json', exclude_none=True),
+                'revision': review.get('criteria_revision', 0),
+                'warnings': [],
+            }
     except ValueError as exc:
         raise _criteria_error(exc) from exc
 
@@ -499,7 +504,12 @@ async def save_criteria_config(
                     'errors': required_errors,
                 },
             )
-        stored = criteria_configuration_service.normalize(review['criteria'])
+        previous_criteria = review.get('criteria')
+        stored = None
+        if isinstance(previous_criteria, dict):
+            stored = criteria_configuration_service.normalize(
+                previous_criteria,
+            )
     except (KeyError, ValueError):
         stored = None
     if stored:

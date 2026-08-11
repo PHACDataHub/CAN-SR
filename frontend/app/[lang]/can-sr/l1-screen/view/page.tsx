@@ -833,8 +833,6 @@ export default function CanSrL1ScreenPage() {
                               <p className="mt-1 text-xs text-amber-700" role="status">
                                 Human answer column “{answerColumn}”: {answerStatus === 'missing' ? 'not found in this citation' : answerStatus === 'blank' ? 'blank for this citation' : 'value does not match an available answer'}.
                               </p>
-                            ) : answerStatus === 'matched' ? (
-                              <p className="mt-1 text-xs text-emerald-700">Human answer loaded from “{answerColumn}”.</p>
                             ) : null}
                           </div>
 

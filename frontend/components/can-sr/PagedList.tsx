@@ -490,6 +490,7 @@ export default function PagedList({
         }),
       })
       setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      window.dispatchEvent(new Event('screening:changed'))
       return
     }
 
@@ -506,6 +507,7 @@ export default function PagedList({
         }),
       })
       setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, [id]: true }))
+      window.dispatchEvent(new Event('screening:changed'))
       return
     }
 

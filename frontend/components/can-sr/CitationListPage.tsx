@@ -215,7 +215,8 @@ export default function CitationsListPage({
   const [savingThresholds, setSavingThresholds] = useState<boolean>(false)
 
   // Run-all job tracking (persist across modal close / refresh)
-  const [runAllForce, setRunAllForce] = useState<boolean>(false)
+  const [runAllSkipExistingAI, setRunAllSkipExistingAI] = useState<boolean>(false)
+  const [runAllSkipExistingHuman, setRunAllSkipExistingHuman] = useState<boolean>(false)
   const [runAllJobId, setRunAllJobId] = useState<string | null>(null)
   const [runAllJob, setRunAllJob] = useState<any | null>(null)
   const [runAllStarting, setRunAllStarting] = useState<boolean>(false)
@@ -264,15 +265,18 @@ export default function CitationsListPage({
       setPdfLinkageActive(active)
     }
     const changed = () => void refreshJobs()
+    const screeningChanged = () => setMetricsRefreshKey((value) => value + 1)
     void refreshJobs()
     window.addEventListener('jobs:changed', changed)
     window.addEventListener('run-all:changed', changed)
+    window.addEventListener('screening:changed', screeningChanged)
     const timer = window.setInterval(refreshJobs, 5000)
     return () => {
       alive = false
       window.clearInterval(timer)
       window.removeEventListener('jobs:changed', changed)
       window.removeEventListener('run-all:changed', changed)
+      window.removeEventListener('screening:changed', screeningChanged)
     }
   }, [srId])
 
@@ -518,6 +522,7 @@ export default function CitationsListPage({
   useEffect(() => {
     if (!runAllJobId) return
     let alive = true
+    let processedCount = 0
     const headers = getAuthHeaders()
 
     const fetchStatus = async () => {
@@ -539,6 +544,14 @@ export default function CitationsListPage({
         const latest = await fetchStatus()
         if (!alive) return
         setRunAllJob(latest)
+        const nextProcessedCount =
+          Number(latest?.done || 0) +
+          Number(latest?.skipped || 0) +
+          Number(latest?.failed || 0)
+        if (nextProcessedCount > processedCount) {
+          processedCount = nextProcessedCount
+          setMetricsRefreshKey((value) => value + 1)
+        }
         const st = String(latest?.status || '').toLowerCase()
         if (['done', 'failed', 'canceled'].includes(st)) {
           clearRunAll()
@@ -586,7 +599,9 @@ export default function CitationsListPage({
           body: JSON.stringify({
             step: (screeningStep as any) || 'l1',
             model: selectedModel,
-            force: runAllForce,
+            force: false,
+            skip_existing_ai: runAllSkipExistingAI,
+            skip_existing_human: runAllSkipExistingHuman,
             chunk_size: 5,
             // For l1 we explicitly send the filtered list IDs (entire list, not just page).
             // For l2/extract we let the backend compute eligible IDs so it can enforce
@@ -756,11 +771,19 @@ export default function CitationsListPage({
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
-                checked={runAllForce}
-                onChange={(e) => setRunAllForce(e.target.checked)}
+                checked={runAllSkipExistingAI}
+                onChange={(e) => setRunAllSkipExistingAI(e.target.checked)}
               />
-              {dict?.screening?.forceRerun ||
-                'Force re-run (overwrite existing AI results)'}
+              {dict?.screening?.skipExistingAI || 'Skip existing AI answers'}
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={runAllSkipExistingHuman}
+                onChange={(e) => setRunAllSkipExistingHuman(e.target.checked)}
+              />
+              {dict?.screening?.skipExistingHuman || 'Skip existing human answers'}
             </label>
 
             <DialogFooter className="gap-2">

@@ -20,4 +20,15 @@ describe('criteria validation', () => {
       { path: 'parameters.0.name', message: 'Field required' },
     ])
   })
+
+  it('reports required citation fields that are not available in the uploaded data', () => {
+    const criteria = emptyCriteria()
+    criteria.citation_fields.title = 'title'
+    criteria.citation_fields.abstract = 'abstract'
+
+    expect(validateCriteriaDraft(criteria, new Set(['Title', 'Abstract']))).toEqual(expect.arrayContaining([
+      { path: 'citation_fields.title', message: 'Title source column title is not available.' },
+      { path: 'citation_fields.abstract', message: 'Abstract source column abstract is not available.' },
+    ]))
+  })
 })

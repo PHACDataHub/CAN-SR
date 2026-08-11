@@ -4,12 +4,19 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import { ModelSelector } from '@/components/chat'
-import PDFBoundingBoxViewer, { PDFBoundingBoxViewerHandle } from '@/components/can-sr/PDFBoundingBoxViewer'
+import PDFBoundingBoxViewer, {
+  PDFBoundingBoxViewerHandle,
+} from '@/components/can-sr/PDFBoundingBoxViewer'
 import { Wand2 } from 'lucide-react'
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
-import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue } from '@/components/can-sr/screening-citation-context'
+import {
+  ScreeningCitationContext,
+  extractHumanAnswer,
+  humanAnswerStatus,
+  resolveConfiguredValue,
+} from '@/components/can-sr/screening-citation-context'
 
 type ValidationEntry = { user: string; validated_at: string }
 
@@ -109,7 +116,11 @@ type CriteriaData = {
   possible_answers: string[][]
   additional_infos?: (string | null)[] // optional per-question extra guidance when available
   items?: Array<{ answer_column?: string | null }>
-  citation_fields?: { title?: string | null; abstract?: string | null; l1_include?: string[] }
+  citation_fields?: {
+    title?: string | null
+    abstract?: string | null
+    l1_include?: string[]
+  }
 }
 
 type LatestAgentRun = {
@@ -146,7 +157,9 @@ export default function CanSrL2ScreenViewPage() {
   const [citationIdList, setCitationIdList] = useState<number[]>([])
 
   // Autosave indicator per question
-  const [saveStatus, setSaveStatus] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [saveStatus, setSaveStatus] = useState<
+    Record<number, 'idle' | 'saving' | 'saved' | 'error'>
+  >({})
 
   // UI state: human selections keyed by question index
   const [selections, setSelections] = useState<Record<number, string>>({})
@@ -161,37 +174,54 @@ export default function CanSrL2ScreenViewPage() {
 
   // Agentic runs (screening_agent_runs) for this citation
   const [agentRuns, setAgentRuns] = useState<LatestAgentRun[]>([])
-  const [titleAbstractRuns, setTitleAbstractRuns] = useState<LatestAgentRun[]>([])
+  const [titleAbstractRuns, setTitleAbstractRuns] = useState<LatestAgentRun[]>(
+    [],
+  )
   const [, setLoadingRuns] = useState(false)
 
   // Per-criterion thresholds for this SR/step
-  const [thresholdByCriterionKey, setThresholdByCriterionKey] = useState<Record<string, number> | null>(null)
+  const [thresholdByCriterionKey, setThresholdByCriterionKey] = useState<Record<
+    string,
+    number
+  > | null>(null)
   const [validating, setValidating] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
 
   // Per-criterion AI status (keyed by question index)
-  const [criterionStatus, setCriterionStatus] = useState<Record<number, 'idle' | 'queued' | 'running' | 'done' | 'error'>>({})
+  const [criterionStatus, setCriterionStatus] = useState<
+    Record<number, 'idle' | 'queued' | 'running' | 'done' | 'error'>
+  >({})
   // Run-all progress
-  const [runAllProgress, setRunAllProgress] = useState<{ done: number; total: number } | null>(null)
+  const [runAllProgress, setRunAllProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
   const [runningAll, setRunningAll] = useState(false)
   const [runAllError, setRunAllError] = useState<string | null>(null)
   const citationKey = `${srId || ''}:${citationId || ''}`
   const currentCitationKeyRef = useRef(citationKey)
   currentCitationKeyRef.current = citationKey
 
-  const l2Validations = useMemo(() => parseValidations((citation as any)?.l2_validations), [citation])
+  const l2Validations = useMemo(
+    () => parseValidations((citation as any)?.l2_validations),
+    [citation],
+  )
   const l2Checked = useMemo(() => {
     const me = String(userEmail || '')
     if (!me) return false
     return l2Validations.some((v) => v.user === me)
   }, [l2Validations, userEmail])
   const l2ValidationsSorted = useMemo(() => {
-    return [...l2Validations].sort((a, b) => String(b.validated_at || '').localeCompare(String(a.validated_at || '')))
+    return [...l2Validations].sort((a, b) =>
+      String(b.validated_at || '').localeCompare(String(a.validated_at || '')),
+    )
   }, [l2Validations])
 
   // Fulltext PDF viewer linkage
   const [fulltextCoords, setFulltextCoords] = useState<any[] | null>(null)
-  const [fulltextPages, setFulltextPages] = useState<{ width: number; height: number }[] | null>(null)
+  const [fulltextPages, setFulltextPages] = useState<
+    { width: number; height: number }[] | null
+  >(null)
   const [fulltextStr, setFulltextStr] = useState<string | null>(null)
   const viewerRef = useRef<PDFBoundingBoxViewerHandle | null>(null)
 
@@ -215,7 +245,9 @@ export default function CanSrL2ScreenViewPage() {
         const j = await res.json().catch(() => ({}))
         const t = res.ok ? j?.screening_thresholds : null
         const stepMap = t && typeof t === 'object' ? (t as any).l2 : null
-        setThresholdByCriterionKey(stepMap && typeof stepMap === 'object' ? stepMap : {})
+        setThresholdByCriterionKey(
+          stepMap && typeof stepMap === 'object' ? stepMap : {},
+        )
       } catch {
         setThresholdByCriterionKey({})
       }
@@ -262,9 +294,13 @@ export default function CanSrL2ScreenViewPage() {
       if (navSessionKey) {
         const raw = window.sessionStorage.getItem(navSessionKey)
         const parsed = raw ? JSON.parse(raw) : null
-        if (parsed && typeof parsed.startIndex === 'number') startedAt = parsed.startIndex
+        if (parsed && typeof parsed.startIndex === 'number')
+          startedAt = parsed.startIndex
         if (!raw && idx >= 0) {
-          window.sessionStorage.setItem(navSessionKey, JSON.stringify({ startIndex: idx, startedAt: Date.now() }))
+          window.sessionStorage.setItem(
+            navSessionKey,
+            JSON.stringify({ startIndex: idx, startedAt: Date.now() }),
+          )
           startedAt = idx
         }
       }
@@ -292,88 +328,119 @@ export default function CanSrL2ScreenViewPage() {
   }, [])
 
   // Load citation row (and ensure fulltext is extracted if missing)
-  const fetchCitationById = useCallback(async (id: string, signal?: AbortSignal) => {
-    if (!srId || !id) return
-    const requestKey = `${srId}:${id}`
-    setLoadingCitation(true)
-    try {
-      const headers = getAuthHeaders()
-      const res = await fetch(
-        `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
-        { method: 'GET', headers, signal },
-      )
-      const data = await res.json().catch(() => ({}))
-      if (currentCitationKeyRef.current !== requestKey) return
-      if (!res.ok) {
-        setError(
-          data?.error || data?.detail || `Failed to load citation (${res.status})`,
+  const fetchCitationById = useCallback(
+    async (id: string, signal?: AbortSignal) => {
+      if (!srId || !id) return
+      const requestKey = `${srId}:${id}`
+      setLoadingCitation(true)
+      try {
+        const headers = getAuthHeaders()
+        const res = await fetch(
+          `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(id)}`,
+          { method: 'GET', headers, signal },
         )
-        setCitation(null)
-      } else {
-        setCitation(data || null)
+        const data = await res.json().catch(() => ({}))
+        if (currentCitationKeyRef.current !== requestKey) return
+        if (!res.ok) {
+          setError(
+            data?.error ||
+              data?.detail ||
+              `Failed to load citation (${res.status})`,
+          )
+          setCitation(null)
+        } else {
+          setCitation(data || null)
 
-        // Extract overlay data
-        const parseJson = (v: any) => {
-          if (!v) return null
-          try {
-            return typeof v === 'string' ? JSON.parse(v) : v
-          } catch {
-            return null
-          }
-        }
-
-        const ft = typeof (data as any).fulltext === 'string' ? (data as any).fulltext : null
-        setFulltextStr(ft)
-        const coordsAny = parseJson((data as any).fulltext_coords) ?? (data as any).fulltext_coords
-        setFulltextCoords(Array.isArray(coordsAny) ? coordsAny : null)
-        const pagesAny = parseJson((data as any).fulltext_pages) ?? (data as any).fulltext_pages
-        setFulltextPages(Array.isArray(pagesAny) ? pagesAny : null)
-
-        // If coords/pages missing, trigger backend extraction then refetch row
-        const needExtract =
-          !Array.isArray(coordsAny) || coordsAny.length === 0 || !Array.isArray(pagesAny) || pagesAny.length === 0
-        if (needExtract) {
-          try {
-            const res2 = await fetch(
-              `/api/can-sr/citations/full-text?action=extract&sr_id=${encodeURIComponent(
-                srId || '',
-              )}&citation_id=${encodeURIComponent(String(id || ''))}`,
-              { method: 'POST', headers, signal },
-            )
-            if (res2.ok && currentCitationKeyRef.current === requestKey) {
-              const res3 = await fetch(
-                `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
-                  String(id),
-                )}`,
-                { headers, signal },
-              )
-              const row2 = await res3.json().catch(() => ({}))
-              if (currentCitationKeyRef.current !== requestKey) return
-              if (res3.ok) setCitation(row2 || null)
-
-              const ft2 = typeof (row2 as any).fulltext === 'string' ? (row2 as any).fulltext : null
-              setFulltextStr(ft2)
-
-              const coordsAny2 = parseJson((row2 as any).fulltext_coords) ?? (row2 as any).fulltext_coords
-              setFulltextCoords(Array.isArray(coordsAny2) ? coordsAny2 : null)
-
-              const pagesAny2 = parseJson((row2 as any).fulltext_pages) ?? (row2 as any).fulltext_pages
-              setFulltextPages(Array.isArray(pagesAny2) ? pagesAny2 : null)
+          // Extract overlay data
+          const parseJson = (v: any) => {
+            if (!v) return null
+            try {
+              return typeof v === 'string' ? JSON.parse(v) : v
+            } catch {
+              return null
             }
-          } catch (err: any) {
-            if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
-            console.warn('Failed to extract fulltext for overlay', err)
+          }
+
+          const ft =
+            typeof (data as any).fulltext === 'string'
+              ? (data as any).fulltext
+              : null
+          setFulltextStr(ft)
+          const coordsAny =
+            parseJson((data as any).fulltext_coords) ??
+            (data as any).fulltext_coords
+          setFulltextCoords(Array.isArray(coordsAny) ? coordsAny : null)
+          const pagesAny =
+            parseJson((data as any).fulltext_pages) ??
+            (data as any).fulltext_pages
+          setFulltextPages(Array.isArray(pagesAny) ? pagesAny : null)
+
+          // If coords/pages missing, trigger backend extraction then refetch row
+          const needExtract =
+            !Array.isArray(coordsAny) ||
+            coordsAny.length === 0 ||
+            !Array.isArray(pagesAny) ||
+            pagesAny.length === 0
+          if (needExtract) {
+            try {
+              const res2 = await fetch(
+                `/api/can-sr/citations/full-text?action=extract&sr_id=${encodeURIComponent(
+                  srId || '',
+                )}&citation_id=${encodeURIComponent(String(id || ''))}`,
+                { method: 'POST', headers, signal },
+              )
+              if (res2.ok && currentCitationKeyRef.current === requestKey) {
+                const res3 = await fetch(
+                  `/api/can-sr/citations/get?sr_id=${encodeURIComponent(srId)}&citation_id=${encodeURIComponent(
+                    String(id),
+                  )}`,
+                  { headers, signal },
+                )
+                const row2 = await res3.json().catch(() => ({}))
+                if (currentCitationKeyRef.current !== requestKey) return
+                if (res3.ok) setCitation(row2 || null)
+
+                const ft2 =
+                  typeof (row2 as any).fulltext === 'string'
+                    ? (row2 as any).fulltext
+                    : null
+                setFulltextStr(ft2)
+
+                const coordsAny2 =
+                  parseJson((row2 as any).fulltext_coords) ??
+                  (row2 as any).fulltext_coords
+                setFulltextCoords(Array.isArray(coordsAny2) ? coordsAny2 : null)
+
+                const pagesAny2 =
+                  parseJson((row2 as any).fulltext_pages) ??
+                  (row2 as any).fulltext_pages
+                setFulltextPages(Array.isArray(pagesAny2) ? pagesAny2 : null)
+              }
+            } catch (err: any) {
+              if (
+                err?.name === 'AbortError' ||
+                currentCitationKeyRef.current !== requestKey
+              )
+                return
+              console.warn('Failed to extract fulltext for overlay', err)
+            }
           }
         }
+      } catch (err: any) {
+        if (
+          err?.name === 'AbortError' ||
+          currentCitationKeyRef.current !== requestKey
+        )
+          return
+        console.error('Citation fetch error', err)
+        setError(err?.message || 'Network error while fetching citation')
+      } finally {
+        if (currentCitationKeyRef.current === requestKey)
+          setLoadingCitation(false)
       }
-    } catch (err: any) {
-      if (err?.name === 'AbortError' || currentCitationKeyRef.current !== requestKey) return
-      console.error('Citation fetch error', err)
-      setError(err?.message || 'Network error while fetching citation')
-    } finally {
-      if (currentCitationKeyRef.current === requestKey) setLoadingCitation(false)
-    }
-  }, [srId])
+    },
+    [srId],
+  )
 
   useEffect(() => {
     if (!srId || !citationId) return
@@ -400,7 +467,8 @@ export default function CanSrL2ScreenViewPage() {
 
   // Re-usable loader so we can refresh after triggering an agentic run.
   async function loadRuns(context?: { srId: string; citationId: string }) {
-    const runContext = context || (srId && citationId ? { srId, citationId } : null)
+    const runContext =
+      context || (srId && citationId ? { srId, citationId } : null)
     if (!runContext) return
     const requestKey = `${runContext.srId}:${runContext.citationId}`
     setLoadingRuns(true)
@@ -442,16 +510,22 @@ export default function CanSrL2ScreenViewPage() {
         )
         const data = await res.json().catch(() => ({}))
         if (currentCitationKeyRef.current !== requestKey) return
-        setTitleAbstractRuns(res.ok && Array.isArray(data?.runs) ? data.runs : [])
+        setTitleAbstractRuns(
+          res.ok && Array.isArray(data?.runs) ? data.runs : [],
+        )
       } catch {
-        if (currentCitationKeyRef.current === requestKey) setTitleAbstractRuns([])
+        if (currentCitationKeyRef.current === requestKey)
+          setTitleAbstractRuns([])
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srId, citationId])
 
   const runsByCriterion = useMemo(() => {
-    const by: Record<string, { screening?: LatestAgentRun; critical?: LatestAgentRun }> = {}
+    const by: Record<
+      string,
+      { screening?: LatestAgentRun; critical?: LatestAgentRun }
+    > = {}
     for (const r of agentRuns) {
       const key = String((r as any)?.criterion_key || '')
       if (!key) continue
@@ -494,7 +568,11 @@ export default function CanSrL2ScreenViewPage() {
 
           const parseBlock = (block: any) => {
             if (!block) {
-              return { questions: [], possible_answers: [], additional_infos: [] as (string | null)[] }
+              return {
+                questions: [],
+                possible_answers: [],
+                additional_infos: [] as (string | null)[],
+              }
             }
             if (!Array.isArray(block?.questions)) {
               // mapping form: { question: { option: description } }
@@ -522,17 +600,27 @@ export default function CanSrL2ScreenViewPage() {
                     const clean = String(d).replace(/\s+/g, ' ').trim()
                     return `- ${opt}: ${clean}`
                   })
-                  addInfos.push(guidanceParts.length ? guidanceParts.join('\n') : null)
+                  addInfos.push(
+                    guidanceParts.length ? guidanceParts.join('\n') : null,
+                  )
                 })
-                return { questions: qArr, possible_answers: ansArr, additional_infos: addInfos }
+                return {
+                  questions: qArr,
+                  possible_answers: ansArr,
+                  additional_infos: addInfos,
+                }
               } catch {
                 const questions = block?.questions || []
                 const possible_answers = block?.possible_answers || []
                 const additional_infos = block?.additional_infos || []
                 return {
                   questions: Array.isArray(questions) ? questions : [],
-                  possible_answers: Array.isArray(possible_answers) ? possible_answers : [],
-                  additional_infos: Array.isArray(additional_infos) ? additional_infos : [],
+                  possible_answers: Array.isArray(possible_answers)
+                    ? possible_answers
+                    : [],
+                  additional_infos: Array.isArray(additional_infos)
+                    ? additional_infos
+                    : [],
                 }
               }
             } else {
@@ -541,8 +629,12 @@ export default function CanSrL2ScreenViewPage() {
               const additional_infos = block?.additional_infos || []
               return {
                 questions: Array.isArray(questions) ? questions : [],
-                possible_answers: Array.isArray(possible_answers) ? possible_answers : [],
-                additional_infos: Array.isArray(additional_infos) ? additional_infos : [],
+                possible_answers: Array.isArray(possible_answers)
+                  ? possible_answers
+                  : [],
+                additional_infos: Array.isArray(additional_infos)
+                  ? additional_infos
+                  : [],
               }
             }
           }
@@ -554,8 +646,14 @@ export default function CanSrL2ScreenViewPage() {
           const l2Parsed = parseBlock(l2Block)
 
           const mergedQuestions = [...l1Parsed.questions, ...l2Parsed.questions]
-          const mergedAnswers = [...l1Parsed.possible_answers, ...l2Parsed.possible_answers]
-          const mergedInfos = [...l1Parsed.additional_infos, ...l2Parsed.additional_infos]
+          const mergedAnswers = [
+            ...l1Parsed.possible_answers,
+            ...l2Parsed.possible_answers,
+          ]
+          const mergedInfos = [
+            ...l1Parsed.additional_infos,
+            ...l2Parsed.additional_infos,
+          ]
           const mergedItems = [
             ...(Array.isArray(l1Block?.items) ? l1Block.items : []),
             ...(Array.isArray(l2Block?.items) ? l2Block.items : []),
@@ -595,7 +693,8 @@ export default function CanSrL2ScreenViewPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
-      const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
+      const humanCol =
+        criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
       const criterionKey = llmCol.replace(/^llm_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
       const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
@@ -603,7 +702,9 @@ export default function CanSrL2ScreenViewPage() {
       const runGuardrails = parseObject(fulltextRun?.guardrails)
       const runFulltextMd5 = String(runGuardrails?.fulltext_md5 || '')
       const isCurrentFulltextRun = Boolean(
-        fulltextRun && citationFulltextMd5 && runFulltextMd5 === citationFulltextMd5,
+        fulltextRun &&
+        citationFulltextMd5 &&
+        runFulltextMd5 === citationFulltextMd5,
       )
 
       const humanRaw = resolveConfiguredValue(citation as any, humanCol)
@@ -630,10 +731,12 @@ export default function CanSrL2ScreenViewPage() {
       // human_* is historically shared by L1 and L2. Only accept values that
       // explicitly identify themselves as Full Text/L2; an untagged legacy value
       // is ambiguous and must not appear as a previous Full Text review.
-      const isFulltextHuman = humanParsed && typeof humanParsed === 'object' && (
-        (humanParsed as any).pipeline === 'fulltext' ||
-        String((humanParsed as any).screening_step || '').toLowerCase() === 'l2'
-      )
+      const isFulltextHuman =
+        humanParsed &&
+        typeof humanParsed === 'object' &&
+        ((humanParsed as any).pipeline === 'fulltext' ||
+          String((humanParsed as any).screening_step || '').toLowerCase() ===
+            'l2')
       if (isFulltextHuman && (humanParsed as any).selected !== undefined) {
         newSelections[idx] = (humanParsed as any).selected
       } else if (sourceFlags[idx] === 'l2' && extractHumanAnswer(humanParsed)) {
@@ -645,7 +748,8 @@ export default function CanSrL2ScreenViewPage() {
         // The shared llm_* column may have been overwritten by either pipeline.
         // Use the pipeline-specific run so a full-text result cannot masquerade
         // as the earlier Title/Abstract answer (or vice versa).
-        if (titleAbstractRun?.answer != null) newHints[idx] = String(titleAbstractRun.answer)
+        if (titleAbstractRun?.answer != null)
+          newHints[idx] = String(titleAbstractRun.answer)
       }
 
       // A Full Text AI panel must only exist when there is a persisted fulltext
@@ -654,9 +758,13 @@ export default function CanSrL2ScreenViewPage() {
         // The latest agent-run endpoint returns the audit answer, while the
         // persisted llm_* payload contains the evidence arrays. Do not discard
         // that payload merely because answer normalization changed the value.
-        const persistedFulltext = llmParsed && typeof llmParsed === 'object' &&
-          ((llmParsed as any).pipeline === 'fulltext' || !(llmParsed as any).pipeline) &&
-          (!(llmParsed as any).fulltext_md5 || (llmParsed as any).fulltext_md5 === citationFulltextMd5)
+        const persistedFulltext =
+          llmParsed &&
+          typeof llmParsed === 'object' &&
+          ((llmParsed as any).pipeline === 'fulltext' ||
+            !(llmParsed as any).pipeline) &&
+          (!(llmParsed as any).fulltext_md5 ||
+            (llmParsed as any).fulltext_md5 === citationFulltextMd5)
         newAiPanels[idx] = {
           ...(persistedFulltext ? llmParsed : {}),
           selected: fulltextRun.answer ?? '',
@@ -668,9 +776,13 @@ export default function CanSrL2ScreenViewPage() {
       }
 
       // For L2 questions: if no human selection present, allow llm_* to prefill the dropdown
-      const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
+      const hasSelection =
+        newSelections[idx] !== undefined && newSelections[idx] !== ''
       if (sourceFlags[idx] === 'l2' && !hasSelection) {
-        const aiSelected = (newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string') ? newAiPanels[idx].selected : null
+        const aiSelected =
+          newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string'
+            ? newAiPanels[idx].selected
+            : null
         if (aiSelected) {
           newSelections[idx] = aiSelected
         }
@@ -681,7 +793,13 @@ export default function CanSrL2ScreenViewPage() {
     setAiPanels(newAiPanels)
     setPanelOpen(newPanelOpen)
     setHintByIndex(newHints)
-  }, [citation, criteriaData, sourceFlags, runsByCriterion, titleAbstractRunsByCriterion])
+  }, [
+    citation,
+    criteriaData,
+    sourceFlags,
+    runsByCriterion,
+    titleAbstractRunsByCriterion,
+  ])
 
   // Persist human classification
   async function postHumanClassifyPayload(
@@ -731,27 +849,51 @@ export default function CanSrL2ScreenViewPage() {
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
     const ok = await postHumanClassifyPayload(question, value)
-    setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
+    setSaveStatus((prev) => ({
+      ...prev,
+      [questionIndex]: ok ? 'saved' : 'error',
+    }))
   }
 
   // Run agentic fulltext screening for a single criterion (per-question AI button)
   async function classifyQuestion(
     questionIndex: number,
-    context?: { srId: string; citationId: string; questions: string[]; model: string },
+    context?: {
+      srId: string
+      citationId: string
+      questions: string[]
+      model: string
+    },
   ): Promise<boolean> {
-    const runContext = context || (srId && citationId && criteriaData
-      ? { srId, citationId, questions: criteriaData.questions, model: selectedModel }
-      : null)
+    const runContext =
+      context ||
+      (srId && citationId && criteriaData
+        ? {
+            srId,
+            citationId,
+            questions: criteriaData.questions,
+            model: selectedModel,
+          }
+        : null)
     if (!runContext) return false
     const requestKey = `${runContext.srId}:${runContext.citationId}`
     if (currentCitationKeyRef.current !== requestKey) return false
     const q = runContext.questions[questionIndex]
     if (!q) return false
     setRunAllError(null)
-    const ck = q.trim().toLowerCase().replace(/[^\w]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 56)
+    const ck = q
+      .trim()
+      .toLowerCase()
+      .replace(/[^\w]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 56)
     setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'running' }))
     try {
-      const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
+      const headers = {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      }
       const res = await fetch('/api/can-sr/screen/fulltext/run', {
         method: 'POST',
         headers,
@@ -766,8 +908,16 @@ export default function CanSrL2ScreenViewPage() {
         }),
       })
       const runData = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(runData?.detail || runData?.error || `AI request failed (${res.status})`)
-      if (String(runData?.citation_id ?? runContext.citationId) !== runContext.citationId) {
+      if (!res.ok)
+        throw new Error(
+          runData?.detail ||
+            runData?.error ||
+            `AI request failed (${res.status})`,
+        )
+      if (
+        String(runData?.citation_id ?? runContext.citationId) !==
+        runContext.citationId
+      ) {
         throw new Error('AI response did not match the requested citation')
       }
       if (currentCitationKeyRef.current !== requestKey) return false
@@ -781,20 +931,33 @@ export default function CanSrL2ScreenViewPage() {
           { method: 'GET', headers: getAuthHeaders() },
         )
         const citData = await citRes.json().catch(() => ({}))
-        if (currentCitationKeyRef.current === requestKey && citRes.ok && citData) {
+        if (
+          currentCitationKeyRef.current === requestKey &&
+          citRes.ok &&
+          citData
+        ) {
           const llmRaw = citData[llmColName]
           let llmParsed = llmRaw
           if (typeof llmRaw === 'string') {
-            try { llmParsed = JSON.parse(llmRaw) } catch { llmParsed = llmRaw }
+            try {
+              llmParsed = JSON.parse(llmRaw)
+            } catch {
+              llmParsed = llmRaw
+            }
           }
           if (llmParsed && typeof llmParsed === 'object') {
             setAiPanels((prev) => ({ ...prev, [questionIndex]: llmParsed }))
           }
         }
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
 
       // Refresh agent runs (no PDF state changes)
-      await loadRuns({ srId: runContext.srId, citationId: runContext.citationId })
+      await loadRuns({
+        srId: runContext.srId,
+        citationId: runContext.citationId,
+      })
       if (currentCitationKeyRef.current !== requestKey) return false
       setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'done' }))
       return true
@@ -802,7 +965,9 @@ export default function CanSrL2ScreenViewPage() {
       console.error('Classify API error', err)
       if (currentCitationKeyRef.current === requestKey) {
         setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'error' }))
-        setRunAllError(err instanceof Error ? err.message : 'Full Text AI failed')
+        setRunAllError(
+          err instanceof Error ? err.message : 'Full Text AI failed',
+        )
       }
       return false
     }
@@ -811,13 +976,22 @@ export default function CanSrL2ScreenViewPage() {
   // Run all criteria sequentially (Run All AI button)
   async function runAllAI() {
     if (!srId || !citationId || !criteriaData || runningAll) return
-    const context = { srId, citationId, questions: [...criteriaData.questions], model: selectedModel }
+    const context = {
+      srId,
+      citationId,
+      questions: [...criteriaData.questions],
+      model: selectedModel,
+    }
     const requestKey = `${srId}:${citationId}`
     const total = context.questions.length
     setRunningAll(true)
     setRunAllProgress({ done: 0, total })
     setRunAllError(null)
-    setCriterionStatus(Object.fromEntries(context.questions.map((_, index) => [index, 'queued'])))
+    setCriterionStatus(
+      Object.fromEntries(
+        context.questions.map((_, index) => [index, 'queued']),
+      ),
+    )
     try {
       const failures: number[] = []
       for (let index = 0; index < context.questions.length; index++) {
@@ -841,7 +1015,11 @@ export default function CanSrL2ScreenViewPage() {
     } catch (err: any) {
       console.error('Run All AI error', err)
       setRunAllError(err?.message || 'Run All AI failed')
-      setCriterionStatus((prev) => Object.fromEntries(Object.keys(prev).map((key) => [Number(key), 'error'])))
+      setCriterionStatus((prev) =>
+        Object.fromEntries(
+          Object.keys(prev).map((key) => [Number(key), 'error']),
+        ),
+      )
     }
   }
 
@@ -887,49 +1065,81 @@ export default function CanSrL2ScreenViewPage() {
   const scrollToArtifact = (kind: 'table' | 'figure', idx: number) => {
     const list = kind === 'table' ? parsedTables : parsedFigures
     const item = list.find((x: any) => Number(x?.index) === Number(idx))
-    console.log('[artifact-click]', { kind, idx, hasViewer: !!viewerRef.current, item })
     if (!item || !viewerRef.current) return
     const bbox = item?.bounding_box
     // We store normalized boxes as an array of {page,x,y,width,height}
-    const first = Array.isArray(bbox) ? bbox[0] : null
-    console.log('[artifact-bbox]', { kind, idx, bbox, first })
+    const first = Array.isArray(bbox)
+      ? bbox.find(
+          (box: any) =>
+            box &&
+            typeof box === 'object' &&
+            Number.isFinite(
+              Number(box?.page ?? box?.page_number ?? box?.pageNum),
+            ),
+        )
+      : null
     if (!first) return
     viewerRef.current.scrollToCoord(first)
   }
 
   const workspace = useMemo(() => {
-    if (error)
-      return <div className="text-sm text-red-600">{error}</div>
+    if (error) return <div className="text-sm text-red-600">{error}</div>
     if (loadingCitation)
-      return <div className="text-sm text-gray-600">{dict.screening.loadingCitation}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.loadingCitation}
+        </div>
+      )
     if (!citation)
-      return <div className="text-sm text-gray-600">{dict.screening.citationNotFound}</div>
+      return (
+        <div className="text-sm text-gray-600">
+          {dict.screening.citationNotFound}
+        </div>
+      )
 
     return (
       <div className="space-y-4">
-        <ScreeningCitationContext citation={citation} fields={criteriaData?.citation_fields} />
+        <ScreeningCitationContext
+          citation={citation}
+          fields={criteriaData?.citation_fields}
+          showTitleAbstract={false}
+        />
         <PDFBoundingBoxViewer
-        srId={srId || ''}
-        citationId={citationId ?? ''}
-        conversionId={null}
-        fileName={String(
-          citation?.title ||
-          citation?.citation ||
-          citation?.article_title ||
-          'Full text'
-        )}
-        coords={fulltextCoords || []}
-        pages={fulltextPages || []}
-        aiPanels={panelsKeyed.panels}
-        panelOpen={panelsKeyed.open}
-        artifacts={{ tables: parsedTables, figures: parsedFigures }}
-        fulltext={fulltextStr || ''}
-        defaultFitToWidth={true}
-        ref={viewerRef}
+          srId={srId || ''}
+          citationId={citationId ?? ''}
+          conversionId={null}
+          fileName={String(
+            citation?.title ||
+              citation?.citation ||
+              citation?.article_title ||
+              'Full text',
+          )}
+          coords={fulltextCoords || []}
+          pages={fulltextPages || []}
+          aiPanels={panelsKeyed.panels}
+          panelOpen={panelsKeyed.open}
+          artifacts={{ tables: parsedTables, figures: parsedFigures }}
+          fulltext={fulltextStr || ''}
+          defaultFitToWidth={true}
+          ref={viewerRef}
         />
       </div>
     )
-  }, [citation, criteriaData, loadingCitation, srId, citationId, fulltextCoords, fulltextPages, fulltextStr, panelsKeyed, parsedTables, parsedFigures, dict, error])
+  }, [
+    citation,
+    criteriaData,
+    loadingCitation,
+    srId,
+    citationId,
+    fulltextCoords,
+    fulltextPages,
+    fulltextStr,
+    panelsKeyed,
+    parsedTables,
+    parsedFigures,
+    dict,
+    error,
+  ])
 
   if (!srId || !citationId) {
     // guard - redirect already handled in effect but keep safe render
@@ -951,23 +1161,29 @@ export default function CanSrL2ScreenViewPage() {
         }
       />
 
-      <main className="mx-auto max-w-8xl px-3 py-3">
-
+      <main className="max-w-8xl mx-auto px-3 py-3">
         {/* Filter/session progress bar */}
         {progressInfo.total > 0 && progressInfo.idx >= 0 ? (
           <div className="mb-3 rounded-md border border-gray-200 bg-white p-3">
             <div className="flex items-center justify-between text-xs text-gray-600">
               <div>
-                Progress: <span className="font-medium">{progressInfo.idx + 1}</span> / {progressInfo.total}
+                Progress:{' '}
+                <span className="font-medium">{progressInfo.idx + 1}</span> /{' '}
+                {progressInfo.total}
               </div>
               <div>
-                Since start: <span className="font-medium">{Math.max(0, progressInfo.idx - progressInfo.startedAt + 1)}</span>
+                Since start:{' '}
+                <span className="font-medium">
+                  {Math.max(0, progressInfo.idx - progressInfo.startedAt + 1)}
+                </span>
               </div>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded bg-gray-200">
               <div
                 className="h-2 bg-emerald-600"
-                style={{ width: `${Math.min(100, ((progressInfo.idx + 1) / progressInfo.total) * 100)}%` }}
+                style={{
+                  width: `${Math.min(100, ((progressInfo.idx + 1) / progressInfo.total) * 100)}%`,
+                }}
               />
             </div>
           </div>
@@ -975,31 +1191,53 @@ export default function CanSrL2ScreenViewPage() {
 
         <div className="grid grid-cols-12 gap-3">
           {/* Workspace (left) */}
-          <div className="col-span-9">
-              {workspace}
-          </div>
+          <div className="col-span-9">{workspace}</div>
 
           {/* Selection sidebar (right) */}
           <aside className="col-span-3">
-            <div className="h-full space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col">
+            <div className="flex h-full flex-col space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900 text-center">{dict.screening.screeningQuestions}</h4>
+                <h4 className="text-center text-xl font-semibold text-gray-900">
+                  {dict.screening.screeningQuestions}
+                </h4>
               </div>
 
               {/* Run All AI button */}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-gray-500">
-                  {runAllProgress ? `${runAllProgress.done}/${runAllProgress.total} criteria` : ''}
+                  {runAllProgress
+                    ? `${runAllProgress.done}/${runAllProgress.total} criteria`
+                    : ''}
                 </span>
                 <button
                   onClick={onRunAllAI}
-                  disabled={runningAll || !criteriaData || criteriaData.questions.length === 0 || !(citation as any)?.fulltext_md5}
+                  disabled={
+                    runningAll ||
+                    !criteriaData ||
+                    criteriaData.questions.length === 0 ||
+                    !(citation as any)?.fulltext_md5
+                  }
                   className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {runningAll ? (
-                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    <svg
+                      className="h-3 w-3 animate-spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v8H4z"
+                      />
                     </svg>
                   ) : (
                     <Wand2 className="h-3 w-3" />
@@ -1009,138 +1247,219 @@ export default function CanSrL2ScreenViewPage() {
                     : 'Run All AI'}
                 </button>
               </div>
-              {runAllError ? <div className="text-xs text-red-600">{runAllError}</div> : null}
+              {runAllError ? (
+                <div className="text-xs text-red-600">{runAllError}</div>
+              ) : null}
 
               {loadingCriteria ? (
-                <div className="text-sm text-gray-600">{dict.screening.loadingCriteria}</div>
+                <div className="text-sm text-gray-600">
+                  {dict.screening.loadingCriteria}
+                </div>
               ) : !criteriaData || criteriaData.questions.length === 0 ? (
                 <div className="text-sm text-gray-600">
                   {dict.screening.noL2Criteria}
                 </div>
               ) : (
-                <div className="rounded-md border border-gray-100 p-3 h-[680px] overflow-y-auto">
+                <div className="h-[680px] overflow-y-auto rounded-md border border-gray-100 p-3">
                   <div className="space-y-4">
-                  {criteriaData.questions.map((q, idx) => {
-                    const options = criteriaData.possible_answers[idx] || []
-                    const answerColumn = criteriaData.items?.[idx]?.answer_column || null
-                    const answerStatus = humanAnswerStatus(citation!, answerColumn, options)
-                    const current = selections[idx] ?? ''
-                    const aiData = aiPanels[idx]
-                    const aiSelected =
-                      aiData && aiData.selected ? aiData.selected : undefined
+                    {criteriaData.questions.map((q, idx) => {
+                      const options = criteriaData.possible_answers[idx] || []
+                      const answerColumn =
+                        criteriaData.items?.[idx]?.answer_column || null
+                      const answerStatus = humanAnswerStatus(
+                        citation!,
+                        answerColumn,
+                        options,
+                      )
+                      const current = selections[idx] ?? ''
+                      const aiData = aiPanels[idx]
+                      const aiSelected =
+                        aiData && aiData.selected ? aiData.selected : undefined
 
-                    // Per-question highlight aligned with list/back-end logic.
-                    // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
-                    // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
-                    const criterionKey = q
-                      ? q
-                          .trim()
-                          .toLowerCase()
-                          .replace(/[^\w]+/g, '_')
-                          .replace(/_+/g, '_')
-                          .replace(/^_+|_+$/g, '')
-                          .slice(0, 56)
-                      : ''
+                      // Per-question highlight aligned with list/back-end logic.
+                      // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
+                      // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
+                      const criterionKey = q
+                        ? q
+                            .trim()
+                            .toLowerCase()
+                            .replace(/[^\w]+/g, '_')
+                            .replace(/_+/g, '_')
+                            .replace(/^_+|_+$/g, '')
+                            .slice(0, 56)
+                        : ''
 
-                    const r = (runsByCriterion as any)?.[criterionKey] || {}
-                    const currentPdfMd5 = String((citation as any)?.fulltext_md5 || '')
-                    const runMatchesCurrentPdf = (run: any) => {
-                      const guardrails = parseObject(run?.guardrails)
-                      return Boolean(run && currentPdfMd5 && String(guardrails?.fulltext_md5 || '') === currentPdfMd5)
-                    }
-                    const scr = runMatchesCurrentPdf(r.screening) ? r.screening : undefined
-                    const crit = runMatchesCurrentPdf(r.critical) ? r.critical : undefined
-                    const perThrRaw = thresholdByCriterionKey ? Number((thresholdByCriterionKey as any)[criterionKey]) : NaN
-                    const thr = Number.isFinite(perThrRaw) ? Math.max(0, Math.min(1, perThrRaw)) : 0.9
+                      const r = (runsByCriterion as any)?.[criterionKey] || {}
+                      const currentPdfMd5 = String(
+                        (citation as any)?.fulltext_md5 || '',
+                      )
+                      const runMatchesCurrentPdf = (run: any) => {
+                        const guardrails = parseObject(run?.guardrails)
+                        return Boolean(
+                          run &&
+                          currentPdfMd5 &&
+                          String(guardrails?.fulltext_md5 || '') ===
+                            currentPdfMd5,
+                        )
+                      }
+                      const scr = runMatchesCurrentPdf(r.screening)
+                        ? r.screening
+                        : undefined
+                      const crit = runMatchesCurrentPdf(r.critical)
+                        ? r.critical
+                        : undefined
+                      const perThrRaw = thresholdByCriterionKey
+                        ? Number((thresholdByCriterionKey as any)[criterionKey])
+                        : NaN
+                      const thr = Number.isFinite(perThrRaw)
+                        ? Math.max(0, Math.min(1, perThrRaw))
+                        : 0.9
 
-                    const { needsHuman, criticalDisagrees: critDisagrees } = needsHumanReviewForCriterion({
-                      threshold: thr,
-                      screening: scr,
-                      critical: crit,
-                    })
-                    const hasAgentic = !!scr || !!crit
+                      const { needsHuman, criticalDisagrees: critDisagrees } =
+                        needsHumanReviewForCriterion({
+                          threshold: thr,
+                          screening: scr,
+                          critical: crit,
+                        })
+                      const hasAgentic = !!scr || !!crit
 
-                    // Prefer agentic screening run when available to avoid mismatches
-                    const displayConfidence =
-                      Number.isFinite(Number((scr as any)?.confidence))
+                      // Prefer agentic screening run when available to avoid mismatches
+                      const displayConfidence = Number.isFinite(
+                        Number((scr as any)?.confidence),
+                      )
                         ? Number((scr as any)?.confidence)
                         : Number(aiData?.confidence)
 
-                    const aiExpl =
-                      (typeof (aiData as any)?.explanation === 'string' ? String((aiData as any).explanation) : '') ||
-                      (typeof (aiData as any)?.rationale === 'string' ? String((aiData as any).rationale) : '') ||
-                      (typeof (aiData as any)?.llm_raw === 'string' ? String((aiData as any).llm_raw) : '')
+                      const aiExpl =
+                        (typeof (aiData as any)?.explanation === 'string'
+                          ? String((aiData as any).explanation)
+                          : '') ||
+                        (typeof (aiData as any)?.rationale === 'string'
+                          ? String((aiData as any).rationale)
+                          : '') ||
+                        (typeof (aiData as any)?.llm_raw === 'string'
+                          ? String((aiData as any).llm_raw)
+                          : '')
 
-                    const scrRationale = typeof (scr as any)?.rationale === 'string' ? String((scr as any).rationale) : ''
-                    const displayExplanationRaw = (scrRationale || aiExpl || '').trim()
-                    const displayExplanation =
-                      extractXmlTag(displayExplanationRaw, 'rationale') || displayExplanationRaw
-                    const screeningGuardrails = parseObject((scr as any)?.guardrails)
-                    const missingFields = Array.isArray(aiData?.missing_fields)
-                      ? aiData.missing_fields.map((field: unknown) => String(field))
-                      : Array.isArray(screeningGuardrails?.missing_fields)
-                        ? screeningGuardrails.missing_fields.map((field: unknown) => String(field))
-                        : []
-                    const missingLabels = missingFields.map((field: string) => {
-                      if (field === 'answer') return 'selection'
-                      if (field === 'confidence') return 'confidence'
-                      if (field === 'rationale') return 'rationale'
-                      return field
-                    })
+                      const scrRationale =
+                        typeof (scr as any)?.rationale === 'string'
+                          ? String((scr as any).rationale)
+                          : ''
+                      const displayExplanationRaw = (
+                        scrRationale ||
+                        aiExpl ||
+                        ''
+                      ).trim()
+                      const displayExplanation =
+                        extractXmlTag(displayExplanationRaw, 'rationale') ||
+                        displayExplanationRaw
+                      const screeningGuardrails = parseObject(
+                        (scr as any)?.guardrails,
+                      )
+                      const missingFields = Array.isArray(
+                        aiData?.missing_fields,
+                      )
+                        ? aiData.missing_fields.map((field: unknown) =>
+                            String(field),
+                          )
+                        : Array.isArray(screeningGuardrails?.missing_fields)
+                          ? screeningGuardrails.missing_fields.map(
+                              (field: unknown) => String(field),
+                            )
+                          : []
+                      const missingLabels = missingFields.map(
+                        (field: string) => {
+                          if (field === 'answer') return 'selection'
+                          if (field === 'confidence') return 'confidence'
+                          if (field === 'rationale') return 'rationale'
+                          return field
+                        },
+                      )
 
-                    return (
-                      <div
-                        key={idx}
-                        className={
-                          'rounded-md border-2 p-3 ' + (needsHuman ? 'border-amber-400' : 'border-gray-100')
-                        }
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-800">
-                              {q}
-                            </p>
-
-                            {sourceFlags[idx] === 'l1' ? (
-                              <p className="mt-1 text-xs text-gray-500">
-                                {dict.screening.titleAbstractAnswer} {hintByIndex[idx] ?? dict.screening.none}
+                      return (
+                        <div
+                          key={idx}
+                          className={
+                            'rounded-md border-2 p-3 ' +
+                            (needsHuman
+                              ? 'border-amber-400'
+                              : 'border-gray-100')
+                          }
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-800">
+                                {q}
                               </p>
-                            ) : null}
 
-                            <select
-                              value={current || (aiSelected ?? '')}
-                              onChange={(e) =>
-                                onSelectOption(idx, e.target.value)
-                              }
-                              className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
-                            >
-                              <option value="">-- select --</option>
-                              {options.map((opt: string) => (
-                                <option key={opt} value={opt}>
-                                  {opt}
-                                </option>
-                              ))}
-                            </select>
-                            {answerStatus !== 'unconfigured' && answerStatus !== 'matched' ? (
-                              <p className="mt-1 text-xs text-amber-700" role="status">
-                                Human answer column “{answerColumn}”: {answerStatus === 'missing' ? 'not found in this citation' : answerStatus === 'blank' ? 'blank for this citation' : 'value does not match an available answer'}.
-                              </p>
-                            ) : answerStatus === 'matched' ? (
-                              <p className="mt-1 text-xs text-emerald-700">Human answer loaded from “{answerColumn}”.</p>
-                            ) : null}
-                          </div>
+                              {sourceFlags[idx] === 'l1' ? (
+                                <p className="mt-1 text-xs text-gray-500">
+                                  {dict.screening.titleAbstractAnswer}{' '}
+                                  {hintByIndex[idx] ?? dict.screening.none}
+                                </p>
+                              ) : null}
 
-                          <div className="ml-3 flex flex-col items-end space-y-2">
+                              <select
+                                value={current || (aiSelected ?? '')}
+                                onChange={(e) =>
+                                  onSelectOption(idx, e.target.value)
+                                }
+                                className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                              >
+                                <option value="">-- select --</option>
+                                {options.map((opt: string) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                              {answerStatus !== 'unconfigured' &&
+                              answerStatus !== 'matched' ? (
+                                <p
+                                  className="mt-1 text-xs text-amber-700"
+                                  role="status"
+                                >
+                                  Human answer column “{answerColumn}”:{' '}
+                                  {answerStatus === 'missing'
+                                    ? 'not found in this citation'
+                                    : answerStatus === 'blank'
+                                      ? 'blank for this citation'
+                                      : 'value does not match an available answer'}
+                                  .
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <div className="ml-3 flex flex-col items-end space-y-2">
                               <button
                                 onClick={() => classifyQuestion(idx)}
-                                disabled={criterionStatus[idx] === 'running' || runningAll || !(citation as any)?.fulltext_md5}
+                                disabled={
+                                  criterionStatus[idx] === 'running' ||
+                                  runningAll ||
+                                  !(citation as any)?.fulltext_md5
+                                }
                                 className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <span className="inline-flex items-center gap-1">
                                   {criterionStatus[idx] === 'running' ? (
-                                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                    <svg
+                                      className="h-3 w-3 animate-spin"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                    >
+                                      <circle
+                                        className="opacity-25"
+                                        cx="12"
+                                        cy="12"
+                                        r="10"
+                                        stroke="currentColor"
+                                        strokeWidth="4"
+                                      />
+                                      <path
+                                        className="opacity-75"
+                                        fill="currentColor"
+                                        d="M4 12a8 8 0 018-8v8H4z"
+                                      />
                                     </svg>
                                   ) : (
                                     <Wand2 className="h-3 w-3" />
@@ -1150,186 +1469,247 @@ export default function CanSrL2ScreenViewPage() {
                               </button>
 
                               {criterionStatus[idx] === 'running' ? (
-                                <span className="text-[10px] text-blue-600">Running…</span>
-                              ) : criterionStatus[idx] === 'queued' ? (
-                                <span className="text-[10px] text-gray-500">Queued</span>
-                              ) : criterionStatus[idx] === 'done' ? (
-                                <span className="text-[10px] text-emerald-600">Completed</span>
-                              ) : criterionStatus[idx] === 'error' ? (
-                                <span className="text-[10px] text-red-600">Error</span>
-                              ) : saveStatus[idx] === 'saving' ? (
-                                <span className="text-[10px] text-gray-500">{dict.common.save}...</span>
-                              ) : saveStatus[idx] === 'saved' ? (
-                                <span className="text-[10px] text-emerald-600">{dict.common.done}</span>
-                              ) : saveStatus[idx] === 'error' ? (
-                                <span className="text-[10px] text-red-600">{dict.common.error}</span>
-                              ) : null}
-                          </div>
-                        </div>
-
-                        {/* AI panel: collapsible with evidence chips */}
-                        {aiData ? (
-                          <div className="mt-3">
-                            <div
-                              onClick={() =>
-                                setPanelOpen((prev) => ({
-                                  ...prev,
-                                  [idx]: !Boolean(prev[idx]),
-                                }))
-                              }
-                              style={{ cursor: 'pointer' }}
-                              className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
-                            >
-                              <div className="text-sm">
-                                {dict.screening.aiSuggests}{' '}
-                                <span
-                                  className={
-                                    'ml-1 text-sm font-medium ' +
-                                    (String(aiData.selected ?? '')
-                                      .toLowerCase()
-                                      .includes('(exclude)')
-                                      ? 'text-red-600'
-                                      : 'text-emerald-600')
-                                  }
-                                >
-                                  {aiData.selected ?? dict.screening.noSelection}
+                                <span className="text-[10px] text-blue-600">
+                                  Running…
                                 </span>
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                {panelOpen[idx] ? dict.screening.minimize : dict.screening.maximize}
-                              </div>
+                              ) : criterionStatus[idx] === 'queued' ? (
+                                <span className="text-[10px] text-gray-500">
+                                  Queued
+                                </span>
+                              ) : criterionStatus[idx] === 'done' ? (
+                                <span className="text-[10px] text-emerald-600">
+                                  Completed
+                                </span>
+                              ) : criterionStatus[idx] === 'error' ? (
+                                <span className="text-[10px] text-red-600">
+                                  Error
+                                </span>
+                              ) : saveStatus[idx] === 'saving' ? (
+                                <span className="text-[10px] text-gray-500">
+                                  {dict.common.save}...
+                                </span>
+                              ) : saveStatus[idx] === 'saved' ? (
+                                <span className="text-[10px] text-emerald-600">
+                                  {dict.common.done}
+                                </span>
+                              ) : saveStatus[idx] === 'error' ? (
+                                <span className="text-[10px] text-red-600">
+                                  {dict.common.error}
+                                </span>
+                              ) : null}
                             </div>
-
-                            {panelOpen[idx] ? (
-                              <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
-                                {missingLabels.length > 0 ? (
-                                  <div
-                                    className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
-                                    role="alert"
-                                  >
-                                    The AI response was incomplete after one automatic repair. Missing:{' '}
-                                    <strong>{missingLabels.join(', ')}</strong>. Review the available fields and rerun this criterion.
-                                  </div>
-                                ) : null}
-                                <div className="mt-2">
-                                  <strong>{dict.screening.confidence}</strong>{' '}
-                                  {missingFields.includes('confidence')
-                                    ? 'Not returned by AI'
-                                    : Number.isFinite(displayConfidence)
-                                    ? String(displayConfidence)
-                                    : String(aiData.confidence ?? '')}
-                                </div>
-                                <div className="mt-2">
-                                  <strong>{dict.screening.explanation}</strong>
-                                  <div className="mt-1 text-sm text-gray-700">
-                                    {missingFields.includes('rationale')
-                                      ? 'Rationale was not returned by the AI after repair.'
-                                      : displayExplanation || dict.screening.noExplanation}
-                                  </div>
-                                </div>
-
-                                {hasAgentic && crit ? (
-                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
-                                    <div className="mt-1 font-semibold text-gray-800">
-                                      {critDisagrees ? (
-                                        <span className="text-amber-700">
-                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
-                                        </span>
-                                      ) : (
-                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
-                                      )}
-                                    </div>
-                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
-                                  </div>
-                                ) : null}
-                                {Array.isArray(aiData?.evidence_sentences) && aiData.evidence_sentences.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>{dict.screening.evidence}</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_sentences.map((item: any, k: number) => {
-                                        const isCoord = item && typeof item === 'object'
-                                        const label = isCoord
-                                          ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
-                                          : `${dict.screening.sentence} ${String(item)}`
-                                        const onClick = () => {
-                                          if (!viewerRef.current) return
-                                          if (isCoord) {
-                                            viewerRef.current.scrollToCoord(item)
-                                          } else {
-                                            const idxNum = Number(item)
-                                            if (!Number.isNaN(idxNum)) {
-                                              viewerRef.current.scrollToSentenceIndex(idxNum)
-                                            }
-                                          }
-                                        }
-                                        return (
-                                          <button
-                                            key={k}
-                                            onClick={onClick}
-                                            className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
-                                            title={label}
-                                            type="button"
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-
-                                {Array.isArray(aiData?.evidence_tables) && aiData.evidence_tables.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>Evidence tables:</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_tables.map((t: any, k: number) => {
-                                        const label = `Table T${String(t)}`
-                                        return (
-                                          <button
-                                            key={k}
-                                            type="button"
-                                            onClick={() => scrollToArtifact('table', Number(t))}
-                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-                                            title={label}
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-
-                                {Array.isArray(aiData?.evidence_figures) && aiData.evidence_figures.length > 0 ? (
-                                  <div className="mt-2">
-                                    <strong>Evidence figures:</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {aiData.evidence_figures.map((f: any, k: number) => {
-                                        const label = `Figure F${String(f)}`
-                                        return (
-                                          <button
-                                            key={k}
-                                            type="button"
-                                            onClick={() => scrollToArtifact('figure', Number(f))}
-                                            className="rounded border px-1.5 py-0.5 text-xs text-gray-700 bg-gray-50 hover:bg-gray-100"
-                                            title={label}
-                                          >
-                                            {label}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    )
-                  })}
+
+                          {/* AI panel: collapsible with evidence chips */}
+                          {aiData ? (
+                            <div className="mt-3">
+                              <div
+                                onClick={() =>
+                                  setPanelOpen((prev) => ({
+                                    ...prev,
+                                    [idx]: !Boolean(prev[idx]),
+                                  }))
+                                }
+                                style={{ cursor: 'pointer' }}
+                                className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
+                              >
+                                <div className="text-sm">
+                                  {dict.screening.aiSuggests}{' '}
+                                  <span
+                                    className={
+                                      'ml-1 text-sm font-medium ' +
+                                      (String(aiData.selected ?? '')
+                                        .toLowerCase()
+                                        .includes('(exclude)')
+                                        ? 'text-red-600'
+                                        : 'text-emerald-600')
+                                    }
+                                  >
+                                    {aiData.selected ??
+                                      dict.screening.noSelection}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {panelOpen[idx]
+                                    ? dict.screening.minimize
+                                    : dict.screening.maximize}
+                                </div>
+                              </div>
+
+                              {panelOpen[idx] ? (
+                                <div className="mt-2 rounded-md border border-gray-100 bg-white p-3 text-sm whitespace-pre-wrap text-gray-800">
+                                  {missingLabels.length > 0 ? (
+                                    <div
+                                      className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                                      role="alert"
+                                    >
+                                      The AI response was incomplete after one
+                                      automatic repair. Missing:{' '}
+                                      <strong>
+                                        {missingLabels.join(', ')}
+                                      </strong>
+                                      . Review the available fields and rerun
+                                      this criterion.
+                                    </div>
+                                  ) : null}
+                                  <div className="mt-2">
+                                    <strong>{dict.screening.confidence}</strong>{' '}
+                                    {missingFields.includes('confidence')
+                                      ? 'Not returned by AI'
+                                      : Number.isFinite(displayConfidence)
+                                        ? String(displayConfidence)
+                                        : String(aiData.confidence ?? '')}
+                                  </div>
+                                  <div className="mt-2">
+                                    <strong>
+                                      {dict.screening.explanation}
+                                    </strong>
+                                    <div className="mt-1 text-sm text-gray-700">
+                                      {missingFields.includes('rationale')
+                                        ? 'Rationale was not returned by the AI after repair.'
+                                        : displayExplanation ||
+                                          dict.screening.noExplanation}
+                                    </div>
+                                  </div>
+
+                                  {hasAgentic && crit ? (
+                                    <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+                                      <div className="mt-1 font-semibold text-gray-800">
+                                        {critDisagrees ? (
+                                          <span className="text-amber-700">
+                                            Critical review recommends a
+                                            different answer:{' '}
+                                            {String(
+                                              (crit as any)?.answer ?? '—',
+                                            )}
+                                          </span>
+                                        ) : (
+                                          <span className="text-emerald-700">
+                                            Critical review supports the
+                                            screening answer
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div>
+                                        Judgment confidence:{' '}
+                                        {String(
+                                          (crit as any)?.confidence ?? '—',
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                  {Array.isArray(aiData?.evidence_sentences) &&
+                                  aiData.evidence_sentences.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>{dict.screening.evidence}</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_sentences.map(
+                                          (item: any, k: number) => {
+                                            const isCoord =
+                                              item && typeof item === 'object'
+                                            const label = isCoord
+                                              ? `${dict.screening.page} ${String(item.page ?? item.page_number ?? item.pageNum ?? '?')}${item.text ? `: ${String(item.text).slice(0, 80)}` : ''}`
+                                              : `${dict.screening.sentence} ${String(item)}`
+                                            const onClick = () => {
+                                              if (!viewerRef.current) return
+                                              if (isCoord) {
+                                                viewerRef.current.scrollToCoord(
+                                                  item,
+                                                )
+                                              } else {
+                                                const idxNum = Number(item)
+                                                if (!Number.isNaN(idxNum)) {
+                                                  viewerRef.current.scrollToSentenceIndex(
+                                                    idxNum,
+                                                  )
+                                                }
+                                              }
+                                            }
+                                            return (
+                                              <button
+                                                key={k}
+                                                onClick={onClick}
+                                                className="rounded border px-1.5 py-0.5 text-xs hover:bg-gray-50"
+                                                title={label}
+                                                type="button"
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+
+                                  {Array.isArray(aiData?.evidence_tables) &&
+                                  aiData.evidence_tables.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>Evidence tables:</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_tables.map(
+                                          (t: any, k: number) => {
+                                            const label = `Table T${String(t)}`
+                                            return (
+                                              <button
+                                                key={k}
+                                                type="button"
+                                                onClick={() =>
+                                                  scrollToArtifact(
+                                                    'table',
+                                                    Number(t),
+                                                  )
+                                                }
+                                                className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                title={label}
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+
+                                  {Array.isArray(aiData?.evidence_figures) &&
+                                  aiData.evidence_figures.length > 0 ? (
+                                    <div className="mt-2">
+                                      <strong>Evidence figures:</strong>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {aiData.evidence_figures.map(
+                                          (f: any, k: number) => {
+                                            const label = `Figure F${String(f)}`
+                                            return (
+                                              <button
+                                                key={k}
+                                                type="button"
+                                                onClick={() =>
+                                                  scrollToArtifact(
+                                                    'figure',
+                                                    Number(f),
+                                                  )
+                                                }
+                                                className="rounded border bg-gray-50 px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                                                title={label}
+                                              >
+                                                {label}
+                                              </button>
+                                            )
+                                          },
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
               )}
               {/* Validation checkbox — at the bottom, matching L1 screen layout */}
               <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 p-3">
@@ -1363,24 +1743,33 @@ export default function CanSrL2ScreenViewPage() {
                     }}
                   />
                   <span>
-                    Validated by <span className="font-medium">{String(userEmail || '—')}</span>
+                    Validated by{' '}
+                    <span className="font-medium">
+                      {String(userEmail || '—')}
+                    </span>
                   </span>
                 </label>
 
                 {l2ValidationsSorted.length ? (
                   <div className="mt-2 space-y-1">
                     {l2ValidationsSorted.map((v, idx) => (
-                      <div key={`${v.user}-${idx}`} className="text-xs text-gray-600">
-                        Validated on {formatValidationDate(v.validated_at)} by {v.user}
+                      <div
+                        key={`${v.user}-${idx}`}
+                        className="text-xs text-gray-600"
+                      >
+                        Validated on {formatValidationDate(v.validated_at)} by{' '}
+                        {v.user}
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-gray-600">Not validated</div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    Not validated
+                  </div>
                 )}
               </div>
 
-              <div className="flex items-center justify-between mt-4">
+              <div className="mt-4 flex items-center justify-between">
                 <button
                   disabled={runningAll}
                   onClick={() => {
@@ -1409,7 +1798,9 @@ export default function CanSrL2ScreenViewPage() {
                     const idx = citationIdList.indexOf(cur)
                     if (idx === -1) return
                     if (idx >= citationIdList.length - 1) {
-                      router.push(`/${lang}/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterMode)}`)
+                      router.push(
+                        `/${lang}/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}&filter=${encodeURIComponent(filterMode)}`,
+                      )
                       return
                     }
                     const target = String(citationIdList[idx + 1])
