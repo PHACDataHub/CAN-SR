@@ -112,15 +112,9 @@ async def _run_l1_for_citation(
     citation_fields = cp.get(
         'citation_fields',
     ) if isinstance(cp, dict) else None
-    if isinstance(citation_fields, dict) and (citation_fields.get('title') or citation_fields.get('abstract')):
-        citation_text = format_title_abstract_context(row, citation_fields)
-    else:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
-            'title', 'abstract',
-        ]
-        citation_text = citations_router._build_combined_citation_from_row(
-            row, include_cols,
-        )
+    citation_text = format_title_abstract_context(
+        row, citation_fields if isinstance(citation_fields, dict) else {},
+    )
     l1 = cp.get('l1') if isinstance(cp, dict) else None
     questions = (l1 or {}).get('questions') if isinstance(l1, dict) else []
     possible = (l1 or {}).get(
@@ -398,15 +392,9 @@ async def _run_l2_for_citation(
     citation_fields = cp.get(
         'citation_fields',
     ) if isinstance(cp, dict) else None
-    if isinstance(citation_fields, dict) and (citation_fields.get('title') or citation_fields.get('abstract')):
-        citation_text = format_title_abstract_context(row, citation_fields)
-    else:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
-            'title', 'abstract',
-        ]
-        citation_text = citations_router._build_combined_citation_from_row(
-            row, include_cols,
-        )
+    citation_text = format_title_abstract_context(
+        row, citation_fields if isinstance(citation_fields, dict) else {},
+    )
     fulltext = row.get('fulltext') or citation_text
 
     # Tables/Figures context from row

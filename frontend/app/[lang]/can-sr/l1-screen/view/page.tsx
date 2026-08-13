@@ -94,7 +94,7 @@ type CriteriaData = {
   questions: string[]
   possible_answers: string[][]
   items?: Array<{ answer_column?: string | null }>
-  citation_fields?: { title?: string | null; abstract?: string | null; l1_include?: string[] }
+  citation_fields?: { title?: string | null; abstract?: string | null; doi?: string | null; l1_include?: string[] }
 }
 
 type LatestAgentRun = {

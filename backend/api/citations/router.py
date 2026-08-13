@@ -41,6 +41,7 @@ from ..core.security import get_current_active_user
 from ..core.config import settings
 from ..services.cit_db_service import cits_dp_service, snake_case, snake_case_column, parse_dsn
 from ..services.citation_export_service import citation_export_service, ExportValidationError
+from ..criteria.context import resolve_source_value
 from .export_models import CitationExportRequest, CitationExportSchema
 from ..core.cit_utils import load_sr_and_check
 
@@ -363,6 +364,28 @@ def _match_csv_column_to_criterion(csv_col: str, criteria_questions: dict[str, s
     return None
 
 
+def _configured_l1_answer_columns(sr: dict[str, Any] | None) -> dict[str, str]:
+    """Return configured retrospective-answer headers mapped to L1 criterion keys."""
+    if not sr:
+        return {}
+    criteria_parsed = sr.get('criteria_parsed') or {}
+    l1_criteria = criteria_parsed.get('l1') or {}
+    items = l1_criteria.get('items') or []
+    result: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        question = item.get('question')
+        answer_column = item.get('answer_column')
+        if not isinstance(question, str) or not question.strip():
+            continue
+        if not isinstance(answer_column, str) or not answer_column.strip():
+            continue
+        criterion_key = snake_case(question, max_len=56) or 'criterion'
+        result[answer_column] = criterion_key
+    return result
+
+
 def _parse_human_answer_to_jsonb(answer_value: Any) -> dict[str, Any]:
     """Convert a CSV human answer value to JSONB format.
 
@@ -415,12 +438,15 @@ def _populate_human_answers_from_csv(
     if not criteria_questions:
         return
 
-    # Build mapping of CSV column index to criterion_key
+    # Build mapping of CSV column index to criterion_key. An explicit Answer
+    # column selected during setup is authoritative for retrospective studies;
+    # the legacy "L1 - <question>" convention remains supported as a fallback.
+    configured_answer_columns = _configured_l1_answer_columns(sr)
     csv_col_to_criterion: dict[int, str] = {}
     for col_idx, col_name in enumerate(include_columns):
-        criterion_key = _match_csv_column_to_criterion(
-            col_name, criteria_questions,
-        )
+        criterion_key = resolve_source_value(
+            configured_answer_columns, col_name,
+        ) or _match_csv_column_to_criterion(col_name, criteria_questions)
         if criterion_key:
             csv_col_to_criterion[col_idx] = criterion_key
 

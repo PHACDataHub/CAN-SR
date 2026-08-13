@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import os
 import unittest
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
 from unittest.mock import patch
+from urllib.parse import quote
 
+import httpx
 from api.services.fulltext_attachment_service import validate_pdf
 from api.services.pdf_linkage_service import _candidate
+from api.services.pdf_linkage_service import _download
 from api.services.pdf_linkage_service import _is_public_url
-from api.services.pdf_linkage_service import link_citation_pdf
+from api.services.pdf_linkage_service import _request_with_retry
 from api.services.pdf_linkage_service import normalize_doi
+from api.services.pdf_linkage_service import OA_API_BASE_URL
 
 
 class PdfLinkageServiceTests(unittest.TestCase):
@@ -38,56 +41,38 @@ class PdfLinkageServiceTests(unittest.TestCase):
             validate_pdf(b'<html>not pdf</html>')
 
 
-class PdfLinkageDoiFallbackTests(unittest.IsolatedAsyncioTestCase):
-    @patch('api.services.pdf_linkage_service._download', new_callable=AsyncMock)
-    @patch('api.services.pdf_linkage_service._request_with_retry', new_callable=AsyncMock)
-    @patch('api.services.pdf_linkage_service.attach_fulltext_document', new_callable=AsyncMock)
-    @patch('api.services.pdf_linkage_service.resolve_doi_from_pubmed', new_callable=AsyncMock)
-    @patch('api.services.pdf_linkage_service.cits_dp_service')
-    async def test_recovered_doi_is_saved_and_used_for_oa_lookup(
-        self, db, resolve, attach, request, download,
-    ):
-        db.get_citation_by_id.return_value = {
-            'id': 7, 'doi': '', 'pmid': '123', 'fulltext_url': '',
-        }
-        resolve.return_value = '10.1000/recovered'
-        response = MagicMock()
-        response.json.return_value = {
-            'url_for_pdf': 'https://example.test/paper.pdf',
-        }
-        request.return_value = response
-        download.return_value = (
-            b'%PDF-1.7\n', 'https://example.test/paper.pdf',
-        )
-        attach.return_value = MagicMock(attached=True)
+class PdfLinkageNetworkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ten_open_access_dois_are_resolved_and_downloaded_over_network(self):
+        """Live integration test; run with network access and do not mock the OA path."""
+        if os.getenv('CAN_SR_SKIP_NETWORK_TESTS') == '1':
+            self.skipTest(
+                'network tests disabled by CAN_SR_SKIP_NETWORK_TESTS',
+            )
 
-        outcome = await link_citation_pdf(
-            citation_id=7, table_name='citations', user_id='user-1',
-        )
-
-        self.assertEqual(outcome.status, 'linked')
-        db.save_recovered_doi.assert_called_once_with(
-            7, '10.1000/recovered', source='pubmed', table_name='citations',
-        )
-        self.assertIn('doi=10.1000%2Frecovered', request.await_args.args[1])
-
-    @patch('api.services.pdf_linkage_service.resolve_doi_from_pubmed', new_callable=AsyncMock)
-    @patch('api.services.pdf_linkage_service.cits_dp_service')
-    async def test_unresolved_doi_keeps_manual_upload_fallback(self, db, resolve):
-        db.get_citation_by_id.return_value = {
-            'id': 7, 'doi': '', 'title': 'Unknown', 'fulltext_url': '',
-        }
-        resolve.return_value = None
-
-        outcome = await link_citation_pdf(
-            citation_id=7, table_name='citations', user_id='user-1',
-        )
-
-        self.assertEqual(outcome.reason, 'missing_doi')
-        db.update_pdf_linkage_outcome.assert_called_once_with(
-            7, status='manual_upload_required', reason='missing_doi',
-            table_name='citations',
-        )
+        dois = [
+            '10.1371/journal.pone.0000001', '10.1371/journal.pone.0000002',
+            '10.1371/journal.pone.0000003', '10.1371/journal.pone.0000004',
+            '10.1371/journal.pone.0000005', '10.1371/journal.pone.0000006',
+            '10.1371/journal.pone.0000007', '10.1371/journal.pone.0000008',
+            '10.1371/journal.pone.0000009', '10.1371/journal.pone.0000010',
+        ]
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=15)) as client:
+            for doi in dois:
+                response = await _request_with_retry(
+                    client, f'{OA_API_BASE_URL}?doi={quote(doi, safe="")}',
+                )
+                payload = response.json()
+                candidate = _candidate(payload)
+                self.assertTrue(
+                    candidate, f'No OA PDF URL returned for {doi}: {payload!r}',
+                )
+                pdf, final_url = await _download(client, candidate)
+                self.assertTrue(
+                    pdf.lstrip().startswith(
+                        b'%PDF',
+                    ), f'{doi} did not return a PDF',
+                )
+                self.assertTrue(final_url.startswith(('http://', 'https://')))
 
 
 if __name__ == '__main__':

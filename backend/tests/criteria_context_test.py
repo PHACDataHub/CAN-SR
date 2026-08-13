@@ -23,6 +23,7 @@ class CriteriaContextTests(unittest.TestCase):
         self.assertEqual(
             result, 'Title: Configured title\nAbstract: Configured abstract\nOther fields: Year: 2025',
         )
+        self.assertIn('Year: 2025', result)
 
     def test_answer_matching_is_formatting_only_and_preserves_raw_value(self) -> None:
         matched = match_answer_label(
@@ -82,3 +83,24 @@ class CriteriaContextTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_only_configured_additional_citation_fields_are_included_in_screening_context():
+    row = {
+        'title': 'Retrospective title',
+        'abstract': 'Retrospective abstract',
+        'journal': 'Journal of Open Studies',
+        'publication_type': 'Retrospective study',
+        'year': '2024',
+    }
+    result = format_title_abstract_context(
+        row, {
+            'title': 'Title', 'abstract': 'Abstract',
+            'l1_include': ['publication_type'],
+        },
+    )
+    assert 'Title: Retrospective title' in result
+    assert 'Abstract: Retrospective abstract' in result
+    assert 'publication_type: Retrospective study' in result
+    assert 'journal:' not in result
+    assert 'year:' not in result
