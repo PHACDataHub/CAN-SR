@@ -77,8 +77,19 @@ export function ScreeningCitationContext({
     resolveConfiguredValue(citation, fields?.title) ?? citation.title
   const abstract =
     resolveConfiguredValue(citation, fields?.abstract) ?? citation.abstract
+  const normalizeHeader = (header: string) =>
+    header
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+  const excluded = new Set(
+    [fields?.title, fields?.abstract]
+      .filter(Boolean)
+      .map((header) => normalizeHeader(String(header))),
+  )
   const other = (fields?.l1_include || [])
-    .filter((header) => header !== fields?.title && header !== fields?.abstract)
+    .filter((header) => !excluded.has(normalizeHeader(header)))
     .map((header) => ({
       header,
       value: resolveConfiguredValue(citation, header),

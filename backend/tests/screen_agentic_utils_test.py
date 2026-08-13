@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from api.screen.agentic_utils import AgentResponseError
 from api.screen.agentic_utils import call_and_parse_agent_response
+from api.screen.agentic_utils import MAX_AGENT_ATTEMPTS
 from api.screen.agentic_utils import parse_agent_xml
 from api.screen.agentic_utils import validate_agent_response
 
@@ -93,3 +94,20 @@ async def test_screening_raises_after_failed_repair():
     assert exc_info.value.parsed.answer == 'Yes'
     assert exc_info.value.parsed.confidence == 0.8
     assert exc_info.value.raw_response.startswith('<answer>Yes</answer>')
+
+
+@pytest.mark.asyncio
+async def test_screening_retries_rationale_generation_up_to_five_attempts():
+    calls = []
+
+    async def call_llm(prompt):
+        calls.append(prompt)
+        return '<answer>Yes</answer><confidence>0.8</confidence>', 'attempt'
+
+    with pytest.raises(AgentResponseError):
+        await call_and_parse_agent_response(
+            'original prompt', stage='screening', call_llm=call_llm,
+        )
+
+    assert MAX_AGENT_ATTEMPTS == 5
+    assert len(calls) == 5

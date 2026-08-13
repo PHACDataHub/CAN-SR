@@ -849,7 +849,7 @@ async def classify_citation(
     citation_fields = canonical.get('citation_fields') or {}
     if payload.citation_text:
         citation_text = payload.citation_text
-    elif citation_fields.get('title') or citation_fields.get('abstract'):
+    elif citation_fields or row:
         citation_text = format_title_abstract_context(row, citation_fields)
     else:
         citation_text = citations_router._build_combined_citation_from_row(

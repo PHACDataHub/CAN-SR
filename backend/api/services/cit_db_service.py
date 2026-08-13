@@ -45,6 +45,7 @@ except Exception:
     settings = None
 
 from .postgres_auth import postgres_server
+from ..criteria.context import resolve_source_value
 
 
 def _safe_rollback(conn) -> None:
@@ -2051,15 +2052,23 @@ class CitsDPService:
 
     def load_include_columns_from_criteria(self, sr_doc: dict[str, Any] | None = None) -> list[str]:
         """
-        Load the 'include' list for L1 screening.
-        Mirrors logic previously embedded in the citations router but kept here
-        so other modules (screen/extract) can reuse it without importing the router.
+        Load every configured citation field for L1 screening.
+
+        The v2 schema stores these in citation_fields.l1_include. Legacy criteria
+        store them in l1.include or at the top level under include. In particular,
+        do not reduce retrospective-study uploads to title/abstract: every selected
+        CSV field is part of the screening context.
         """
         # 1) try SR-specific parsed criteria
         try:
             if sr_doc and isinstance(sr_doc, dict):
                 cp = sr_doc.get('criteria_parsed') or sr_doc.get('criteria')
                 if cp and isinstance(cp, dict):
+                    citation_fields = cp.get('citation_fields')
+                    if isinstance(citation_fields, dict):
+                        inc_fields = citation_fields.get('l1_include')
+                        if isinstance(inc_fields, list) and inc_fields:
+                            return inc_fields
                     if 'l1' in cp and isinstance(cp.get('l1'), dict):
                         inc = cp.get('l1', {}).get('include')
                         if isinstance(inc, list) and inc:
@@ -2096,8 +2105,7 @@ class CitsDPService:
         if not row:
             return ''
         for col in include_columns:
-            snake = snake_case(col)
-            val = row.get(snake)
+            val = resolve_source_value(row, col)
             if val is None:
                 continue
             parts.append(f"{col}: {val}  \n")

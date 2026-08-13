@@ -206,17 +206,17 @@ export default function CitationsListPage({
 
   const [metricsDrawerOpen, setMetricsDrawerOpen] = useState<boolean>(false)
 
-  // Draft editing: user can adjust thresholds locally, then click Save.
+  // Slider edits are persisted on commit; this draft prevents stale updates.
   const [draftThresholds, setDraftThresholds] = useState<Record<
     string,
     any
   > | null>(null)
-  const [thresholdsDirty, setThresholdsDirty] = useState<boolean>(false)
-  const [savingThresholds, setSavingThresholds] = useState<boolean>(false)
 
   // Run-all job tracking (persist across modal close / refresh)
-  const [runAllSkipExistingAI, setRunAllSkipExistingAI] = useState<boolean>(false)
-  const [runAllSkipExistingHuman, setRunAllSkipExistingHuman] = useState<boolean>(false)
+  const [runAllSkipExistingAI, setRunAllSkipExistingAI] =
+    useState<boolean>(false)
+  const [runAllSkipExistingHuman, setRunAllSkipExistingHuman] =
+    useState<boolean>(false)
   const [runAllJobId, setRunAllJobId] = useState<string | null>(null)
   const [runAllJob, setRunAllJob] = useState<any | null>(null)
   const [runAllStarting, setRunAllStarting] = useState<boolean>(false)
@@ -411,7 +411,6 @@ export default function CitationsListPage({
         setDraftThresholds(
           typeof thresholds === 'object' && thresholds ? thresholds : {},
         )
-        setThresholdsDirty(false)
 
         // 2) metrics
         const mRes = await fetch(
@@ -477,7 +476,6 @@ export default function CitationsListPage({
     async (nextThresholds: Record<string, any>) => {
       if (!srId) return
       try {
-        setSavingThresholds(true)
         const headers = {
           ...getAuthHeaders(),
           'Content-Type': 'application/json',
@@ -494,14 +492,13 @@ export default function CitationsListPage({
         if (res.ok) {
           setSrThresholds(j?.screening_thresholds || nextThresholds)
           setDraftThresholds(j?.screening_thresholds || nextThresholds)
-          setThresholdsDirty(false)
           // Refresh metrics so counts reflect the new thresholds.
           setMetricsRefreshKey((k) => k + 1)
         }
       } catch {
         // ignore
       } finally {
-        setSavingThresholds(false)
+        // The control saves on pointer/key commit; no explicit save state is shown.
       }
     },
     [srId],
@@ -783,7 +780,8 @@ export default function CitationsListPage({
                 checked={runAllSkipExistingHuman}
                 onChange={(e) => setRunAllSkipExistingHuman(e.target.checked)}
               />
-              {dict?.screening?.skipExistingHuman || 'Skip existing human answers'}
+              {dict?.screening?.skipExistingHuman ||
+                'Skip existing human answers'}
             </label>
 
             <DialogFooter className="gap-2">
@@ -820,15 +818,6 @@ export default function CitationsListPage({
                   criterionMetrics={srCriterionMetrics}
                   calibration={srCalibration}
                   showFilter={false}
-                  thresholdsDirty={thresholdsDirty}
-                  savingThresholds={savingThresholds}
-                  onSaveThresholds={() => {
-                    const next =
-                      draftThresholds && typeof draftThresholds === 'object'
-                        ? draftThresholds
-                        : {}
-                    void persistThresholds(next)
-                  }}
                   onCriterionThresholdChange={(criterionKey, v) => {
                     // Update draft per-step thresholds
                     const base =
@@ -844,7 +833,6 @@ export default function CitationsListPage({
                     stepMap[criterionKey] = v
                     ;(base as any)[stepKey] = stepMap
                     setDraftThresholds(base)
-                    setThresholdsDirty(true)
                   }}
                   onCriterionThresholdCommit={(criterionKey, v) => {
                     // Ensure draft is updated and then persist.
@@ -861,7 +849,6 @@ export default function CitationsListPage({
                     stepMap[criterionKey] = v
                     ;(base as any)[stepKey] = stepMap
                     setDraftThresholds(base)
-                    setThresholdsDirty(true)
                     void persistThresholds(base)
                   }}
                 />

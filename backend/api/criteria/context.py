@@ -64,12 +64,18 @@ def format_title_abstract_context(
 ) -> str:
     title = resolve_source_value(row, citation_fields.get('title'))
     abstract = resolve_source_value(row, citation_fields.get('abstract'))
-    excluded = {citation_fields.get('title'), citation_fields.get('abstract')}
+    excluded = {
+        _normalize_key(str(citation_fields.get('title') or '')),
+        _normalize_key(str(citation_fields.get('abstract') or '')),
+    }
     pairs = []
     for header in citation_fields.get('l1_include') or []:
-        if header in excluded:
+        if _normalize_key(str(header)) in excluded:
             continue
-        pairs.append(f"{header}: {resolve_source_value(row, header) or ''}")
+        value = resolve_source_value(row, header)
+        if value is None or not str(value).strip():
+            continue
+        pairs.append(f"{header}: {value}")
     other = '; '.join(pairs) or '(none configured)'
     return f"Title: {title or ''}\nAbstract: {abstract or ''}\nOther fields: {other}"
 

@@ -16,6 +16,9 @@ from typing import Literal
 from typing import TypeVar
 
 
+MAX_AGENT_ATTEMPTS = 5
+
+
 @dataclass
 class ParsedAgentXML:
     answer: str
@@ -196,31 +199,41 @@ async def call_and_parse_agent_response(
     stage: AgentStage,
     call_llm: Callable[[str], Awaitable[tuple[str, TCallMetadata]]],
 ) -> tuple[str, ParsedAgentXML, TCallMetadata, bool]:
-    """Call an agent and make one repair attempt when its stage contract is invalid."""
-    raw, metadata = await call_llm(prompt)
-    parsed = parse_agent_xml(raw)
-    missing = validate_agent_response(parsed, stage=stage)
-    if not missing:
-        return raw, parsed, metadata, False
+    """Call an agent up to five times, repairing invalid screening responses."""
+    request_prompt = prompt
+    raw: str = ''
+    metadata: TCallMetadata = None  # type: ignore[assignment]
+    parsed = parse_agent_xml('')
+    missing: list[str] = []
 
-    repair_prompt = build_repair_prompt(
-        raw_response=raw,
-        stage=stage,
-        original_prompt=prompt,
-    )
-    repaired_raw, repaired_metadata = await call_llm(repair_prompt)
-    repaired = parse_agent_xml(repaired_raw)
-    repaired_missing = validate_agent_response(repaired, stage=stage)
-    if repaired_missing:
-        fields = ', '.join(repaired_missing)
-        raise AgentResponseError(
-            f'{stage.capitalize()} agent response missing or invalid fields after repair: {fields}',
-            raw_response=repaired_raw,
-            parsed=repaired,
-            metadata=repaired_metadata,
-            missing_fields=repaired_missing,
+    for attempt in range(MAX_AGENT_ATTEMPTS):
+        raw, metadata = await call_llm(request_prompt)
+        parsed = parse_agent_xml(raw)
+        missing = validate_agent_response(parsed, stage=stage)
+        if not missing:
+            return raw, parsed, metadata, attempt > 0
+        request_prompt = build_repair_prompt(
+            raw_response=raw,
+            stage=stage,
+            original_prompt=prompt,
         )
-    return repaired_raw, repaired, repaired_metadata, True
+
+    if missing:
+        fields = ', '.join(missing)
+        raise AgentResponseError(
+            f'{stage.capitalize()} agent response missing or invalid fields after {MAX_AGENT_ATTEMPTS} attempts: {fields}',
+            raw_response=raw,
+            parsed=parsed,
+            metadata=metadata,
+            missing_fields=missing,
+        )
+    raise AgentResponseError(
+        f'{stage.capitalize()} agent response could not be parsed after {MAX_AGENT_ATTEMPTS} attempts',
+        raw_response=raw,
+        parsed=parsed,
+        metadata=metadata,
+        missing_fields=[],
+    )
 
 
 def resolve_option(raw_answer: str, options: list[str]) -> str:

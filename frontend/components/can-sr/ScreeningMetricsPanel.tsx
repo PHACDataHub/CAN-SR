@@ -123,14 +123,6 @@ export type ScreeningMetricsPanelProps = {
   onOpenDetails?: () => void
 
   /**
-   * Optional save controls for per-criterion thresholds.
-   * When provided, the save button will be shown in the Criteria header.
-   */
-  thresholdsDirty?: boolean
-  savingThresholds?: boolean
-  onSaveThresholds?: () => void
-
-  /**
    * Some layouts want the Filter control above the main list view instead of in the metrics panel.
    */
   showFilter?: boolean
@@ -158,9 +150,6 @@ export default function ScreeningMetricsPanel({
   onCriterionThresholdCommit,
   calibration,
   onOpenDetails,
-  thresholdsDirty,
-  savingThresholds,
-  onSaveThresholds,
   showFilter = true,
   filterMode,
   onFilterModeChange,
@@ -448,27 +437,19 @@ export default function ScreeningMetricsPanel({
         {/* Removed page-local workload summary (we want SR-wide progress only). */}
 
         {criterionMetrics?.length ? (
-          <div className="rounded-md border border-gray-100 bg-gray-50 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium text-gray-700">Criteria</div>
-              {onSaveThresholds ? (
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] text-gray-600">
-                    {thresholdsDirty ? 'Unsaved changes' : 'Up to date'}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onSaveThresholds}
-                    disabled={!thresholdsDirty || savingThresholds}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
-                  >
-                    {savingThresholds ? 'Saving…' : 'Save thresholds'}
-                  </button>
+          <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <div>
+              <div>
+                <div className="text-xs font-semibold text-gray-800">
+                  Criteria thresholds
                 </div>
-              ) : null}
+                <div className="mt-0.5 text-[11px] text-gray-600">
+                  Minimum AI confidence for automatic resolution
+                </div>
+              </div>
             </div>
 
-            <div className="mt-2 space-y-2">
+            <div className="mt-3 space-y-2">
               {criterionMetrics.map((c) => {
                 const thresholdPercent =
                   sliderPercents[c.criterion_key] ??
@@ -498,17 +479,23 @@ export default function ScreeningMetricsPanel({
                   const value = Math.max(0, Math.min(100, Math.round(percent)))
                   onCriterionThresholdCommit?.(c.criterion_key, value / 100)
                 }
+                const applyRecommendedThreshold = () => {
+                  if (rec === null) return
+                  const percent = Math.round(rec * 100)
+                  updateThreshold(percent)
+                  commitThreshold(percent)
+                }
 
                 return (
                   <div
                     key={c.criterion_key}
-                    className="flex items-start gap-4 rounded border border-gray-100 bg-white p-2"
+                    className="flex items-start gap-4 rounded-md border border-gray-100 bg-white p-3 shadow-sm"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-gray-800">
+                      <div className="truncate text-xs font-semibold text-gray-900">
                         {c.label}
                       </div>
-                      <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
+                      <div className="mt-1 space-y-0.5 text-[11px] text-gray-600">
                         {npvPct !== null ? <div>NPV: {npvPct}%</div> : null}
                         {c.has_run_count > 0 ? (
                           <div>
@@ -527,16 +514,19 @@ export default function ScreeningMetricsPanel({
                         ) : null}
                       </div>
                     </div>
-
-                    <div className="w-44 shrink-0">
-                      <div className="mb-1 flex items-center gap-1 text-[10px] text-gray-500">
+                    <div className="w-36 shrink-0">
+                      <div className="flex items-center justify-between text-[11px] text-gray-500">
                         <span>Threshold</span>
                         <span className="font-medium text-gray-700">
                           {thresholdPercent}%
                         </span>
                       </div>
+                      <div className="flex justify-between text-[9px] text-gray-400">
+                        <span>0%</span>
+                        <span>100%</span>
+                      </div>
                       <div
-                        className="relative cursor-pointer pt-7"
+                        className="relative h-6 cursor-pointer touch-none select-none"
                         role="slider"
                         tabIndex={0}
                         aria-label={`Threshold for ${c.label}`}
@@ -581,35 +571,41 @@ export default function ScreeningMetricsPanel({
                           commitThreshold(next)
                         }}
                       >
-                        {rec !== null ? (
-                          <div
-                            className="pointer-events-none absolute top-0 bottom-0 z-10 w-px"
-                            style={{ left: `${rec * 100}%` }}
-                            aria-hidden="true"
-                          >
-                            <span className="absolute top-0 left-1/2 -translate-x-1/2 text-[9px] font-medium whitespace-nowrap text-amber-700">
-                              Rec {Math.round(rec * 100)}%
-                            </span>
-                            <span className="absolute top-3 bottom-0 left-0 w-px bg-amber-500" />
+                        <div className="absolute top-2 w-full">
+                          <div className="relative h-1 w-full rounded-full bg-gray-200">
+                            <div
+                              className="absolute inset-y-0 left-0 rounded-full bg-emerald-600"
+                              style={{ width: `${thresholdPercent}%` }}
+                            />
+                            {rec !== null ? (
+                              <span
+                                className="pointer-events-none absolute top-0 bottom-[-0.5rem] z-10 w-px bg-emerald-800"
+                                style={{ left: `${rec * 100}%` }}
+                                aria-hidden="true"
+                              />
+                            ) : null}
+                            <div
+                              className="absolute top-1/2 z-20 h-4 w-4 rounded-full border-2 border-white bg-emerald-600 shadow-sm ring-1 ring-emerald-700"
+                              style={{
+                                left: `${thresholdPercent}%`,
+                                transform: 'translate(-50%, -50%)',
+                              }}
+                            />
                           </div>
-                        ) : null}
-                        <div className="relative h-1 w-full rounded-full bg-gray-300">
-                          <div
-                            className="absolute inset-y-0 left-0 rounded-full bg-blue-600"
-                            style={{ width: `${thresholdPercent}%` }}
-                          />
-                          <div
-                            className="absolute top-1/2 h-4 w-4 rounded-full bg-blue-600 shadow-sm"
-                            style={{
-                              left: `${thresholdPercent}%`,
-                              transform: 'translate(-50%, -50%)',
-                            }}
-                          />
                         </div>
                       </div>
-                      <div className="mt-0.5 flex justify-between text-[9px] text-gray-400">
-                        <span>0%</span>
-                        <span>100%</span>
+                      <div className="relative h-3">
+                        {rec !== null ? (
+                          <button
+                            type="button"
+                            className="absolute -top-1 flex -translate-x-1/2 cursor-pointer items-center text-[11px] leading-none font-medium whitespace-nowrap text-emerald-900 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-700"
+                            style={{ left: `${rec * 100}%` }}
+                            aria-label={`Use recommended threshold (${Math.round(rec * 100)}%)`}
+                            onClick={applyRecommendedThreshold}
+                          >
+                            Rec.
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
