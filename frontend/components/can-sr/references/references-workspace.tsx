@@ -1,8 +1,20 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
-import { Plus } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  CircleX,
+  CornerDownLeft,
+  Eye,
+  EyeOff,
+  Filter,
+  Plus,
+  Settings,
+  Play,
+} from 'lucide-react'
 import { authenticatedFetch } from '@/lib/auth'
 import {
   Dialog,
@@ -13,6 +25,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 type Props = {
   srId: string
@@ -25,18 +38,53 @@ type Citation = Record<string, unknown>
 type WorkspacePage = {
   citations: Citation[]
   total_count: number
-  page: number
-  page_size: number
   columns: string[]
   available_columns?: string[]
   sort: string
   direction: 'asc' | 'desc'
   query_fingerprint: string
+  duplicate_fields?: string[]
+  duplicate_counts?: Record<string, number>
+  duplicate_groups?: Array<{
+    group_id: string
+    citation_ids: number[]
+    status: string
+    members: Citation[]
+    suggested_survivor_id?: number | null
+    survivor_reason?: string | null
+    review?: DuplicateReview | null
+  }>
+  dataset_revision?: unknown
+  duplicate_run?: {
+    run_id?: string | null
+    status?: 'succeeded' | 'not_run'
+  }
+}
+
+type DuplicateReview = {
+  group_id: string
+  decision: 'confirmed_duplicate' | 'not_duplicate' | 'deferred'
+  survivor_id?: number | null
+  stale?: boolean
+}
+
+type DuplicateGroup = NonNullable<WorkspacePage['duplicate_groups']>[number]
+
+const memberIds = (group: DuplicateGroup) =>
+  group.members
+    .map((member) => Number(member.id))
+    .filter((id) => Number.isFinite(id))
+
+const validMemberId = (group: DuplicateGroup, id: unknown) => {
+  const numericId = Number(id)
+  return memberIds(group).includes(numericId) ? numericId : undefined
 }
 
 export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [includeDuplicates, setIncludeDuplicates] = useState(false)
+  const [hasDuplicates, setHasDuplicates] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -44,10 +92,19 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [workspaceError, setWorkspaceError] = useState('')
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [draftSearch, setDraftSearch] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [draftFilters, setDraftFilters] = useState<Record<string, string>>({})
+  const [openFilter, setOpenFilter] = useState<string | null>(null)
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [resizingColumn, setResizingColumn] = useState<string | null>(null)
+  const resizeStart = useRef<{
+    column: string
+    x: number
+    width: number
+  } | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [deleting, setDeleting] = useState(false)
-  const [page, setPage] = useState(1)
   const [sort, setSort] = useState('id')
   const [direction, setDirection] = useState<'asc' | 'desc'>('asc')
   const [visibleColumns, setVisibleColumns] = useState<string[] | null>(null)
@@ -55,6 +112,26 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [draftColumns, setDraftColumns] = useState<string[]>([])
   const [columnsSaving, setColumnsSaving] = useState(false)
   const [datasetReady, setDatasetReady] = useState(Boolean(hasDataset))
+  const [selectedDatabase, setSelectedDatabase] = useState('')
+  const [searchStrings, setSearchStrings] = useState<Record<string, string>>({})
+  const [duplicateStatus, setDuplicateStatus] = useState('')
+  const [duplicateFilterOpen, setDuplicateFilterOpen] = useState(false)
+  const [draftDuplicateStatus, setDraftDuplicateStatus] = useState('')
+  const [dedupOpen, setDedupOpen] = useState(false)
+  const [dedupFields, setDedupFields] = useState<string[]>([])
+  const [draftDedupFields, setDraftDedupFields] = useState<string[]>([])
+  const [dedupRunning, setDedupRunning] = useState(false)
+  const [dedupRunStatus, setDedupRunStatus] = useState<
+    'not_run' | 'succeeded' | 'stale'
+  >('not_run')
+  const [reviewGroupIndex, setReviewGroupIndex] = useState(0)
+  const [reviews, setReviews] = useState<DuplicateReview[]>([])
+  const [selectedSurvivors, setSelectedSurvivors] = useState<
+    Record<string, number>
+  >({})
+  const [reviewMinimized, setReviewMinimized] = useState(false)
+  const [reviewSaving, setReviewSaving] = useState(false)
+  const [selectionMenuOpen, setSelectionMenuOpen] = useState(false)
 
   useEffect(() => {
     setDatasetReady(Boolean(hasDataset))
@@ -69,8 +146,6 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     setWorkspaceError('')
     const params = new URLSearchParams({
       sr_id: srId,
-      page: String(page),
-      page_size: '25',
       sort,
       direction,
     })
@@ -80,6 +155,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     )
     if (Object.keys(activeFilters).length)
       params.set('filters', JSON.stringify(activeFilters))
+    if (duplicateStatus) params.set('duplicate_status', duplicateStatus)
     if (visibleColumns?.length) params.set('columns', visibleColumns.join(','))
     const response = await authenticatedFetch(
       `/api/can-sr/citations/workspace?${params}`,
@@ -91,6 +167,9 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       return
     }
     setWorkspace(data)
+    setDedupRunStatus(
+      data?.duplicate_run?.status === 'succeeded' ? 'succeeded' : 'not_run',
+    )
   }
 
   useEffect(() => {
@@ -100,12 +179,12 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   }, [
     srId,
     datasetReady,
-    page,
     search,
     filters,
     sort,
     direction,
     visibleColumns,
+    duplicateStatus,
   ])
 
   useEffect(() => {
@@ -118,15 +197,157 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       if (response.ok && Array.isArray(data?.columns) && data.columns.length) {
         setVisibleColumns(data.columns)
       }
+      const dedupResponse = await authenticatedFetch(
+        `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
+      )
+      const dedupData = await dedupResponse.json().catch(() => ({}))
+      if (dedupResponse.ok && Array.isArray(dedupData?.fields)) {
+        setDedupFields(dedupData.fields)
+      }
+      const reviewResponse = await authenticatedFetch(
+        `/api/can-sr/citations/workspace/duplicate-reviews?sr_id=${encodeURIComponent(srId)}`,
+      )
+      const reviewData = await reviewResponse.json().catch(() => ({}))
+      if (reviewResponse.ok && Array.isArray(reviewData?.reviews))
+        setReviews(reviewData.reviews)
     })()
   }, [srId, datasetReady])
+
+  useEffect(() => {
+    setSelectedIds([])
+    setReviewGroupIndex(0)
+  }, [search, filters, sort, direction, visibleColumns, duplicateStatus])
+
+  useEffect(() => {
+    const groups = workspace?.duplicate_groups || []
+    if (!groups.length) {
+      setReviewGroupIndex(0)
+      return
+    }
+    setReviewGroupIndex((current) => {
+      return Math.min(current, groups.length - 1)
+    })
+  }, [workspace, reviews])
+
+  useEffect(() => {
+    const groups = workspace?.duplicate_groups || []
+    if (!groups.length) {
+      setSelectedSurvivors({})
+      return
+    }
+    setSelectedSurvivors((current) => {
+      const next: Record<string, number> = {}
+      for (const group of groups) {
+        const savedReview =
+          group.review ||
+          reviews.find((review) => review.group_id === group.group_id)
+        const selected =
+          validMemberId(group, current[group.group_id]) ??
+          validMemberId(group, savedReview?.survivor_id) ??
+          validMemberId(group, group.suggested_survivor_id) ??
+          memberIds(group)[0]
+        if (selected !== undefined) next[group.group_id] = selected
+      }
+      return next
+    })
+  }, [workspace, reviews])
 
   const close = () => {
     setOpen(false)
     setFile(null)
+    setIncludeDuplicates(false)
+    setHasDuplicates(false)
     setWarnings([])
     setMessage('')
+    setSelectedDatabase('')
+    setSearchStrings({})
   }
+
+  const searchDatabases = async () => {
+    if (!selectedDatabase) return
+    setBusy(true)
+    setMessage('')
+    const response = await authenticatedFetch(
+      `/api/can-sr/search?sr_id=${encodeURIComponent(srId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          database: selectedDatabase,
+          search_term: searchStrings[selectedDatabase] || '',
+        }),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    setBusy(false)
+    setMessage(
+      response.ok
+        ? data?.message || copy.searchCompleted || 'Database search completed.'
+        : data?.error ||
+            data?.detail ||
+            copy.searchFailed ||
+            'Database search failed.',
+    )
+  }
+
+  const applyFilter = (column: string) => {
+    setFilters((current) => ({
+      ...current,
+      [column]: (draftFilters[column] || '').trim(),
+    }))
+    setOpenFilter(null)
+  }
+
+  const clearFilter = (column: string) => {
+    setDraftFilters((current) => ({ ...current, [column]: '' }))
+    setFilters((current) => {
+      const next = { ...current }
+      delete next[column]
+      return next
+    })
+    setOpenFilter(null)
+  }
+
+  const beginResize = (
+    column: string,
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    resizeStart.current = {
+      column,
+      x: event.clientX,
+      width: columnWidths[column] || 160,
+    }
+    setResizingColumn(column)
+    window.addEventListener('pointermove', resizeColumn)
+    window.addEventListener('pointerup', endResize)
+    window.addEventListener('pointercancel', endResize)
+  }
+
+  const resizeColumn = (event: PointerEvent) => {
+    const start = resizeStart.current
+    if (!start) return
+    setColumnWidths((current) => ({
+      ...current,
+      [start.column]: Math.max(96, start.width + event.clientX - start.x),
+    }))
+  }
+
+  const endResize = () => {
+    resizeStart.current = null
+    setResizingColumn(null)
+    window.removeEventListener('pointermove', resizeColumn)
+    window.removeEventListener('pointerup', endResize)
+    window.removeEventListener('pointercancel', endResize)
+  }
+
+  const tableWidth =
+    152 +
+    (workspace?.columns || []).reduce(
+      (total, column) => total + (columnWidths[column] || 160),
+      0,
+    )
 
   const importFile = async () => {
     if (!file) return
@@ -135,6 +356,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     const form = new FormData()
     form.append('file', file)
     form.append('commit_key', crypto.randomUUID())
+    form.append('include_duplicates', String(includeDuplicates))
     const text = await file.text()
     const headerLine = text.split(/\r?\n/, 1)[0] || ''
     const headers = file.name.toLowerCase().endsWith('.csv')
@@ -183,19 +405,54 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       )
       return
     }
+    const importedMessage = (
+      copy.imported || 'Import complete: {count} citations added.'
+    ).replace('{count}', String(data.rows_inserted))
     setMessage(
-      (copy.imported || 'Import complete: {count} citations added.').replace(
-        '{count}',
-        String(data.rows_inserted),
-      ),
+      data.duplicates_skipped
+        ? `${importedMessage} ${(
+            copy.duplicatesSkipped || '{count} duplicates skipped.'
+          ).replace('{count}', String(data.duplicates_skipped))}`
+        : importedMessage,
     )
     setDatasetReady(true)
     await loadWorkspace()
     setFile(null)
   }
 
+  const checkFileForDuplicates = async (selectedFile: File | null) => {
+    setHasDuplicates(false)
+    setIncludeDuplicates(false)
+    if (!selectedFile) return
+    const form = new FormData()
+    form.append('file', selectedFile)
+    const response = await authenticatedFetch(
+      `/api/can-sr/citations/duplicates/check?sr_id=${encodeURIComponent(srId)}`,
+      { method: 'POST', body: form },
+    )
+    const data = await response.json().catch(() => ({}))
+    if (response.ok) {
+      const duplicateCount = Number(data.duplicates_count)
+      setHasDuplicates(duplicateCount > 0)
+      setWarnings((current) =>
+        duplicateCount > 0
+          ? [
+              ...current.filter(
+                (warning) => !warning.includes('__duplicate_warning__'),
+              ),
+              `__duplicate_warning__${(
+                copy.duplicatesDetected ||
+                '{count} duplicate references detected. They will be merged unless Import Duplicates is selected.'
+              ).replace('{count}', String(duplicateCount))}`,
+            ]
+          : current.filter(
+              (warning) => !warning.includes('__duplicate_warning__'),
+            ),
+      )
+    }
+  }
+
   const toggleSort = (column: string) => {
-    setPage(1)
     if (sort === column) {
       setDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
     } else {
@@ -210,29 +467,162 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
         : [...current, id],
     )
   }
-  const deleteSelected = async () => {
-    if (!selectedIds.length) return
+  const queryPayload = () => ({
+    search: search.trim() || undefined,
+    sort,
+    direction,
+    columns: visibleColumns,
+    filters: Object.fromEntries(
+      Object.entries(filters).filter(([, value]) => value.trim()),
+    ),
+    duplicate_status: duplicateStatus || undefined,
+  })
+  const deleteSelected = async (ids = selectedIds, advanceReview = false) => {
+    if (!ids.length) return false
     setDeleting(true)
     const response = await authenticatedFetch(
       `/api/can-sr/citations/workspace?sr_id=${encodeURIComponent(srId)}`,
       {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ citation_ids: selectedIds }),
+        body: JSON.stringify({
+          citation_ids: ids,
+          query_fingerprint: workspace?.query_fingerprint,
+          query: queryPayload(),
+          confirmed: true,
+        }),
       },
     )
     const data = await response.json().catch(() => ({}))
     setDeleting(false)
     if (!response.ok) {
       setWorkspaceError(data?.error || data?.detail || copy.deleteFailed)
-      return
+      return false
     }
     setSelectedIds([])
     await loadWorkspace()
+    if (advanceReview) setReviewGroupIndex((index) => index + 1)
+    return true
+  }
+  const saveReview = async (
+    groupId: string,
+    decision: DuplicateReview['decision'],
+    survivorId?: number,
+  ) => {
+    setReviewSaving(true)
+    const response = await authenticatedFetch(
+      `/api/can-sr/citations/workspace/duplicate-reviews?sr_id=${encodeURIComponent(srId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          group_id: groupId,
+          decision,
+          survivor_id: survivorId,
+        }),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    setReviewSaving(false)
+    if (!response.ok) {
+      setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
+      return
+    }
+    setReviews((current) => [
+      ...current.filter((review) => review.group_id !== groupId),
+      data,
+    ])
+    await loadWorkspace()
+  }
+  const getReviewSurvivor = (group: DuplicateGroup) => {
+    const savedReview =
+      group.review ||
+      reviews.find((review) => review.group_id === group.group_id)
+    return (
+      validMemberId(group, selectedSurvivors[group.group_id]) ??
+      validMemberId(group, savedReview?.survivor_id) ??
+      validMemberId(group, group.suggested_survivor_id) ??
+      memberIds(group)[0]
+    )
+  }
+  const openDuplicateGroup = (groupId: unknown) => {
+    const visibleIds = new Set(
+      (workspace?.citations || []).map((citation) => Number(citation.id)),
+    )
+    const reviewGroups = (workspace?.duplicate_groups || []).filter((group) =>
+      group.citation_ids.some((id) => visibleIds.has(Number(id))),
+    )
+    const groupIndex = reviewGroups.findIndex(
+      (group) => group.group_id === String(groupId),
+    )
+    if (groupIndex >= 0) {
+      setReviewMinimized(false)
+      setReviewGroupIndex(groupIndex)
+    }
   }
   const openColumns = () => {
     setDraftColumns(workspace?.columns || visibleColumns || ['id'])
     setColumnsOpen(true)
+  }
+  const openDeduplication = () => {
+    setDraftDedupFields(
+      dedupFields.length
+        ? dedupFields
+        : workspace?.columns.filter(
+            (column) => column !== 'id' && column !== 'provenance',
+          ) || [],
+    )
+    setDedupOpen(true)
+  }
+  const saveDeduplication = async () => {
+    const merged = [
+      ...new Set(
+        [...dedupFields, ...draftDedupFields].filter(
+          (field) => field !== 'id' && field !== 'provenance',
+        ),
+      ),
+    ]
+    const response = await authenticatedFetch(
+      `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: merged }),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
+      return
+    }
+    setDedupFields(data.fields || merged)
+    setDedupRunStatus('stale')
+    setDedupOpen(false)
+    await loadWorkspace()
+  }
+  const runDeduplication = async () => {
+    setDedupRunning(true)
+    setWorkspaceError('')
+    const response = await authenticatedFetch(
+      `/api/can-sr/citations/workspace/duplicate-runs?sr_id=${encodeURIComponent(srId)}`,
+      { method: 'POST' },
+    )
+    const data = await response.json().catch(() => ({}))
+    setDedupRunning(false)
+    if (!response.ok) {
+      setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
+      return
+    }
+    setDedupRunStatus('succeeded')
+    await loadWorkspace()
+  }
+  const openDuplicateFilter = () => {
+    setDraftDuplicateStatus(duplicateStatus)
+    setDuplicateFilterOpen(true)
+  }
+  const applyDuplicateFilter = () => {
+    setDuplicateStatus(draftDuplicateStatus)
+    setDuplicateFilterOpen(false)
   }
   const toggleColumn = (column: string) => {
     if (column === 'id') return
@@ -273,78 +663,120 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       return
     }
     setVisibleColumns(columns)
-    setPage(1)
     setColumnsOpen(false)
+    const mergedDedupFields = [
+      ...new Set([
+        ...dedupFields,
+        ...columns.filter(
+          (column) => column !== 'id' && column !== 'provenance',
+        ),
+      ]),
+    ]
+    const dedupResponse = await authenticatedFetch(
+      `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: mergedDedupFields }),
+      },
+    )
+    if (dedupResponse.ok) setDedupFields(mergedDedupFields)
   }
 
   return (
     <>
       <section className="mt-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="mr-auto">
+          <div className="min-w-0 flex-1">
             <h4 className="text-lg font-semibold">{copy.gridTitle}</h4>
             <p className="mt-1 text-sm text-gray-600">
               {datasetReady ? copy.datasetReady : copy.empty}
             </p>
           </div>
-          <Link
-            className="rounded-md border px-3 py-2 text-sm font-medium"
-            href={`/can-sr/search?sr_id=${encodeURIComponent(srId)}`}
-          >
-            {copy.databaseSearch}
-          </Link>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white"
-          >
-            <Plus className="h-4 w-4" />
-            {copy.add}
-          </button>
           {datasetReady ? (
+            <div className="flex w-full flex-wrap items-end gap-2 sm:w-auto sm:flex-nowrap">
+              <div className="min-w-0 flex-1 sm:w-80 sm:flex-none">
+                <label
+                  htmlFor="reference-search"
+                  className="mb-1 block text-xs font-semibold text-gray-700"
+                >
+                  {copy.search}
+                </label>
+                <div className="relative">
+                  <input
+                    id="reference-search"
+                    className="block h-9 w-full rounded-md border px-2.5 pr-20 text-sm font-normal"
+                    type="search"
+                    value={draftSearch}
+                    onChange={(event) => {
+                      const nextSearch = event.target.value
+                      setDraftSearch(nextSearch)
+                      if (!nextSearch.trim()) {
+                        setSearch('')
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        setSearch(draftSearch)
+                      }
+                    }}
+                  />
+                  {draftSearch.trim() ? (
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 text-[11px] text-gray-500">
+                      <CornerDownLeft
+                        className="h-3.5 w-3.5"
+                        aria-hidden="true"
+                      />
+                      <kbd className="rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 font-sans text-[10px] leading-none font-medium">
+                        Enter
+                      </kbd>
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(true)}
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {copy.add}
+              </button>
+              {selectedIds.length ? (
+                <button
+                  type="button"
+                  onClick={() => void deleteSelected()}
+                  disabled={deleting}
+                  className="inline-flex h-9 shrink-0 items-center rounded-md bg-red-700 px-3 text-sm font-medium text-white disabled:opacity-40"
+                >
+                  {deleting
+                    ? copy.deleting
+                    : copy.deleteSelected.replace(
+                        '{count}',
+                        String(selectedIds.length),
+                      )}
+                </button>
+              ) : null}
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={openColumns}
-              className="rounded-md border px-3 py-2 text-sm font-medium"
+              onClick={() => setOpen(true)}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white"
             >
-              {copy.columns}
+              <Plus className="h-3.5 w-3.5" />
+              {copy.add}
             </button>
-          ) : null}
-          {selectedIds.length ? (
-            <button
-              type="button"
-              onClick={() => void deleteSelected()}
-              disabled={deleting}
-              className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
-            >
-              {deleting
-                ? copy.working
-                : copy.deleteSelected.replace(
-                    '{count}',
-                    String(selectedIds.length),
-                  )}
-            </button>
-          ) : null}
+          )}
         </div>
         {!datasetReady ? (
           <p className="mt-6 rounded-md border border-dashed p-5 text-sm text-gray-600">
             {copy.empty}
           </p>
         ) : (
-          <div className="mt-6 space-y-3">
-            <label className="block text-sm font-medium">
-              {copy.search}
-              <input
-                className="mt-1 block w-full rounded-md border px-3 py-2 font-normal"
-                type="search"
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value)
-                  setPage(1)
-                }}
-              />
-            </label>
-            {workspaceLoading ? (
+          <div className="mt-5 space-y-3">
+            {workspaceLoading && !workspace ? (
               <p role="status" className="text-sm text-gray-600">
                 {copy.loading}
               </p>
@@ -354,72 +786,736 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                 {workspaceError}
               </p>
             ) : null}
-            {workspace && !workspaceLoading ? (
-              workspace.citations.length ? (
-                <div className="overflow-x-auto rounded-md border">
-                  <table className="min-w-full text-left text-sm">
-                    <thead className="bg-gray-100 text-gray-700">
+            {workspace ? (
+              <>
+                {(() => {
+                  const visibleIds = new Set(
+                    workspace.citations.map((citation) => Number(citation.id)),
+                  )
+                  const reviewGroups = (
+                    workspace.duplicate_groups || []
+                  ).filter((group) =>
+                    group.citation_ids.some((id) => visibleIds.has(Number(id))),
+                  )
+                  const reviewGroup = reviewGroups[reviewGroupIndex]
+                  return reviewGroup ? (
+                    <section
+                      aria-label={copy.duplicateGroupReview}
+                      className="rounded-md border border-amber-200 bg-amber-50 p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h2 className="font-medium text-amber-950">
+                            {copy.duplicateGroupReview}
+                          </h2>
+                          <p className="text-xs text-amber-900">
+                            {copy.groupSummary
+                              .replace(
+                                '{current}',
+                                String(reviewGroupIndex + 1),
+                              )
+                              .replace('{total}', String(reviewGroups.length))
+                              .replace('{status}', reviewGroup.status)
+                              .replace(
+                                '{count}',
+                                String(reviewGroup.members.length),
+                              )}
+                          </p>
+                        </div>
+                        <div>
+                          <button
+                            type="button"
+                            className="text-amber-950 hover:text-amber-800 disabled:opacity-50"
+                            onClick={() =>
+                              setReviewMinimized((minimized) => !minimized)
+                            }
+                            aria-label={`${reviewMinimized ? copy.restore : copy.minimize} ${copy.duplicateGroupReview}`}
+                            title={`${reviewMinimized ? copy.restore : copy.minimize} ${copy.duplicateGroupReview}`}
+                          >
+                            {reviewMinimized ? (
+                              <ChevronDown
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <ChevronUp
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                      {!reviewMinimized ? (
+                        <>
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            {reviewGroup.members.map((member) => (
+                              <article
+                                key={String(member.id)}
+                                className="rounded border bg-white p-2 text-xs"
+                              >
+                                <div className="flex items-center justify-between font-medium">
+                                  <span>
+                                    {copy.record.replace(
+                                      '{id}',
+                                      String(member.id),
+                                    )}
+                                  </span>
+                                  <span>
+                                    {String(member.duplicate_score ?? '—')}
+                                  </span>
+                                </div>
+                                <label className="mt-2 flex items-center gap-2 text-emerald-800">
+                                  <input
+                                    type="radio"
+                                    name={`survivor-${reviewGroup.group_id}`}
+                                    checked={
+                                      getReviewSurvivor(reviewGroup) ===
+                                      Number(member.id)
+                                    }
+                                    onChange={() => {
+                                      const survivorId = Number(member.id)
+                                      setSelectedSurvivors((current) => ({
+                                        ...current,
+                                        [reviewGroup.group_id]: survivorId,
+                                      }))
+                                      void saveReview(
+                                        reviewGroup.group_id,
+                                        'confirmed_duplicate',
+                                        survivorId,
+                                      )
+                                    }}
+                                  />
+                                  {Number(member.id) ===
+                                  reviewGroup.suggested_survivor_id
+                                    ? copy.suggestedSurvivor
+                                    : copy.selectSurvivor}
+                                </label>
+                                {workspace.duplicate_fields?.map((field) => (
+                                  <div
+                                    key={field}
+                                    className="mt-1 grid grid-cols-[7rem_1fr] gap-2"
+                                  >
+                                    <span className="text-gray-500">
+                                      {field}
+                                    </span>
+                                    <span className="break-words">
+                                      {String(member[field] ?? '')}
+                                    </span>
+                                  </div>
+                                ))}
+                              </article>
+                            ))}
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-amber-200 pt-3">
+                            <span className="text-xs font-medium text-amber-950">
+                              {copy.reviewDecision}
+                            </span>
+                            {(
+                              [
+                                ['confirmed_duplicate', copy.confirmDuplicate],
+                                ['not_duplicate', copy.keepBoth],
+                                ['deferred', copy.defer],
+                              ] as const
+                            ).map(([decision, label]) => {
+                              const review =
+                                reviewGroup.review ||
+                                reviews.find(
+                                  (item) =>
+                                    item.group_id === reviewGroup.group_id,
+                                )
+                              if (
+                                decision === 'confirmed_duplicate' &&
+                                review?.decision === 'confirmed_duplicate'
+                              ) {
+                                const survivorId =
+                                  getReviewSurvivor(reviewGroup)
+                                const nonSurvivor = memberIds(reviewGroup).find(
+                                  (id) => id !== survivorId,
+                                )
+                                return (
+                                  <button
+                                    key={decision}
+                                    type="button"
+                                    disabled={deleting || nonSurvivor == null}
+                                    className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                                    onClick={() => {
+                                      if (nonSurvivor == null) return
+                                      void deleteSelected(
+                                        [Number(nonSurvivor)],
+                                        true,
+                                      )
+                                    }}
+                                  >
+                                    {copy.deleteCitation.replace(
+                                      '{id}',
+                                      String(nonSurvivor),
+                                    )}
+                                  </button>
+                                )
+                              }
+                              return (
+                                <button
+                                  key={decision}
+                                  type="button"
+                                  disabled={reviewSaving}
+                                  className={`rounded border px-2 py-1 text-xs disabled:opacity-50 ${review?.decision === decision ? 'border-emerald-600 bg-emerald-100 text-emerald-900' : 'bg-white'}`}
+                                  onClick={() => {
+                                    const survivor =
+                                      getReviewSurvivor(reviewGroup)
+                                    void saveReview(
+                                      reviewGroup.group_id,
+                                      decision,
+                                      decision === 'confirmed_duplicate'
+                                        ? survivor
+                                        : undefined,
+                                    )
+                                  }}
+                                >
+                                  {label}
+                                </button>
+                              )
+                            })}
+                            {(
+                              reviewGroup.review ||
+                              reviews.find(
+                                (item) =>
+                                  item.group_id === reviewGroup.group_id,
+                              )
+                            )?.decision === 'confirmed_duplicate' ? (
+                              <span className="text-xs text-amber-900">
+                                {copy.survivor}:{' '}
+                                {String(getReviewSurvivor(reviewGroup) ?? '')}
+                              </span>
+                            ) : null}
+                            {(
+                              reviewGroup.review ||
+                              reviews.find(
+                                (item) =>
+                                  item.group_id === reviewGroup.group_id,
+                              )
+                            )?.stale ? (
+                              <span className="text-xs text-red-700">
+                                {copy.staleSurvivor ||
+                                  'The saved survivor is no longer in this group; a current member was selected.'}
+                              </span>
+                            ) : null}
+                            <div className="ml-auto flex gap-2">
+                              <button
+                                type="button"
+                                className="rounded border bg-white px-2 py-1 text-xs disabled:opacity-50"
+                                disabled={reviewGroupIndex === 0}
+                                onClick={() =>
+                                  setReviewGroupIndex((index) => index - 1)
+                                }
+                              >
+                                {copy.previous}
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border bg-white px-2 py-1 text-xs disabled:opacity-50"
+                                disabled={
+                                  reviewGroupIndex >= reviewGroups.length - 1
+                                }
+                                onClick={() =>
+                                  setReviewGroupIndex((index) => index + 1)
+                                }
+                              >
+                                {copy.next}
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : null}
+                    </section>
+                  ) : null
+                })()}
+                <div className="max-h-[70vh] overflow-auto rounded-md border">
+                  <table
+                    className="min-w-full table-fixed text-left text-sm"
+                    style={{ width: tableWidth }}
+                  >
+                    <colgroup>
+                      <col style={{ width: 48 }} />
+                      <col style={{ width: 48 }} />
+                      <col style={{ width: 56 }} />
+                      {workspace.columns.map((column) => (
+                        <col
+                          key={column}
+                          style={{ width: columnWidths[column] || 160 }}
+                        />
+                      ))}
+                      <col />
+                    </colgroup>
+                    <thead className="sticky top-0 z-10 bg-gray-100 text-gray-700">
                       <tr>
-                        <th className="px-3 py-2">
-                          <Checkbox
-                            aria-label={
-                              copy.selectAll ||
-                              'Select all citations on this page'
-                            }
-                            checked={
-                              workspace.citations.length > 0 &&
-                              workspace.citations.every((citation) =>
-                                selectedIds.includes(Number(citation.id)),
-                              )
-                            }
-                            onCheckedChange={(checked) => {
-                              const pageIds = workspace.citations.map(
-                                (citation) => Number(citation.id),
-                              )
-                              setSelectedIds((current) =>
-                                checked
-                                  ? [...new Set([...current, ...pageIds])]
-                                  : current.filter(
-                                      (id) => !pageIds.includes(id),
-                                    ),
-                              )
-                            }}
-                          />
+                        <th className="w-12 px-3 py-2 text-right font-normal text-gray-500">
+                          #
                         </th>
-                        {workspace.columns.map((column) => (
-                          <th key={column} className="px-3 py-2 font-semibold">
+                        <th className="w-12 px-3 py-2">
+                          <div className="relative flex items-center gap-1">
+                            <Checkbox
+                              aria-label={copy.selectAll}
+                              checked={
+                                workspace.citations.length > 0 &&
+                                workspace.citations.every((citation) =>
+                                  selectedIds.includes(Number(citation.id)),
+                                )
+                              }
+                              onCheckedChange={() => setSelectionMenuOpen(true)}
+                            />
                             <button
                               type="button"
-                              onClick={() => toggleSort(column)}
-                              className="inline-flex items-center gap-1 hover:underline"
-                              aria-label={copy.sortBy.replace(
-                                '{column}',
-                                column,
-                              )}
+                              aria-label={copy.chooseSelection}
+                              className="rounded p-0.5 text-gray-500 hover:bg-gray-200"
+                              onClick={() =>
+                                setSelectionMenuOpen((open) => !open)
+                              }
                             >
-                              {column}
-                              {sort === column
-                                ? direction === 'asc'
-                                  ? ' ↑'
-                                  : ' ↓'
-                                : ''}
+                              <ChevronDown
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
                             </button>
-                            <input
-                              aria-label={(
-                                copy.filterBy || 'Filter by {column}'
-                              ).replace('{column}', column)}
-                              className="mt-1 block w-full rounded border px-2 py-1 text-xs font-normal"
-                              value={filters[column] || ''}
-                              onChange={(event) => {
-                                setFilters((current) => ({
-                                  ...current,
-                                  [column]: event.target.value,
-                                }))
-                                setPage(1)
-                              }}
+                            {selectionMenuOpen ? (
+                              <div className="absolute top-full left-0 z-30 w-48 rounded-md border bg-white p-1 text-left font-normal shadow-lg">
+                                {[
+                                  [copy.none, []],
+                                  [
+                                    copy.all,
+                                    workspace.citations.map((citation) =>
+                                      Number(citation.id),
+                                    ),
+                                  ],
+                                  [
+                                    copy.suggestedDuplicates,
+                                    (workspace.duplicate_groups || [])
+                                      .filter((group) => {
+                                        const review =
+                                          group.review ||
+                                          reviews.find(
+                                            (item) =>
+                                              item.group_id === group.group_id,
+                                          )
+                                        return (
+                                          review?.decision !== 'not_duplicate'
+                                        )
+                                      })
+                                      .flatMap((group) =>
+                                        group.citation_ids
+                                          .map(Number)
+                                          .filter(
+                                            (id) =>
+                                              id !== getReviewSurvivor(group),
+                                          ),
+                                      )
+                                      .filter((id) =>
+                                        workspace.citations.some(
+                                          (citation) =>
+                                            Number(citation.id) === id,
+                                        ),
+                                      ),
+                                  ],
+                                ].map(([label, ids]) => (
+                                  <button
+                                    key={String(label)}
+                                    type="button"
+                                    className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-gray-100"
+                                    onClick={() => {
+                                      setSelectedIds([
+                                        ...new Set(ids as number[]),
+                                      ])
+                                      setSelectionMenuOpen(false)
+                                    }}
+                                  >
+                                    {String(label)}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </th>
+                        <th className="relative w-14 px-2 py-2 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={openDuplicateFilter}
+                              className={`rounded p-1 ${duplicateStatus ? 'text-emerald-700' : 'text-gray-500'} hover:bg-gray-200`}
+                              aria-label={
+                                duplicateStatus
+                                  ? `${copy.filterDuplicateStatus}: ${duplicateStatus}`
+                                  : copy.showDuplicateStatusFilter
+                              }
+                              title={copy.filterDuplicateStatuses}
+                            >
+                              {duplicateStatus ? (
+                                <Eye className="h-4 w-4" aria-hidden="true" />
+                              ) : (
+                                <EyeOff
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </button>
+                            {duplicateFilterOpen ? (
+                              <div className="absolute top-full left-0 z-30 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
+                                <p className="font-semibold">
+                                  {copy.duplicateStatus}
+                                </p>
+                                <label
+                                  className="mt-2 block text-xs text-gray-600"
+                                  htmlFor="duplicate-status-filter"
+                                >
+                                  {copy.showReferencesMatching}
+                                </label>
+                                <select
+                                  id="duplicate-status-filter"
+                                  className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                                  value={draftDuplicateStatus}
+                                  onChange={(event) =>
+                                    setDraftDuplicateStatus(event.target.value)
+                                  }
+                                >
+                                  <option value="">{copy.allStatuses}</option>
+                                  <option value="exact">
+                                    {copy.exactDuplicates}
+                                  </option>
+                                  <option value="possible">
+                                    {copy.possibleDuplicates}
+                                  </option>
+                                  <option value="no_match">
+                                    {copy.noDuplicateMatch}
+                                  </option>
+                                </select>
+                                <div className="mt-3 flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded border px-2 py-1 text-xs"
+                                    onClick={() =>
+                                      setDuplicateFilterOpen(false)
+                                    }
+                                  >
+                                    {copy.cancel}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white"
+                                    onClick={applyDuplicateFilter}
+                                  >
+                                    {copy.applyFilter}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={openDeduplication}
+                              className="rounded p-1 text-gray-500 hover:bg-gray-200"
+                              aria-label={copy.configureDuplicateFields}
+                              title={copy.configureDuplicateFields}
+                            >
+                              <Settings
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void runDeduplication()}
+                              disabled={dedupRunning}
+                              className={`rounded p-1 hover:bg-gray-200 ${dedupRunStatus === 'stale' ? 'text-amber-600' : 'text-emerald-700'}`}
+                              aria-label={
+                                dedupRunning
+                                  ? copy.runningDuplicateCalculation
+                                  : copy.runDuplicateCalculation
+                              }
+                              title={
+                                dedupRunning
+                                  ? copy.runningDuplicateCalculation
+                                  : dedupRunStatus === 'stale'
+                                    ? copy.rerunDuplicateCalculation
+                                    : copy.runDuplicateCalculation
+                              }
+                            >
+                              <Play
+                                className={`h-4 w-4 ${dedupRunning ? 'animate-pulse' : ''}`}
+                                aria-hidden="true"
+                              />
+                            </button>
+                          </div>
+                          {dedupOpen ? (
+                            <div className="absolute top-full left-0 z-30 w-72 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
+                              <p className="font-semibold">
+                                {copy.duplicateMatchingFields}
+                              </p>
+                              <p className="mt-1 text-xs text-gray-600">
+                                {copy.duplicateFieldsDescription}
+                              </p>
+                              <div className="mt-2 max-h-56 space-y-1 overflow-auto">
+                                {(
+                                  workspace.available_columns ||
+                                  workspace.columns
+                                )
+                                  .filter(
+                                    (column) =>
+                                      column !== 'id' &&
+                                      column !== 'provenance',
+                                  )
+                                  .map((column) => (
+                                    <label
+                                      key={column}
+                                      className="flex items-center gap-2 text-sm"
+                                    >
+                                      <Checkbox
+                                        checked={draftDedupFields.includes(
+                                          column,
+                                        )}
+                                        onCheckedChange={(checked) => {
+                                          setDraftDedupFields((current) =>
+                                            checked
+                                              ? [
+                                                  ...new Set([
+                                                    ...current,
+                                                    column,
+                                                  ]),
+                                                ]
+                                              : current.filter(
+                                                  (value) => value !== column,
+                                                ),
+                                          )
+                                        }}
+                                      />
+                                      {column}
+                                    </label>
+                                  ))}
+                              </div>
+                              <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded border px-2 py-1 text-xs"
+                                  onClick={() => setDedupOpen(false)}
+                                >
+                                  {copy.cancel}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white"
+                                  onClick={() => void saveDeduplication()}
+                                >
+                                  {copy.saveColumns}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </th>
+                        {workspace.columns.map((column) => (
+                          <th
+                            key={column}
+                            className="relative px-3 py-2 font-semibold"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleSort(column)}
+                                className="inline-flex min-w-0 items-center gap-1 truncate hover:underline"
+                                aria-label={copy.sortBy.replace(
+                                  '{column}',
+                                  column,
+                                )}
+                              >
+                                <span className="truncate">{column}</span>
+                                {sort === column
+                                  ? direction === 'asc'
+                                    ? ' ↑'
+                                    : ' ↓'
+                                  : ''}
+                              </button>
+                              {column !== 'id' ? (
+                                <button
+                                  type="button"
+                                  className={`rounded p-1 hover:bg-gray-200 ${filters[column] ? 'text-emerald-700' : 'text-gray-500'}`}
+                                  aria-label={copy.filterBy.replace(
+                                    '{column}',
+                                    column,
+                                  )}
+                                  aria-expanded={openFilter === column}
+                                  onClick={() => {
+                                    setDraftFilters((current) => ({
+                                      ...current,
+                                      [column]: filters[column] || '',
+                                    }))
+                                    setOpenFilter((current) =>
+                                      current === column ? null : column,
+                                    )
+                                  }}
+                                >
+                                  <Filter className="h-3.5 w-3.5" />
+                                </button>
+                              ) : null}
+                            </div>
+                            {column !== 'id' && openFilter === column ? (
+                              <div className="absolute top-full right-1 z-20 mt-1 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
+                                <label className="text-xs font-medium text-gray-700">
+                                  {copy.filterBy.replace('{column}', column)}
+                                  <input
+                                    autoFocus
+                                    className="mt-1 block w-full rounded border px-2 py-1.5 text-sm"
+                                    value={draftFilters[column] || ''}
+                                    onChange={(event) =>
+                                      setDraftFilters((current) => ({
+                                        ...current,
+                                        [column]: event.target.value,
+                                      }))
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter')
+                                        applyFilter(column)
+                                      if (event.key === 'Escape')
+                                        setOpenFilter(null)
+                                    }}
+                                  />
+                                </label>
+                                <div className="mt-2 flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded border px-2 py-1 text-xs"
+                                    onClick={() => clearFilter(column)}
+                                  >
+                                    {copy.clearFilter}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white"
+                                    onClick={() => applyFilter(column)}
+                                  >
+                                    {copy.applyFilter}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              aria-label={`${copy.resizeColumn} ${column}`}
+                              className={`absolute top-0 right-0 z-10 h-full w-2 cursor-col-resize touch-none hover:bg-emerald-500 ${resizingColumn === column ? 'bg-emerald-600' : ''}`}
+                              onPointerDown={(event) =>
+                                beginResize(column, event)
+                              }
+                              onPointerMove={(event) =>
+                                resizeColumn(event.nativeEvent)
+                              }
+                              onPointerUp={endResize}
+                              onPointerCancel={endResize}
                             />
                           </th>
                         ))}
+                        <th aria-hidden="true" />
+                        <th className="relative w-full px-3 py-2 text-left">
+                          <button
+                            type="button"
+                            onClick={openColumns}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded border text-base leading-none hover:bg-gray-200"
+                            aria-label={copy.columns || 'Add or remove columns'}
+                          >
+                            +
+                          </button>
+                          {columnsOpen ? (
+                            <div
+                              role="dialog"
+                              aria-labelledby="columns-panel-title"
+                              className="absolute top-full right-0 z-20 max-h-[min(40rem,calc(100vh-2rem))] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-md border bg-white p-4 text-left font-normal shadow-lg"
+                            >
+                              <div className="mb-3">
+                                <h2
+                                  id="columns-panel-title"
+                                  className="text-lg leading-none font-semibold"
+                                >
+                                  {copy.columnsTitle}
+                                </h2>
+                                <p className="text-muted-foreground mt-2 text-sm">
+                                  {copy.columnsDescription}
+                                </p>
+                              </div>
+                              <div className="space-y-2">
+                                {(
+                                  workspace.available_columns ||
+                                  workspace.columns ||
+                                  []
+                                ).map((column) => (
+                                  <div
+                                    key={column}
+                                    className="flex items-center gap-2 text-sm"
+                                  >
+                                    <label className="flex items-center gap-2">
+                                      <Checkbox
+                                        checked={draftColumns.includes(column)}
+                                        disabled={column === 'id'}
+                                        onCheckedChange={() =>
+                                          toggleColumn(column)
+                                        }
+                                      />
+                                      {column}
+                                    </label>
+                                    {draftColumns.includes(column) &&
+                                    column !== 'id' ? (
+                                      <span className="ml-auto flex gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => moveColumn(column, -1)}
+                                          disabled={
+                                            draftColumns.indexOf(column) <= 1
+                                          }
+                                          className="rounded border px-1 disabled:opacity-40"
+                                          aria-label={copy.moveColumnUp.replace(
+                                            '{column}',
+                                            column,
+                                          )}
+                                        >
+                                          ↑
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => moveColumn(column, 1)}
+                                          disabled={
+                                            draftColumns.indexOf(column) ===
+                                            draftColumns.length - 1
+                                          }
+                                          className="rounded border px-1 disabled:opacity-40"
+                                          aria-label={copy.moveColumnDown.replace(
+                                            '{column}',
+                                            column,
+                                          )}
+                                        >
+                                          ↓
+                                        </button>
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-4 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setColumnsOpen(false)}
+                                  className="rounded-md border px-4 py-2 text-sm"
+                                >
+                                  {copy.cancel}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    columnsSaving || draftColumns.length === 0
+                                  }
+                                  onClick={() => void saveColumns()}
+                                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+                                >
+                                  {columnsSaving
+                                    ? copy.working
+                                    : copy.saveColumns}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -428,11 +1524,15 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                           key={String(citation.id || index)}
                           className="border-t"
                         >
+                          <td className="px-3 py-2 text-right text-gray-500">
+                            {index + 1}
+                          </td>
                           <td className="px-3 py-2">
                             <Checkbox
-                              aria-label={(
-                                copy.selectCitation || 'Select citation {id}'
-                              ).replace('{id}', String(citation.id))}
+                              aria-label={copy.selectCitation.replace(
+                                '{id}',
+                                String(citation.id),
+                              )}
                               checked={selectedIds.includes(
                                 Number(citation.id),
                               )}
@@ -440,6 +1540,89 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                                 toggleSelected(Number(citation.id))
                               }
                             />
+                          </td>
+                          <td
+                            className={`px-2 py-2 text-center ${citation.duplicate_status === 'exact' ? 'bg-red-50 text-red-700' : citation.duplicate_status === 'possible' ? 'bg-amber-50 text-amber-700' : reviews.find((review) => review.group_id === citation.duplicate_group_id)?.decision === 'not_duplicate' ? 'bg-green-50 text-green-700' : 'text-gray-300'}`}
+                            title={
+                              citation.duplicate_status === 'exact'
+                                ? copy.exactDuplicateMatch
+                                : citation.duplicate_status === 'possible'
+                                  ? copy.possibleDuplicateMatch
+                                  : reviews.find(
+                                        (review) =>
+                                          review.group_id ===
+                                          citation.duplicate_group_id,
+                                      )?.decision === 'not_duplicate'
+                                    ? copy.keptBothReviewGroup
+                                    : copy.noDuplicateMatch
+                            }
+                          >
+                            {reviews.find(
+                              (review) =>
+                                review.group_id === citation.duplicate_group_id,
+                            )?.decision === 'not_duplicate' ? (
+                              <button
+                                type="button"
+                                className="mx-auto rounded-sm text-green-700 focus:ring-2 focus:ring-green-600 focus:outline-none"
+                                aria-label={copy.openDuplicateReview.replace(
+                                  '{id}',
+                                  String(citation.id),
+                                )}
+                                title={copy.reviewKeptBothGroup}
+                                onClick={() =>
+                                  openDuplicateGroup(
+                                    citation.duplicate_group_id,
+                                  )
+                                }
+                              >
+                                <CheckCircle
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            ) : citation.duplicate_status === 'exact' ? (
+                              <button
+                                type="button"
+                                className="mx-auto rounded-sm focus:ring-2 focus:ring-red-600 focus:outline-none"
+                                aria-label={copy.openDuplicateReview.replace(
+                                  '{id}',
+                                  String(citation.id),
+                                )}
+                                title={copy.openDuplicateGroupReview}
+                                onClick={() =>
+                                  openDuplicateGroup(
+                                    citation.duplicate_group_id,
+                                  )
+                                }
+                              >
+                                <CircleX
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            ) : citation.duplicate_status === 'possible' ? (
+                              <button
+                                type="button"
+                                className="mx-auto rounded-sm focus:ring-2 focus:ring-amber-600 focus:outline-none"
+                                aria-label={copy.openDuplicateReview.replace(
+                                  '{id}',
+                                  String(citation.id),
+                                )}
+                                title={copy.openDuplicateGroupReview}
+                                onClick={() =>
+                                  openDuplicateGroup(
+                                    citation.duplicate_group_id,
+                                  )
+                                }
+                              >
+                                <AlertCircle
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            ) : (
+                              <span aria-label={copy.noDuplicateMatch}>—</span>
+                            )}
                           </td>
                           {workspace.columns.map((column) => (
                             <td
@@ -449,122 +1632,61 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               {String(citation[column] ?? '')}
                             </td>
                           ))}
+                          <td aria-hidden="true" />
+                        </tr>
+                      ))}
+                      {Array.from({
+                        length: workspace.citations.length === 0 ? 15 : 1,
+                      }).map((_, index) => (
+                        <tr
+                          key={`empty-row-${index}`}
+                          className="border-t"
+                          aria-label={copy.row.replace(
+                            '{number}',
+                            String(workspace.total_count + index + 1),
+                          )}
+                        >
+                          <td className="px-3 py-2 text-right text-gray-500">
+                            {workspace.citations.length > 0 ? (
+                              workspace.total_count + index + 1
+                            ) : (
+                              <span aria-hidden="true" className="block h-5" />
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span aria-hidden="true" className="block h-5" />
+                          </td>
+                          <td className="px-2 py-2">
+                            <span aria-hidden="true" className="block h-5" />
+                          </td>
+                          {workspace.columns.map((column) => (
+                            <td key={column} className="px-3 py-2">
+                              <span aria-hidden="true" className="block h-5" />
+                            </td>
+                          ))}
+                          <td aria-hidden="true" className="py-2">
+                            <span aria-hidden="true" className="block h-5" />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              ) : (
-                <p className="rounded-md border border-dashed p-5 text-sm text-gray-600">
-                  {copy.noMatches}
-                </p>
-              )
+              </>
             ) : null}
-            {workspace && workspace.total_count > workspace.page_size ? (
-              <div className="flex items-center justify-between text-sm">
+            {workspace ? (
+              <div className="text-sm">
                 <span>
                   {copy.results.replace(
                     '{count}',
                     String(workspace.total_count),
                   )}
                 </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1 disabled:opacity-40"
-                    disabled={page === 1}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    {copy.previous}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1 disabled:opacity-40"
-                    disabled={
-                      page * workspace.page_size >= workspace.total_count
-                    }
-                    onClick={() => setPage(page + 1)}
-                  >
-                    {copy.next}
-                  </button>
-                </div>
               </div>
             ) : null}
           </div>
         )}
       </section>
-      <Dialog open={columnsOpen} onOpenChange={setColumnsOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{copy.columnsTitle}</DialogTitle>
-            <DialogDescription>{copy.columnsDescription}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            {(workspace?.available_columns || workspace?.columns || []).map(
-              (column) => (
-                <div key={column} className="flex items-center gap-2 text-sm">
-                  <label className="flex items-center gap-2">
-                    <Checkbox
-                      checked={draftColumns.includes(column)}
-                      disabled={column === 'id'}
-                      onCheckedChange={() => toggleColumn(column)}
-                    />
-                    {column}
-                  </label>
-                  {draftColumns.includes(column) && column !== 'id' ? (
-                    <span className="ml-auto flex gap-1">
-                      <button
-                        type="button"
-                        onClick={() => moveColumn(column, -1)}
-                        disabled={draftColumns.indexOf(column) <= 1}
-                        className="rounded border px-1 disabled:opacity-40"
-                        aria-label={copy.moveColumnUp.replace(
-                          '{column}',
-                          column,
-                        )}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => moveColumn(column, 1)}
-                        disabled={
-                          draftColumns.indexOf(column) ===
-                          draftColumns.length - 1
-                        }
-                        className="rounded border px-1 disabled:opacity-40"
-                        aria-label={copy.moveColumnDown.replace(
-                          '{column}',
-                          column,
-                        )}
-                      >
-                        ↓
-                      </button>
-                    </span>
-                  ) : null}
-                </div>
-              ),
-            )}
-          </div>
-          <DialogFooter>
-            <button
-              type="button"
-              onClick={() => setColumnsOpen(false)}
-              className="rounded-md border px-4 py-2 text-sm"
-            >
-              {copy.cancel}
-            </button>
-            <button
-              type="button"
-              disabled={columnsSaving || draftColumns.length === 0}
-              onClick={() => void saveColumns()}
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-            >
-              {columnsSaving ? copy.working : copy.saveColumns}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog
         open={open}
         onOpenChange={(next) => {
@@ -574,30 +1696,133 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{copy.dialogTitle}</DialogTitle>
+            <DialogTitle>
+              {copy.addReferencesTitle || copy.dialogTitle}
+            </DialogTitle>
             <DialogDescription>{copy.dialogDescription}</DialogDescription>
           </DialogHeader>
-          <label className="block text-sm font-medium">
-            {copy.file}
-            <input
-              className="mt-2 block w-full text-sm"
-              type="file"
-              accept=".csv,.ris,.txt,text/csv,text/plain,application/x-research-info-systems"
-              onChange={(event) => setFile(event.target.files?.[0] || null)}
-            />
-          </label>
-          {warnings.length ? (
-            <ul className="list-disc space-y-1 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          ) : null}
-          {message ? (
-            <p role="status" className="text-sm text-red-700">
-              {message}
-            </p>
-          ) : null}
+          <Tabs defaultValue="upload">
+            <TabsList className="w-full">
+              <TabsTrigger value="upload">
+                {copy.uploadTab || 'Upload file'}
+              </TabsTrigger>
+              <TabsTrigger value="search">
+                {copy.searchTab || 'Search databases'}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="upload" className="space-y-4 pt-3">
+              <label className="flex cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-emerald-300 bg-emerald-50 px-4 py-6 text-center text-sm font-medium text-emerald-900 hover:bg-emerald-100">
+                <span>{file ? copy.changeFile : copy.chooseFile}</span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept=".csv,.ris,.txt,text/csv,text/plain,application/x-research-info-systems"
+                  aria-label={copy.file}
+                  onChange={(event) => {
+                    const selectedFile = event.target.files?.[0] || null
+                    setFile(selectedFile)
+                    void checkFileForDuplicates(selectedFile)
+                  }}
+                />
+              </label>
+              {file ? (
+                <div className="flex items-center justify-between rounded-md border bg-gray-50 px-3 py-2 text-sm">
+                  <span className="truncate">
+                    <strong>{copy.selectedFile}</strong> {file.name} (
+                    {Math.ceil(file.size / 1024)} KB)
+                  </span>
+                  <button
+                    type="button"
+                    className="ml-3 text-xs font-medium text-gray-600 underline"
+                    onClick={() => setFile(null)}
+                  >
+                    {copy.removeFile}
+                  </button>
+                </div>
+              ) : null}
+              {hasDuplicates ? (
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <Checkbox
+                    checked={includeDuplicates}
+                    onCheckedChange={(checked) =>
+                      setIncludeDuplicates(checked === true)
+                    }
+                  />
+                  <span>{copy.includeDuplicates}</span>
+                </label>
+              ) : null}
+              {warnings.length ? (
+                <ul className="list-disc space-y-1 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                  {warnings.map((warning) => (
+                    <li key={warning}>
+                      {warning.replace('__duplicate_warning__', '')}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {message ? (
+                <p role="status" className="text-sm text-red-700">
+                  {message}
+                </p>
+              ) : null}
+            </TabsContent>
+            <TabsContent value="search" className="space-y-3 pt-3">
+              <p className="rounded-md bg-gray-50 p-3 text-sm text-gray-600">
+                {copy.searchDescription}
+              </p>
+              <form
+                className="space-y-3"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void searchDatabases()
+                }}
+              >
+                {['Pubmed', 'Scopus', 'EuropePMC'].map((database) => (
+                  <label
+                    key={database}
+                    className="flex items-center gap-3 rounded-md border p-3"
+                  >
+                    <input
+                      type="radio"
+                      name="database"
+                      value={database}
+                      checked={selectedDatabase === database}
+                      onChange={() => setSelectedDatabase(database)}
+                      className="h-4 w-4"
+                    />
+                    <span className="w-24 font-medium text-gray-800">
+                      {database}
+                    </span>
+                    <input
+                      type="text"
+                      aria-label={`${database} ${copy.searchString}`}
+                      placeholder={copy.searchString}
+                      value={searchStrings[database] || ''}
+                      onChange={(event) =>
+                        setSearchStrings((current) => ({
+                          ...current,
+                          [database]: event.target.value,
+                        }))
+                      }
+                      className="min-w-0 flex-1 rounded-md border px-2 py-1 text-sm"
+                    />
+                  </label>
+                ))}
+                <button
+                  type="submit"
+                  disabled={!selectedDatabase || busy}
+                  className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+                >
+                  {busy ? copy.working : copy.beginSearch}
+                </button>
+              </form>
+              {message ? (
+                <p role="status" className="text-sm text-gray-700">
+                  {message}
+                </p>
+              ) : null}
+            </TabsContent>
+          </Tabs>
           <DialogFooter>
             <button
               type="button"
@@ -612,7 +1837,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
               onClick={() => void importFile()}
               className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
-              {busy ? copy.working : copy.import || 'Import references'}
+              {busy ? copy.working : copy.import}
             </button>
           </DialogFooter>
         </DialogContent>

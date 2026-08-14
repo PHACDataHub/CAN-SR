@@ -20,11 +20,18 @@ class CitationWorkspacePreferencesService:
         conn = postgres_server.conn
         cur = conn.cursor()
         try:
-            cur.execute(
-                '''SELECT columns FROM citation_workspace_column_preferences
-                   WHERE sr_id = %s AND citation_table_name = %s AND user_id = %s''',
-                (sr_id, table_name, user_id),
-            )
+            try:
+                cur.execute(
+                    '''SELECT columns FROM citation_workspace_column_preferences
+                       WHERE sr_id = %s AND citation_table_name = %s AND user_id = %s''',
+                    (sr_id, table_name, user_id),
+                )
+            except Exception:
+                # Older databases may not have migration 005 yet. A read
+                # should fall back to defaults, and must not leave the shared
+                # connection in PostgreSQL's aborted-transaction state.
+                conn.rollback()
+                return None
             row = cur.fetchone()
             if not row:
                 return None

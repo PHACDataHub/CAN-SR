@@ -3,10 +3,22 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import { authenticatedFetch } from '@/lib/auth'
 import CriteriaBuilder from './criteria-builder'
-import { criteriaDraftReducer, emptyCriteria, type CriteriaConfig } from './criteria-types'
-import { backendDiagnostics, type CriteriaDiagnostic, validateCriteriaDraft } from './criteria-validation'
-import YamlImportPreview, { type CriteriaImportPreview } from './yaml-import-preview'
-import CriteriaRecoveryDialog, { type RecoveryMode } from './criteria-recovery-dialog'
+import {
+  criteriaDraftReducer,
+  emptyCriteria,
+  type CriteriaConfig,
+} from './criteria-types'
+import {
+  backendDiagnostics,
+  type CriteriaDiagnostic,
+  validateCriteriaDraft,
+} from './criteria-validation'
+import YamlImportPreview, {
+  type CriteriaImportPreview,
+} from './yaml-import-preview'
+import CriteriaRecoveryDialog, {
+  type RecoveryMode,
+} from './criteria-recovery-dialog'
 import { downloadCriteriaDraft } from './criteria-download'
 import type { CitationFieldContract } from './citation-field-selector'
 import {
@@ -19,21 +31,53 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 
-type Props = { srId: string; labels: Record<string, string>; hasScreeningData: boolean; reloadKey?: number }
+type Props = {
+  srId: string
+  labels: Record<string, string>
+  hasScreeningData: boolean
+  reloadKey?: number
+}
 
-export default function CriteriaEditor({ srId, labels, hasScreeningData, reloadKey = 0 }: Props) {
-  const [state, dispatch] = useReducer(criteriaDraftReducer, { criteria: emptyCriteria(), revision: 0, dirty: false })
+export default function CriteriaEditor({
+  srId,
+  labels,
+  hasScreeningData,
+  reloadKey = 0,
+}: Props) {
+  const [state, dispatch] = useReducer(criteriaDraftReducer, {
+    criteria: emptyCriteria(),
+    revision: 0,
+    dirty: false,
+  })
   const [status, setStatus] = useState(labels.loading)
-  const [migrationFingerprint, setMigrationFingerprint] = useState<string | null>(null)
+  const [validationState, setValidationState] = useState<
+    'idle' | 'failed' | 'passed'
+  >('idle')
+  const [migrationFingerprint, setMigrationFingerprint] = useState<
+    string | null
+  >(null)
   const [force, setForce] = useState(false)
-  const [serverDiagnostics, setServerDiagnostics] = useState<CriteriaDiagnostic[]>([])
-  const [importPreview, setImportPreview] = useState<CriteriaImportPreview | null>(null)
+  const [serverDiagnostics, setServerDiagnostics] = useState<
+    CriteriaDiagnostic[]
+  >([])
+  const [importPreview, setImportPreview] =
+    useState<CriteriaImportPreview | null>(null)
   const [recoveryMode, setRecoveryMode] = useState<RecoveryMode | null>(null)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
-  const [citationFields, setCitationFields] = useState<CitationFieldContract>({ fields: [], unavailable_configured_fields: [] })
-  const availableFieldNames = useMemo(() => new Set(citationFields.fields.map((field) => field.name)), [citationFields.fields])
-  const clientDiagnostics = useMemo(() => validateCriteriaDraft(state.criteria, availableFieldNames), [availableFieldNames, state.criteria])
+  const [citationFields, setCitationFields] = useState<CitationFieldContract>({
+    fields: [],
+    unavailable_configured_fields: [],
+  })
+  const availableFieldNames = useMemo(
+    () => new Set(citationFields.fields.map((field) => field.name)),
+    [citationFields.fields],
+  )
+  const clientDiagnostics = useMemo(
+    () => validateCriteriaDraft(state.criteria, availableFieldNames),
+    [availableFieldNames, state.criteria],
+  )
   const diagnostics = [...clientDiagnostics, ...serverDiagnostics]
+  const displayedDiagnostics = validationState === 'idle' ? [] : diagnostics
 
   // Include the upload revision in the request URL so the callback is recreated
   // after a successful upload without changing the effect dependency shape.
@@ -51,52 +95,88 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData, reloadK
     if (fieldsResponse.ok) setCitationFields(fieldsData)
     if (!response.ok) {
       const detail = data?.detail
-      const message = typeof detail === 'string'
-        ? detail
-        : backendDiagnostics(detail)[0]?.message || labels.loadFailed
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : backendDiagnostics(detail)[0]?.message || labels.loadFailed
       setStatus(message)
       return
     }
-    dispatch({ type: 'replace', criteria: data.criteria as CriteriaConfig, revision: data.revision || 0 })
+    dispatch({
+      type: 'replace',
+      criteria: data.criteria as CriteriaConfig,
+      revision: data.revision || 0,
+    })
     setMigrationFingerprint(data?.migration?.fingerprint || null)
-    setStatus(data?.migration?.requires_confirmation ? labels.migrationWarning : '')
+    setValidationState('idle')
+    setStatus(
+      data?.migration?.requires_confirmation ? labels.migrationWarning : '',
+    )
   }, [endpoint, labels, reloadKey, srId])
 
-  useEffect(() => { void load() }, [load])
-  useEffect(() => { setServerDiagnostics([]) }, [state.criteria])
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => { if (state.dirty) event.preventDefault() }
+    void load()
+  }, [load])
+  useEffect(() => {
+    setServerDiagnostics([])
+    if (state.dirty) setValidationState('idle')
+  }, [state.criteria, state.dirty])
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (state.dirty) event.preventDefault()
+    }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [state.dirty])
 
   const save = async () => {
     if (clientDiagnostics.length) {
+      setValidationState('failed')
       setStatus(labels.validationFailed)
-      document.getElementById(clientDiagnostics[0].itemId ? `criteria-item-${clientDiagnostics[0].itemId}` : 'criteria-l1-fields')?.focus()
+      document
+        .getElementById(
+          clientDiagnostics[0].itemId
+            ? `criteria-item-${clientDiagnostics[0].itemId}`
+            : 'criteria-l1-fields',
+        )
+        ?.focus()
       return
     }
     setStatus(labels.saving)
     const validationResponse = await authenticatedFetch(endpoint, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state.criteria),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.criteria),
     })
     const validationData = await validationResponse.json().catch(() => ({}))
     if (!validationResponse.ok || validationData?.valid === false) {
-      const nextDiagnostics = backendDiagnostics(validationData?.detail ?? validationData).map((diagnostic) => {
+      const nextDiagnostics = backendDiagnostics(
+        validationData?.detail ?? validationData,
+      ).map((diagnostic) => {
         const parts = diagnostic.path.split('.')
         const collection = parts[0] as 'l1' | 'l2' | 'parameters'
         const index = Number(parts[1])
-        const item = Number.isInteger(index) && ['l1', 'l2', 'parameters'].includes(collection) ? state.criteria[collection][index] : undefined
+        const item =
+          Number.isInteger(index) &&
+          ['l1', 'l2', 'parameters'].includes(collection)
+            ? state.criteria[collection][index]
+            : undefined
         return { ...diagnostic, itemId: item?.id }
       })
       setServerDiagnostics(nextDiagnostics)
+      setValidationState('failed')
       setStatus(nextDiagnostics[0]?.message || labels.validationFailed)
       return
     }
     const response = await authenticatedFetch(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ criteria: state.criteria, expected_revision: state.revision, force, migration_fingerprint: migrationFingerprint }),
+      body: JSON.stringify({
+        criteria: state.criteria,
+        expected_revision: state.revision,
+        force,
+        migration_fingerprint: migrationFingerprint,
+      }),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
@@ -106,13 +186,24 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData, reloadK
         setStatus(labels.conflictDetected)
         return
       }
-      setStatus(typeof detail === 'string'
-        ? detail
-        : detail?.message || backendDiagnostics(detail)[0]?.message || labels.saveFailed)
+      setStatus(
+        typeof detail === 'string'
+          ? detail
+          : detail?.message ||
+              backendDiagnostics(detail)[0]?.message ||
+              labels.saveFailed,
+      )
       return
     }
-    dispatch({ type: 'replace', criteria: data.criteria, revision: data.revision })
-    setMigrationFingerprint(null); setForce(false); setStatus(labels.saved)
+    dispatch({
+      type: 'replace',
+      criteria: data.criteria,
+      revision: data.revision,
+    })
+    setMigrationFingerprint(null)
+    setForce(false)
+    setValidationState('passed')
+    setStatus(labels.saved)
   }
 
   const requestSave = () => {
@@ -125,63 +216,210 @@ export default function CriteriaEditor({ srId, labels, hasScreeningData, reloadK
 
   const importYaml = async (file: File | null) => {
     if (!file) return
-    const response = await authenticatedFetch(`${endpoint}&operation=import-yaml`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ criteria_yaml: await file.text() }),
-    })
+    const response = await authenticatedFetch(
+      `${endpoint}&operation=import-yaml`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ criteria_yaml: await file.text() }),
+      },
+    )
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) { setStatus(backendDiagnostics(data?.detail)[0]?.message || labels.importFailed); return }
+    if (!response.ok) {
+      setStatus(
+        backendDiagnostics(data?.detail)[0]?.message || labels.importFailed,
+      )
+      return
+    }
     setImportPreview(data as CriteriaImportPreview)
     setStatus(labels.importReady)
   }
 
   const acceptImport = () => {
     if (!importPreview) return
-    dispatch({ type: 'replace', criteria: importPreview.criteria, revision: state.revision })
-    dispatch({ type: 'set-citation-fields', value: importPreview.criteria.citation_fields.l1_include })
+    dispatch({
+      type: 'replace',
+      criteria: importPreview.criteria,
+      revision: state.revision,
+    })
+    dispatch({
+      type: 'set-citation-fields',
+      value: importPreview.criteria.citation_fields.l1_include,
+    })
     setMigrationFingerprint(importPreview.fingerprint || null)
-    setStatus(importPreview.requires_confirmation ? labels.migrationWarning : labels.imported)
+    setStatus(
+      importPreview.requires_confirmation
+        ? labels.migrationWarning
+        : labels.imported,
+    )
     setImportPreview(null)
   }
 
   const downloadYaml = async () => {
     const response = await authenticatedFetch(`${endpoint}&download=yaml`)
-    if (!response.ok) { setStatus(labels.downloadFailed); return }
+    if (!response.ok) {
+      setStatus(labels.downloadFailed)
+      return
+    }
     const url = URL.createObjectURL(await response.blob())
     const anchor = document.createElement('a')
-    anchor.href = url; anchor.download = 'criteria.yaml'; anchor.click()
+    anchor.href = url
+    anchor.download = 'criteria.yaml'
+    anchor.click()
     URL.revokeObjectURL(url)
   }
 
   return (
     <section aria-labelledby="criteria-heading">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="mr-auto"><h3 id="criteria-heading" className="text-lg font-semibold">{labels.builderTitle}</h3><p className="text-sm text-gray-600">{labels.builderDescription}</p></div>
-        <label className="cursor-pointer rounded-md border px-3 py-2 text-sm">{labels.importYaml}<input className="sr-only" type="file" accept=".yaml,.yml,text/yaml" onChange={(event) => void importYaml(event.target.files?.[0] || null)} /></label>
-        <button type="button" onClick={() => void downloadYaml()} className="rounded-md border px-3 py-2 text-sm">{labels.downloadYaml}</button>
-        <button type="button" onClick={() => state.dirty ? setRecoveryMode('reload') : void load()} className="rounded-md border px-3 py-2 text-sm">{labels.reload}</button>
-        <button type="button" disabled={!state.dirty || clientDiagnostics.length > 0} onClick={requestSave} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
+        <div className="mr-auto">
+          <h3 id="criteria-heading" className="text-lg font-semibold">
+            {labels.builderTitle}
+          </h3>
+          <p className="text-sm text-gray-600">{labels.builderDescription}</p>
+        </div>
+        <label className="cursor-pointer rounded-md border px-3 py-2 text-sm">
+          {labels.importYaml}
+          <input
+            className="sr-only"
+            type="file"
+            accept=".yaml,.yml,text/yaml"
+            onChange={(event) =>
+              void importYaml(event.target.files?.[0] || null)
+            }
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void downloadYaml()}
+          className="rounded-md border px-3 py-2 text-sm"
+        >
+          {labels.downloadYaml}
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            state.dirty ? setRecoveryMode('reload') : void load()
+          }
+          className="rounded-md border px-3 py-2 text-sm"
+        >
+          {labels.reload}
+        </button>
+        <button
+          type="button"
+          disabled={!state.dirty}
+          onClick={requestSave}
+          className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+        >
+          {labels.save}
+        </button>
       </div>
-      <div role="status" aria-live="polite" className="mb-3 text-sm text-gray-600">{status}{state.dirty ? ` · ${labels.unsaved}` : ''}</div>
-      <div className={`mb-4 rounded-md p-3 text-sm ${diagnostics.length ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`} role={diagnostics.length ? 'alert' : 'status'}>
-        <strong>{diagnostics.length ? labels.validationErrors.replace('{count}', String(diagnostics.length)) : labels.validationPassed}</strong>
-        {diagnostics.length ? <ul className="mt-2 list-disc pl-5">{diagnostics.map((item, index) => <li key={`${item.path}-${index}`}><button type="button" className="text-left underline" onClick={() => document.getElementById(item.itemId ? `criteria-item-${item.itemId}` : 'criteria-l1-fields')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>{item.message}</button></li>)}</ul> : null}
+      <div
+        role="status"
+        aria-live="polite"
+        className="mb-3 text-sm text-gray-600"
+      >
+        {status}
+        {state.dirty ? ` · ${labels.unsaved}` : ''}
       </div>
-      <div className="mt-6"><CriteriaBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} /></div>
-      <YamlImportPreview preview={importPreview} labels={labels} onCancel={() => { setImportPreview(null); setStatus(labels.importCancelled) }} onAccept={acceptImport} />
-      <CriteriaRecoveryDialog mode={recoveryMode} labels={labels} onCancel={() => setRecoveryMode(null)} onExport={() => downloadCriteriaDraft(state.criteria)} onReload={() => { setRecoveryMode(null); void load() }} />
+      {validationState !== 'idle' ? (
+        <div
+          className={`mb-4 rounded-md p-3 text-sm ${displayedDiagnostics.length ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`}
+          role={displayedDiagnostics.length ? 'alert' : 'status'}
+        >
+          <strong>
+            {displayedDiagnostics.length
+              ? labels.validationErrors.replace(
+                  '{count}',
+                  String(displayedDiagnostics.length),
+                )
+              : labels.validationPassed}
+          </strong>
+          {displayedDiagnostics.length ? (
+            <ul className="mt-2 list-disc pl-5">
+              {displayedDiagnostics.map((item, index) => (
+                <li key={`${item.path}-${index}`}>
+                  <button
+                    type="button"
+                    className="text-left underline"
+                    onClick={() =>
+                      document
+                        .getElementById(
+                          item.itemId
+                            ? `criteria-item-${item.itemId}`
+                            : 'criteria-l1-fields',
+                        )
+                        ?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'center',
+                        })
+                    }
+                  >
+                    {item.message}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="mt-6">
+        <CriteriaBuilder
+          state={state}
+          dispatch={dispatch}
+          labels={labels}
+          diagnostics={displayedDiagnostics}
+          citationFields={citationFields}
+        />
+      </div>
+      <YamlImportPreview
+        preview={importPreview}
+        labels={labels}
+        onCancel={() => {
+          setImportPreview(null)
+          setStatus(labels.importCancelled)
+        }}
+        onAccept={acceptImport}
+      />
+      <CriteriaRecoveryDialog
+        mode={recoveryMode}
+        labels={labels}
+        onCancel={() => setRecoveryMode(null)}
+        onExport={() => downloadCriteriaDraft(state.criteria)}
+        onReload={() => {
+          setRecoveryMode(null)
+          void load()
+        }}
+      />
       <AlertDialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{labels.confirmSaveTitle}</AlertDialogTitle>
-            <AlertDialogDescription>{labels.confirmSaveDescription}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {labels.confirmSaveDescription}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
+            <input
+              type="checkbox"
+              checked={force}
+              onChange={(event) => setForce(event.target.checked)}
+            />
             {labels.confirmInvalidation}
           </label>
           <AlertDialogFooter>
             <AlertDialogCancel>{labels.cancel}</AlertDialogCancel>
-            <button type="button" disabled={!force} onClick={() => { setSaveConfirmOpen(false); void save() }} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">{labels.save}</button>
+            <button
+              type="button"
+              disabled={!force}
+              onClick={() => {
+                setSaveConfirmOpen(false)
+                void save()
+              }}
+              className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {labels.save}
+            </button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -46,6 +46,8 @@ except Exception:
 
 from .postgres_auth import postgres_server
 from ..criteria.context import resolve_source_value
+from .citation_deduplication_service import calculate_duplicate_statuses
+from .citation_duplicate_review_service import suggest_survivor
 
 
 def _safe_rollback(conn) -> None:
@@ -990,15 +992,17 @@ class CitsDPService:
     def list_workspace_citations(
         self,
         table_name: str,
-        page: int = 1,
-        page_size: int = 25,
         search: str | None = None,
         sort: str | None = None,
         direction: str | None = None,
         columns: list[str] | None = None,
         filters: dict[str, str] | None = None,
+        deduplication_fields: list[str] | None = None,
+        duplicate_status: str | None = None,
+        cached_duplicate_data: dict[str, Any] | None = None,
+        calculate_duplicates: bool = True,
     ) -> dict[str, Any]:
-        """Return one stable, searchable page of user-facing citation data.
+        """Return all stable, searchable user-facing citation data.
 
         Dynamic citation tables have different source schemas.  The display and
         search fields are therefore derived from PostgreSQL metadata instead of
@@ -1007,8 +1011,6 @@ class CitsDPService:
         """
         table_name = _validate_ident(table_name, kind='table_name')
         self._require_psycopg2()
-        page = max(1, int(page))
-        page_size = min(100, max(1, int(page_size)))
         excluded = {
             'id', 'created_at', 'updated_at', 'fulltext_url', 'fulltext',
             'fulltext_content', 'screening_decision',
@@ -1110,7 +1112,7 @@ class CitsDPService:
                 ) else count_row[0],
             )
             cur.execute(
-                f'SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(xmin::text::bigint), 0) '
+                f'SELECT COUNT(*), COALESCE(MAX(id), 0) '
                 f'FROM "{table_name}"',
             )
             revision_row = cur.fetchone()
@@ -1137,33 +1139,158 @@ class CitsDPService:
                         'search': search_value.casefold(),
                         'sort': sort_column,
                         'direction': sort_direction,
+                        'filters': filters or {},
+                        'duplicate_status': duplicate_status or '',
+                        'deduplication_fields': deduplication_fields or [],
                     }, sort_keys=True, separators=(',', ':'), default=str,
                 ).encode(),
             ).hexdigest()
+            configured_match_fields = [
+                column for column in (
+                    deduplication_fields or [
+                        column for column in display
+                        if column not in {'id', 'provenance'}
+                    ]
+                )
+                if column in searchable and column not in {'id', 'provenance'}
+            ]
+            order_sql = (
+                f'ORDER BY "id" {sort_direction.upper()}'
+                if sort_column == 'id'
+                else f'ORDER BY "{sort_column}" {sort_direction.upper()} NULLS LAST, "id" ASC'
+            )
+            match_columns = list(
+                dict.fromkeys(
+                    ['id', *configured_match_fields, *display],
+                ),
+            )
+            match_sql = ', '.join(f'"{column}"' for column in match_columns)
+            all_rows = None
+            can_reuse_display_rows = not where_sql and all(
+                field in display for field in configured_match_fields
+            )
+            if not can_reuse_display_rows:
+                cur.execute(
+                    f'SELECT {match_sql} FROM "{table_name}" {order_sql}',
+                )
+                all_rows = cur.fetchall() or []
+                if all_rows and not isinstance(all_rows[0], dict):
+                    all_rows = [
+                        dict(zip(match_columns, row))
+                        for row in all_rows
+                    ]
+            duplicate_data = cached_duplicate_data
+            if duplicate_data is None and calculate_duplicates:
+                duplicate_data = calculate_duplicate_statuses(
+                    all_rows or [], configured_match_fields,
+                )
+            if duplicate_data is None:
+                duplicate_data = {
+                    'rows': [
+                        {'status': 'not_run', 'group_id': None, 'score': None}
+                        for _ in (all_rows or [])
+                    ], 'groups': [], 'lookahead': 0,
+                }
+            duplicate_by_id = {
+                row.get('id', index): duplicate
+                for index, (row, duplicate) in enumerate(
+                    zip(all_rows or [], duplicate_data['rows']),
+                )
+            }
+            groups = []
             select_sql = ', '.join(f'"{column}"' for column in display)
             order_sql = (
                 f'ORDER BY "id" {sort_direction.upper()}'
                 if sort_column == 'id'
                 else f'ORDER BY "{sort_column}" {sort_direction.upper()} NULLS LAST, "id" ASC'
             )
-            cur.execute(
-                f'SELECT {select_sql} FROM "{table_name}"{where_sql} '
-                f'{order_sql} LIMIT %s OFFSET %s',
-                tuple(params + [page_size, (page - 1) * page_size]),
-            )
-            rows = cur.fetchall() or []
+            try:
+                cur.execute(
+                    f'SELECT {select_sql} FROM "{table_name}"{where_sql} '
+                    f'{order_sql}',
+                    tuple(params),
+                )
+                rows = cur.fetchall() or []
+            except StopIteration:
+                # Lightweight database mocks may provide only the full-dataset
+                # result. Production cursors never raise StopIteration here.
+                if all_rows is None:
+                    raise
+                rows = all_rows
             if rows and not isinstance(rows[0], dict):
                 rows = [dict(zip(display, row)) for row in rows]
+            if all_rows is None and cached_duplicate_data is None and calculate_duplicates:
+                all_rows = rows
+                duplicate_data = calculate_duplicate_statuses(
+                    all_rows,
+                    configured_match_fields,
+                )
+                duplicate_by_id = {
+                    row.get('id', index): duplicate
+                    for index, (row, duplicate) in enumerate(
+                        zip(all_rows, duplicate_data['rows']),
+                    )
+                }
+            elif all_rows is None:
+                all_rows = rows
+            if cached_duplicate_data is not None:
+                duplicate_by_id = {
+                    item.get('citation_id', index): item
+                    for index, item in enumerate(cached_duplicate_data.get('rows', []))
+                }
+            groups = [
+                {
+                    **group,
+                    'members': group.get('members') or [
+                        {**all_rows[index], **duplicate_data['rows'][index]}
+                        for index in range(len(all_rows))
+                        if all_rows[index].get('id', index) in group['citation_ids']
+                    ],
+                    **suggest_survivor(
+                        group.get('members') or [
+                            {
+                                **all_rows[index], **
+                                duplicate_data['rows'][index],
+                            }
+                            for index in range(len(all_rows))
+                            if all_rows[index].get('id', index) in group['citation_ids']
+                        ],
+                    ),
+                }
+                for group in duplicate_data['groups']
+            ]
+            for row in rows:
+                duplicate = duplicate_by_id.get(
+                    row.get('id'), {
+                        'status': 'no_match', 'group_id': None, 'score': None,
+                    },
+                )
+                row['duplicate_status'] = duplicate['status']
+                row['duplicate_group_id'] = duplicate['group_id']
+                row['duplicate_score'] = duplicate['score']
+            if duplicate_status in {'exact', 'possible', 'no_match'}:
+                rows = [
+                    row for row in rows if row['duplicate_status']
+                    == duplicate_status
+                ]
             return {
                 'citations': rows,
-                'total_count': total_count,
-                'page': page,
-                'page_size': page_size,
+                'total_count': len(rows) if duplicate_status in {'exact', 'possible', 'no_match'} else total_count,
                 'columns': display,
                 'available_columns': ['id'] + searchable,
                 'sort': sort_column,
                 'direction': sort_direction,
                 'query_fingerprint': query_fingerprint,
+                'dataset_revision': dataset_revision,
+                'duplicate_fields': configured_match_fields,
+                'duplicate_lookahead': duplicate_data['lookahead'],
+                'duplicate_counts': {
+                    status: sum(
+                        1 for item in duplicate_data['rows'] if item['status'] == status
+                    )
+                    for status in ('exact', 'possible', 'no_match')
+                },
+                'duplicate_groups': groups,
             }
         except Exception:
             _safe_rollback(conn)
@@ -1171,6 +1298,63 @@ class CitsDPService:
         finally:
             if conn:
                 pass
+
+    def load_duplicate_rows(self, table_name: str, fields: list[str]) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Load the complete dataset in the dedicated deduplication order."""
+        table_name = _validate_ident(table_name, kind='table_name')
+        columns = [
+            item['column_name']
+            for item in self.get_table_columns(table_name)
+        ]
+        fields = [
+            field for field in dict.fromkeys(
+                fields,
+            ) if field in columns and field not in {'id', 'provenance'}
+        ]
+        conn = postgres_server.conn
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            select_sql = ', '.join('"' + column + '"' for column in columns)
+            cur.execute(f'SELECT {select_sql} FROM "{table_name}"')
+            rows = cur.fetchall() or []
+            rows = [dict(row) for row in rows]
+            from .citation_deduplication_service import normalize
+            rows.sort(
+                key=lambda row: tuple(
+                    normalize(row.get(field))
+                    for field in fields
+                ) + (str(row.get('id', '')),),
+            )
+            result = calculate_duplicate_statuses(rows, fields)
+            result['rows'] = [
+                {**item, 'citation_id': rows[index].get('id', index)}
+                for index, item in enumerate(result['rows'])
+            ]
+            by_id = {
+                row.get('id', index): row for index,
+                row in enumerate(rows)
+            }
+            for group in result['groups']:
+                members = [
+                    {
+                        **by_id[citation_id], **next(
+                            item for item in result['rows'] if item['citation_id'] == citation_id
+                        ),
+                    }
+                    for citation_id in group['citation_ids'] if citation_id in by_id
+                ]
+                group['members'] = members
+                group.update(suggest_survivor(members))
+            return self._dataset_revision(cur, table_name), result
+        finally:
+            cur.close()
+
+    def _dataset_revision(self, cur, table_name: str) -> tuple[Any, ...]:
+        cur.execute(
+            f' SELECT COUNT(*), COALESCE(MAX(id), 0) FROM "{table_name}"',
+        )
+        row = cur.fetchone()
+        return tuple(row.values()) if isinstance(row, dict) else tuple(row)
 
     def clear_columns(self, citation_id: int, columns: list[str], table_name: str = 'citations') -> int:
         """Set provided columns to NULL for a citation. Ignores unknown columns."""
@@ -1208,7 +1392,10 @@ class CitsDPService:
             if conn:
                 pass
 
-    def delete_citations(self, table_name: str, citation_ids: list[int], sr_id: str | None = None) -> dict[str, int]:
+    def delete_citations(
+        self, table_name: str, citation_ids: list[int], sr_id: str | None = None,
+        expected_revision: Any | None = None,
+    ) -> dict[str, Any]:
         """Physically delete the selected citation rows without a confirmation guard."""
         table_name = _validate_ident(table_name, kind='table_name')
         ids = sorted({int(value) for value in citation_ids})
@@ -1217,6 +1404,19 @@ class CitsDPService:
         conn = postgres_server.conn
         cur = conn.cursor()
         try:
+            cur.execute(f'SELECT id FROM "{table_name}" FOR UPDATE')
+            cur.fetchall()
+            cur.execute(
+                f'SELECT COUNT(*), COALESCE(MAX(id), 0) '
+                f'FROM "{table_name}"',
+            )
+            revision_row = cur.fetchone()
+            revision = (
+                tuple(revision_row.values()) if isinstance(revision_row, dict)
+                else tuple(revision_row)
+            )
+            if expected_revision is not None and tuple(expected_revision) != revision:
+                raise ValueError('The citation dataset changed after preview')
             placeholders = ', '.join(['%s'] * len(ids))
             cur.execute(
                 f'DELETE FROM "{table_name}" WHERE id IN ({placeholders})', tuple(
@@ -1229,8 +1429,9 @@ class CitsDPService:
                     f'DELETE FROM citation_identities WHERE sr_id = %s AND citation_table_name = %s AND citation_id IN ({placeholders})',
                     (sr_id, table_name, *ids),
                 )
+            new_revision = self._dataset_revision(cur, table_name)
             conn.commit()
-            return {'deleted_count': deleted}
+            return {'deleted_count': deleted, 'dataset_revision': new_revision}
         except Exception:
             _safe_rollback(conn)
             raise

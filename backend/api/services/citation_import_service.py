@@ -1,8 +1,9 @@
 """Immediate, append-only citation file imports.
 
-This service deliberately does not reconcile or deduplicate source rows.  Import
-batch and identity metadata is retained for provenance, while the citation table
-is extended with text columns as new source fields appear.
+Imports skip rows whose exact citation identity already exists unless the caller
+explicitly opts into importing duplicates. Import batch and identity metadata is
+retained for provenance, while the citation table is extended with text columns
+as new source fields appear.
 """
 from __future__ import annotations
 
@@ -59,6 +60,80 @@ class CitationImportService:
     def __init__(self, connection_provider=None):
         self.connection_provider = connection_provider or postgres_server
 
+    def count_duplicates_sync(
+        self,
+        *,
+        sr_id: str,
+        table_name: str | None,
+        rows: list[dict[str, Any]],
+        source_columns: list[str],
+        title_header: str | None = None,
+        abstract_header: str | None = None,
+    ) -> int:
+        """Count existing and repeated citation identities without mutating data."""
+        if not table_name:
+            existing_keys: set[tuple[str, str | None, str]] = set()
+        else:
+            cur = self.connection_provider.conn.cursor()
+            try:
+                cur.execute(
+                    """SELECT identity_kind, identifier_namespace, normalized_value
+                       FROM citation_identities
+                       WHERE sr_id = %s AND citation_table_name = %s""",
+                    (sr_id, table_name),
+                )
+                existing_keys = {
+                    (row[0], row[1], row[2]) for row in cur.fetchall()
+                }
+            finally:
+                cur.close()
+
+        names = normalize_source_columns(source_columns)
+        by_normalized = {
+            re.sub(r'[^a-z0-9]+', '', key.casefold()): key for key in names
+        }
+
+        def resolve_header(configured: str | None, aliases: tuple[str, ...]) -> str | None:
+            if configured and configured in names:
+                return configured
+            return next((by_normalized[alias] for alias in aliases if alias in by_normalized), None)
+
+        title_source = resolve_header(
+            title_header, ('title', 'articletitle', 'primarytitle'),
+        )
+        abstract_source = resolve_header(
+            abstract_header, ('abstract', 'summary', 'description'),
+        )
+        if not title_source or not abstract_source:
+            return 0
+
+        seen_keys: set[tuple[str, str | None, str]] = set()
+        duplicate_count = 0
+        for row in rows:
+            if not isinstance(row, dict) or not _has_value(row):
+                continue
+            fingerprint = _bibliographic_fingerprint(
+                row.get(title_source), row.get(abstract_source),
+            )
+            identities = {('bibliographic_fingerprint', None, fingerprint)}
+            doi = next(
+                (
+                    _normalized_doi(value) for source, value in row.items() if re.sub(
+                        r'[^a-z0-9]+', '', source.casefold(),
+                    ) in {'doi', 'digitalobjectidentifier'}
+                ), '',
+            )
+            if doi:
+                identities.add(('doi', None, doi))
+            identities.update(
+                ('external_id', namespace, value)
+                for namespace, value in _row_external_ids(row)
+            )
+            if identities & (existing_keys | seen_keys):
+                duplicate_count += 1
+            seen_keys.update(identities)
+        return duplicate_count
+
     def append_rows_sync(
         self,
         *,
@@ -73,6 +148,7 @@ class CitationImportService:
         commit_key: str,
         title_header: str | None = None,
         abstract_header: str | None = None,
+        include_duplicates: bool = False,
     ) -> dict[str, Any]:
         if not actor_id or not commit_key:
             raise ValueError('actor_id and commit_key are required')
@@ -112,11 +188,12 @@ class CitationImportService:
                 row, dict,
             ) and _has_value(row)
         ]
-        if any(not str(row.get(title_source) or '').strip() or not str(row.get(abstract_source) or '').strip() for row in usable_rows):
-            raise ValueError(
-                'Every non-blank row must contain a title and abstract value',
-            )
-        content_sha = hashlib.sha256(raw_bytes).hexdigest()
+        # The commit key provides idempotency. Include it in the batch content
+        # hash so a later intentional re-upload is not rejected by the batch's
+        # unique (sr_id, citation_table_name, content_sha256) constraint.
+        content_sha = hashlib.sha256(
+            raw_bytes + commit_key.encode(),
+        ).hexdigest()
         conn = self.connection_provider.conn
         cur = conn.cursor()
         try:
@@ -169,6 +246,12 @@ class CitationImportService:
                     physical[source] = 'provenance' if source == '__provenance__' else column
                     assigned.add(column)
                     continue
+                # Reuse an existing column with the same normalized source name.
+                # Only genuinely new source columns receive a new physical name.
+                if column in existing:
+                    physical[source] = column
+                    assigned.add(column)
+                    continue
                 candidate = column
                 suffix = 2
                 while candidate in assigned:
@@ -182,6 +265,94 @@ class CitationImportService:
                     cur.execute(
                         f'ALTER TABLE "{table_name}" ADD COLUMN "{column}" TEXT',
                     )
+
+            duplicate_keys: dict[tuple[str, str | None, str], int] = {}
+            if not include_duplicates:
+                cur.execute(
+                    """SELECT identity_kind, identifier_namespace, normalized_value, citation_id
+                       FROM citation_identities WHERE sr_id = %s""",
+                    (sr_id,),
+                )
+                for identity_kind, namespace, value, citation_id in cur.fetchall():
+                    duplicate_keys.setdefault(
+                        (identity_kind, namespace, value), int(citation_id),
+                    )
+
+            rows_to_insert: list[dict[str, Any]] = []
+            duplicates_skipped = 0
+            rows_merged = 0
+            seen_keys: set[tuple[str, str | None, str]] = set()
+            seen_rows: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+            for row in usable_rows:
+                fingerprint = _bibliographic_fingerprint(
+                    row.get(title_source), row.get(abstract_source),
+                )
+                identities = {('bibliographic_fingerprint', None, fingerprint)}
+                doi = next(
+                    (
+                        _normalized_doi(value) for source, value in row.items() if re.sub(
+                            r'[^a-z0-9]+', '', source.casefold(),
+                        ) in {'doi', 'digitalobjectidentifier'}
+                    ), '',
+                )
+                if doi:
+                    identities.add(('doi', None, doi))
+                identities.update(
+                    ('external_id', namespace, value)
+                    for namespace, value in _row_external_ids(row)
+                )
+                if not include_duplicates:
+                    matched_id = next(
+                        (
+                            duplicate_keys[key]
+                            for key in identities if key in duplicate_keys
+                        ),
+                        None,
+                    )
+                    if matched_id is not None:
+                        update_pairs = [
+                            (source, column) for source, column in physical.items()
+                            if source != '__provenance__'
+                            and column not in {'id', 'created_at'}
+                            and str(row.get(source) or '').strip()
+                        ]
+                        if update_pairs:
+                            assignments = ', '.join(
+                                f'"{column}" = COALESCE(NULLIF(%s, \'\'), "{column}")'
+                                for _, column in update_pairs
+                            )
+                            values = [
+                                str(row.get(source) or '')
+                                for source, _ in update_pairs
+                            ]
+                            cur.execute(
+                                f'UPDATE "{table_name}" SET {assignments} WHERE id = %s',
+                                (*values, matched_id),
+                            )
+                        rows_merged += 1
+                        duplicates_skipped += 1
+                        continue
+                    if identities & seen_keys:
+                        representative = next(
+                            (
+                                seen_rows[key]
+                                for key in identities if key in seen_rows
+                            ),
+                            None,
+                        )
+                        if representative is not None:
+                            for source, value in row.items():
+                                if str(value or '').strip() and not str(
+                                    representative.get(source) or '',
+                                ).strip():
+                                    representative[source] = value
+                        rows_merged += 1
+                        duplicates_skipped += 1
+                        continue
+                rows_to_insert.append(row)
+                seen_keys.update(identities)
+                for key in identities:
+                    seen_rows[key] = row
 
             batch_id = str(uuid.uuid4())
             cur.execute(
@@ -205,7 +376,7 @@ class CitationImportService:
             quoted = ', '.join(f'"{column}"' for column in insert_columns)
             placeholders = ', '.join(['%s'] * len(insert_columns))
             inserted = 0
-            for row in usable_rows:
+            for row in rows_to_insert:
                 values = [
                     filename if source == '__provenance__' else
                     (
@@ -268,7 +439,9 @@ class CitationImportService:
             conn.commit()
             return {
                 'batch_id': batch_id, 'table_name': table_name, 'idempotent': False,
-                'rows_inserted': inserted, 'invalid_count': 0, 'warnings': [],
+                'rows_inserted': inserted, 'rows_merged': rows_merged,
+                'invalid_count': 0, 'warnings': [],
+                'duplicates_skipped': duplicates_skipped,
             }
         except Exception:
             conn.rollback()

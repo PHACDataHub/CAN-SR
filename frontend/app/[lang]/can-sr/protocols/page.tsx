@@ -39,16 +39,10 @@ export default function ProtocolsPage() {
     <div className="min-h-screen bg-gray-50">
       <GCHeader />
       <SRHeader
-        title={dict.protocols.title}
+        title={dict.protocols.heading}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId)}`}
       />
       <main className="mx-auto max-w-4xl px-6 py-10">
-        <h3 className="text-xl font-semibold text-gray-900">
-          {dict.protocols.heading}
-        </h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {dict.protocols.description}
-        </p>
         {hasDataset === false ? (
           <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <p>{dict.protocols.noDataset}</p>
