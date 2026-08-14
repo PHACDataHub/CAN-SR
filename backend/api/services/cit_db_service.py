@@ -14,6 +14,7 @@ can surface a 503 with an actionable message.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 from typing import Dict
 from typing import List
@@ -46,6 +47,14 @@ except Exception:
 
 from .postgres_auth import postgres_server
 
+try:
+    from .azure_openai_client import azure_openai_client
+except Exception:
+    azure_openai_client = None
+
+
+_CAD_TO_USD_FALLBACK = Decimal('0.74')
+
 
 def _safe_rollback(conn) -> None:
     """Best-effort rollback.
@@ -59,6 +68,56 @@ def _safe_rollback(conn) -> None:
             conn.rollback()
     except Exception:
         pass
+
+
+def _derive_agent_run_cost_usd(run: dict[str, Any]) -> float | None:
+    raw_cost_usd = run.get('cost_usd')
+    if raw_cost_usd is not None:
+        try:
+            return float(raw_cost_usd)
+        except Exception:
+            return None
+
+    if azure_openai_client is None:
+        return None
+
+    raw_input_tokens = run.get('input_tokens')
+    raw_output_tokens = run.get('output_tokens')
+    try:
+        prompt_tokens = int(raw_input_tokens or 0)
+        completion_tokens = int(raw_output_tokens or 0)
+    except Exception:
+        return None
+
+    if prompt_tokens < 0 or completion_tokens < 0:
+        return None
+    if prompt_tokens == 0 and completion_tokens == 0:
+        return None
+
+    raw_model = run.get('model')
+    model = raw_model if isinstance(raw_model, str) else None
+    try:
+        normalized_model = azure_openai_client.normalize_model_key(
+            model,
+        ) or 'default'
+        rates = azure_openai_client.MODEL_PRICING_CAD.get(
+            normalized_model,
+            azure_openai_client.MODEL_PRICING_CAD['default'],
+        )
+        prompt_cost_cad = (
+            Decimal(prompt_tokens) /
+            Decimal('1000')
+        ) * rates['prompt']
+        completion_cost_cad = (
+            Decimal(completion_tokens) / Decimal('1000')
+        ) * rates['completion']
+        total_cost_usd = (
+            prompt_cost_cad +
+            completion_cost_cad
+        ) * _CAD_TO_USD_FALLBACK
+        return float(total_cost_usd.quantize(Decimal('0.000001')))
+    except Exception:
+        return None
 
 
 # -----------------------
@@ -355,6 +414,7 @@ class CitsDPService:
 
         conn = None
         try:
+            derived_cost_usd = _derive_agent_run_cost_usd(run)
             conn = postgres_server.conn
             cur = conn.cursor()
             cur.execute(
@@ -391,7 +451,7 @@ class CitsDPService:
                     run.get('latency_ms'),
                     run.get('input_tokens'),
                     run.get('output_tokens'),
-                    run.get('cost_usd'),
+                    derived_cost_usd,
                     json.dumps(run.get('guardrails')) if run.get(
                         'guardrails',
                     ) is not None else None,
