@@ -35,13 +35,7 @@ export default function ReferencesPage() {
         title={dict.references.title}
         backHref={`/can-sr/sr?sr_id=${encodeURIComponent(srId)}`}
       />
-      <main className="mx-auto max-w-4xl px-6 py-10">
-        <h3 className="text-xl font-semibold text-gray-900">
-          {dict.references.heading}
-        </h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {dict.references.description}
-        </p>
+      <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
         <ReferencesWorkspace
           srId={srId}
           hasDataset={hasDataset}

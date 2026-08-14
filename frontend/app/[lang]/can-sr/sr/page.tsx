@@ -170,7 +170,7 @@ export default function CanSrLandingPage() {
 
       <SRHeader
         title={dict.cansr.title}
-        srName={loading ? '' : sr.name}
+        srName={loading ? '' : sr?.name || ''}
         showSettings={false}
         showExport={true}
         showBack={true}
@@ -203,8 +203,8 @@ export default function CanSrLandingPage() {
             </div>
           ) : (
             <>
-              <h3 className="text-2xl font-bold text-gray-900">{sr.name}</h3>
-              <p className="mt-1 text-sm text-gray-600">{sr.description}</p>
+              <h3 className="text-2xl font-bold text-gray-900">{sr?.name || ''}</h3>
+              <p className="mt-1 text-sm text-gray-600">{sr?.description || ''}</p>
             </>
           )}
         </div>

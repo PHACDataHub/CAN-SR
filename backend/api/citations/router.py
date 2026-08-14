@@ -45,6 +45,10 @@ from ..services.citation_export_service import citation_export_service, ExportVa
 from ..services.citation_import_preview_service import CitationImportPreviewService
 from ..services.citation_import_service import citation_import_service
 from ..services.citation_workspace_preferences_service import citation_workspace_preferences_service
+from ..services.citation_deduplication_preferences_service import citation_deduplication_preferences_service
+from ..services.citation_deduplication_service import recompute_affected_duplicate_groups
+from ..services.citation_duplicate_review_service import citation_duplicate_review_service
+from ..services.citation_duplicate_run_service import citation_duplicate_run_service
 from ..services.storage import storage_service
 from ..criteria.context import resolve_source_value
 from .export_models import CitationExportRequest, CitationExportSchema
@@ -158,6 +162,8 @@ class CitationImportResponse(BaseModel):
     rows_inserted: int
     invalid_count: int
     warnings: list[str] = []
+    duplicates_skipped: int = 0
+    rows_merged: int = 0
 
 
 class CitationWorkspaceColumnsRequest(BaseModel):
@@ -224,6 +230,7 @@ async def import_citations(
     commit_key: str = Form(...),
     title_header: str | None = Form(None),
     abstract_header: str | None = Form(None),
+    include_duplicates: bool = Form(False),
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Parse and append a citation file immediately, retaining batch provenance."""
@@ -232,6 +239,7 @@ async def import_citations(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
         )
+
     try:
         raw = await file.read()
         if not raw:
@@ -256,6 +264,7 @@ async def import_citations(
             commit_key=commit_key,
             title_header=title_header,
             abstract_header=abstract_header,
+            include_duplicates=include_duplicates,
         )
         if not result['idempotent'] and not (sr.get('screening_db') or {}).get('table_name'):
             await run_in_threadpool(
@@ -277,6 +286,40 @@ async def import_citations(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f'Failed to import citations: {exc}',
+        )
+
+
+@router.post('/{sr_id}/duplicates/check')
+async def check_citation_duplicates(
+    sr_id: str,
+    file: UploadFile = File(...),
+    title_header: str | None = Form(None),
+    abstract_header: str | None = Form(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Count duplicate rows for upload UI feedback without inserting anything."""
+    sr, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+    try:
+        raw = await file.read()
+        from ..services.citation_import_preview_service import build_preview
+        parsed = build_preview(file.filename, raw)
+        count = await run_in_threadpool(
+            citation_import_service.count_duplicates_sync,
+            sr_id=sr_id,
+            table_name=(sr.get('screening_db') or {}).get('table_name'),
+            rows=parsed['normalized_rows'],
+            source_columns=parsed['validation_report']['source_columns'],
+            title_header=title_header,
+            abstract_header=abstract_header,
+        )
+        return {'duplicates_count': count}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
         )
 
 
@@ -1154,16 +1197,15 @@ async def get_citations_batch(
 @router.get('/{sr_id}/citations/workspace')
 async def list_workspace_citations(
     sr_id: str,
-    page: int = 1,
-    page_size: int = 25,
     search: str | None = None,
     sort: str | None = None,
     direction: str | None = None,
     columns: str | None = None,
     filters: str | None = None,
+    duplicate_status: str | None = None,
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
-    """Return a review-authorized, server-paginated References workspace page."""
+    """Return all review-authorized References workspace citations."""
     try:
         _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
     except HTTPException:
@@ -1175,25 +1217,123 @@ async def list_workspace_citations(
         )
     table_name = (screening or {}).get('table_name')
     if not table_name:
-        return {'citations': [], 'total_count': 0, 'page': max(1, page), 'page_size': min(100, max(1, page_size)), 'columns': ['id']}
+        return {'citations': [], 'total_count': 0, 'columns': ['id']}
     try:
-        return await run_in_threadpool(
+        actor_id = current_user.get('email') or current_user.get('id')
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        response = await run_in_threadpool(
             cits_dp_service.list_workspace_citations,
-            table_name, page, page_size, search, sort, direction,
+            table_name, search, sort, direction,
             [
                 column.strip() for column in columns.split(
                     ',',
                 ) if column.strip()
             ] if columns else None,
             json.loads(filters) if filters else None,
+            configured_fields,
+            duplicate_status,
+            None,
+            False,
         )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id, table_name, response.get('dataset_revision'),
+            configured_fields or [
+                column for column in response.get(
+                    'columns', [],
+                ) if column not in {'id', 'provenance'}
+            ],
+        )
+        response = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, search, sort, direction,
+            [
+                column.strip() for column in columns.split(
+                    ',',
+                ) if column.strip()
+            ] if columns else None,
+            json.loads(
+                filters,
+            ) if filters else None, configured_fields, duplicate_status,
+            (cached or {}).get('result'), False,
+        )
+        reviews = await run_in_threadpool(
+            citation_duplicate_review_service.list_reviews, sr_id, table_name,
+        )
+        reviews_by_group = {review['group_id']: review for review in reviews}
+        for group in response.get('duplicate_groups', []):
+            review = reviews_by_group.get(group.get('group_id'))
+            if not review or review.get('decision') != 'confirmed_duplicate':
+                continue
+            member_ids = {
+                int(value)
+                for value in group.get('citation_ids', [])
+                if value is not None
+            }
+            member_ids.update(
+                int(member['id'])
+                for member in group.get('members', [])
+                if member.get('id') is not None
+            )
+            survivor_id = review.get('survivor_id')
+            if survivor_id is None or int(survivor_id) not in member_ids:
+                review['survivor_id'] = None
+                review['stale'] = True
+        resolved_group_ids = {
+            group_id for group_id, review in reviews_by_group.items()
+            if review.get('decision') == 'not_duplicate'
+        }
+        if resolved_group_ids:
+            resolved_citation_ids = {
+                int(citation_id)
+                for group in response.get('duplicate_groups', [])
+                if group.get('group_id') in resolved_group_ids
+                for citation_id in group.get('citation_ids', [])
+            }
+            for citation in response.get('citations', []):
+                if int(citation.get('id', 0)) in resolved_citation_ids:
+                    citation['duplicate_status'] = 'no_match'
+                    citation['duplicate_score'] = None
+            for group in response.get('duplicate_groups', []):
+                if group.get('group_id') in resolved_group_ids:
+                    for member in group.get('members', []):
+                        member['duplicate_status'] = 'no_match'
+                        member['duplicate_score'] = None
+            response['duplicate_counts'] = {
+                status: sum(
+                    1 for citation in response.get('citations', [])
+                    if citation.get('duplicate_status') == status
+                )
+                for status in ('exact', 'possible', 'no_match')
+            }
+            if duplicate_status in {'exact', 'possible', 'no_match'}:
+                response['citations'] = [
+                    citation for citation in response.get('citations', [])
+                    if citation.get('duplicate_status') == duplicate_status
+                ]
+                response['total_count'] = len(response['citations'])
+        for group in response.get('duplicate_groups', []):
+            group['review'] = reviews_by_group.get(group['group_id'])
+        configured_fields = [
+            column for column in (configured_fields or response.get('columns', []))
+            if column not in {'id', 'provenance'}
+        ]
+        response['deduplication_fields'] = configured_fields
+        response['duplicate_run'] = {
+            'run_id': (cached or {}).get('run_id'),
+            'status': 'succeeded' if cached else 'not_run',
+        }
+        return response
     except RuntimeError as rexc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
         )
     except Exception as e:
         if _is_undefined_table_error(e):
-            return {'citations': [], 'total_count': 0, 'page': max(1, page), 'page_size': min(100, max(1, page_size)), 'columns': ['id']}
+            return {'citations': [], 'total_count': 0, 'columns': ['id']}
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f'Failed to query screening DB: {e}',
@@ -1227,17 +1367,197 @@ async def delete_workspace_citations(
     if not table_name or not citation_ids:
         return {'deleted_count': 0}
     try:
-        return await run_in_threadpool(
+        if payload.get('confirmed') is not True:
+            raise HTTPException(
+                status_code=400, detail='Deletion requires explicit confirmation',
+            )
+        query = payload.get('query') or {}
+        actor_id = current_user.get('email') or current_user.get('id')
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name,
+            query.get('search'), query.get('sort'), query.get('direction'),
+            query.get('columns'), query.get('filters'), configured_fields,
+            query.get('duplicate_status'),
+        )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id,
+            table_name,
+            current_workspace.get('dataset_revision'),
+            configured_fields or [
+                column
+                for column in current_workspace.get('columns', [])
+                if column not in {'id', 'provenance'}
+            ],
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name,
+            query.get('search'), query.get('sort'), query.get('direction'),
+            query.get('columns'), query.get('filters'), configured_fields,
+            query.get('duplicate_status'),
+            (cached or {}).get('result'),
+            False,
+        )
+        if payload.get('query_fingerprint') != current_workspace.get('query_fingerprint'):
+            raise HTTPException(
+                status_code=409, detail='The active query is stale',
+            )
+        active_ids = {
+            int(row['id'])
+            for row in current_workspace.get('citations', [])
+        }
+        if not set(citation_ids).issubset(active_ids):
+            raise HTTPException(
+                status_code=409, detail='Selection is outside the active query',
+            )
+        deletion = await run_in_threadpool(
             cits_dp_service.delete_citations,
             table_name,
             citation_ids,
             sr_id,
+            current_workspace.get('dataset_revision'),
         )
+        if cached and deletion.get('deleted_count'):
+            updated_result = await run_in_threadpool(
+                recompute_affected_duplicate_groups,
+                cached.get('result') or {},
+                set(citation_ids),
+                configured_fields,
+            )
+            run_id = await run_in_threadpool(
+                citation_duplicate_run_service.start,
+                sr_id,
+                table_name,
+                deletion.get('dataset_revision'),
+                configured_fields,
+                actor_id,
+            )
+            await run_in_threadpool(
+                citation_duplicate_run_service.finish,
+                run_id,
+                updated_result,
+                None,
+            )
+            deletion['duplicate_run'] = {
+                'run_id': run_id,
+                'status': 'succeeded',
+            }
+        return deletion
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f'Failed to delete citations: {exc}',
         )
+
+
+class CitationDuplicateReviewRequest(BaseModel):
+    group_id: str
+    decision: str
+    survivor_id: int | None = None
+
+
+@router.get('/{sr_id}/citations/workspace/duplicate-reviews')
+async def get_duplicate_reviews(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'reviews': []}
+    return {'reviews': await run_in_threadpool(citation_duplicate_review_service.list_reviews, sr_id, table_name)}
+
+
+@router.put('/{sr_id}/citations/workspace/duplicate-reviews')
+async def save_duplicate_review(
+    sr_id: str,
+    payload: CitationDuplicateReviewRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=400, detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id') or 'unknown'
+    try:
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, None, None, None, None, None, configured_fields, None,
+        )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id,
+            table_name,
+            current_workspace.get('dataset_revision'),
+            configured_fields or [
+                column
+                for column in current_workspace.get('columns', [])
+                if column not in {'id', 'provenance'}
+            ],
+        )
+        if cached:
+            current_workspace = await run_in_threadpool(
+                cits_dp_service.list_workspace_citations,
+                table_name,
+                None,
+                None,
+                None,
+                None,
+                None,
+                configured_fields,
+                None,
+                cached.get('result'),
+                False,
+            )
+        group = next(
+            (
+                item for item in current_workspace.get('duplicate_groups', [])
+                if item.get('group_id') == payload.group_id
+            ),
+            None,
+        )
+        if not group:
+            raise HTTPException(
+                status_code=409, detail='Duplicate group is stale',
+            )
+        member_ids = {
+            int(value)
+            for value in group.get('citation_ids', [])
+            if value is not None
+        }
+        member_ids.update(
+            int(member['id'])
+            for member in group.get('members', [])
+            if member.get('id') is not None
+        )
+        survivor_id = (
+            int(payload.survivor_id) if payload.survivor_id is not None else None
+        )
+        if payload.decision == 'confirmed_duplicate' and survivor_id not in member_ids:
+            raise HTTPException(
+                status_code=400, detail='Survivor must belong to the duplicate group',
+            )
+        review = await run_in_threadpool(
+            citation_duplicate_review_service.save_review,
+            sr_id, table_name, payload.group_id, payload.decision,
+            survivor_id, actor_id,
+        )
+        return review
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.put('/{sr_id}/citations/workspace/preferences')
@@ -1253,12 +1573,98 @@ async def save_workspace_column_preferences(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='Citation dataset is not configured',
         )
+
     actor_id = current_user.get('email') or current_user.get('id')
     try:
         columns = await run_in_threadpool(
-            citation_workspace_preferences_service.save_columns, sr_id, table_name, actor_id, payload.columns,
+            citation_workspace_preferences_service.save_columns,
+            sr_id, table_name, actor_id, payload.columns,
         )
         return {'columns': columns}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+
+
+class CitationDeduplicationFieldsRequest(BaseModel):
+    fields: list[str]
+
+
+@router.get('/{sr_id}/citations/workspace/deduplication-preferences')
+async def get_workspace_deduplication_preferences(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'fields': None}
+    actor_id = current_user.get('email') or current_user.get('id')
+    fields = await run_in_threadpool(
+        citation_deduplication_preferences_service.get_fields,
+        sr_id, table_name, actor_id,
+    )
+    return {'fields': fields}
+
+
+@router.post('/{sr_id}/citations/workspace/duplicate-runs')
+async def run_workspace_deduplication(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=400, detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id') or 'unknown'
+    configured = await run_in_threadpool(
+        citation_deduplication_preferences_service.get_fields, sr_id, table_name, actor_id,
+    )
+    configured = configured or [
+        item['column_name'] for item in await run_in_threadpool(cits_dp_service.get_table_columns, table_name)
+        if item['column_name'] not in {'id', 'provenance'}
+    ]
+    cached = await run_in_threadpool(
+        citation_duplicate_run_service.get_cached, sr_id, table_name, (), configured,
+    )
+    try:
+        revision, result = await run_in_threadpool(cits_dp_service.load_duplicate_rows, table_name, configured)
+        run_id = await run_in_threadpool(
+            citation_duplicate_run_service.start, sr_id, table_name, revision, configured, actor_id,
+        )
+        await run_in_threadpool(citation_duplicate_run_service.finish, run_id, result, None)
+        return {'run_id': run_id, 'status': 'succeeded', 'dataset_revision': revision, 'fields': configured}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f'Duplicate calculation failed: {exc}',
+        )
+
+
+@router.put('/{sr_id}/citations/workspace/deduplication-preferences')
+async def save_workspace_deduplication_preferences(
+    sr_id: str,
+    payload: CitationDeduplicationFieldsRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id')
+    available = [
+        item['column_name']
+        for item in cits_dp_service.get_table_columns(table_name)
+    ]
+    try:
+        fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.save_fields,
+            sr_id, table_name, actor_id, payload.fields, available,
+        )
+        return {'fields': fields}
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),

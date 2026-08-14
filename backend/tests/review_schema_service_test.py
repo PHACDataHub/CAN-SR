@@ -18,6 +18,7 @@ def test_migration_files_are_ordered():
     assert files[1].stem == '002_citation_workspace_schema'
     assert files[2].stem == '003_citation_import_preview_mapping_decisions'
     assert files[3].stem == '004_systematic_review_memberships'
+    assert files[4].stem == '005_citation_workspace_column_preferences'
 
 
 def test_canonical_version_is_based_on_migration_files_not_legacy_markers():

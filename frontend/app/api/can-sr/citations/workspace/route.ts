@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
       'direction',
       'columns',
       'filters',
+      'duplicate_status',
     ]) {
       const value = params.get(key)
       if (value) url.searchParams.set(key, value)

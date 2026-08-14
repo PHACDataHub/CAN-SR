@@ -67,7 +67,7 @@ class PdfLinkageEligibilityTests(unittest.TestCase):
 
 
 class WorkspaceCitationTests(unittest.TestCase):
-    def test_workspace_query_uses_metadata_allowlist_literal_search_and_stable_paging(self) -> None:
+    def test_workspace_query_uses_metadata_allowlist_literal_search_and_stable_order(self) -> None:
         connection = Mock()
         cursor = connection.cursor.return_value
         cursor.fetchall.side_effect = [
@@ -86,20 +86,19 @@ class WorkspaceCitationTests(unittest.TestCase):
         with patch('api.services.cit_db_service.postgres_server') as server:
             server.conn = connection
             result = service.list_workspace_citations(
-                'screening_table', page=2, page_size=200, search='100%',
+                'screening_table', search='100%',
             )
 
         self.assertEqual(result['columns'], ['id', 'title', 'abstract'])
-        self.assertEqual(result['page_size'], 100)
         self.assertEqual(result['citations'][0]['id'], 4)
         sql = '\n'.join(call.args[0] for call in cursor.execute.call_args_list)
         self.assertIn('ILIKE %s ESCAPE', sql)
         self.assertNotIn('llm_hidden', sql)
         self.assertNotIn('payload', sql)
-        self.assertIn('ORDER BY "id" ASC LIMIT %s OFFSET %s', sql)
+        self.assertIn('ORDER BY \"id\" ASC', sql)
+        self.assertNotIn('LIMIT %s OFFSET %s', sql)
         query_params = cursor.execute.call_args_list[-1].args[1]
-        self.assertEqual(query_params[-2:], (100, 100))
-        self.assertEqual(query_params[0], '%100\\%%')
+        self.assertEqual(query_params, ('%100\\%%', '%100\\%%'))
 
     def test_workspace_query_discards_unknown_and_hidden_requested_columns(self) -> None:
         connection = Mock()
@@ -112,7 +111,7 @@ class WorkspaceCitationTests(unittest.TestCase):
             ],
             [{'id': 4, 'title': 'A study'}],
         ]
-        cursor.fetchone.side_effect = [{'count': 1}, (1, 4, 1)]
+        cursor.fetchone.side_effect = [{'count': 1}, (1, 4)]
         service = CitsDPService()
 
         with patch('api.services.cit_db_service.postgres_server') as server:
@@ -127,6 +126,67 @@ class WorkspaceCitationTests(unittest.TestCase):
         self.assertIn('SELECT "id", "title" FROM "screening_table"', sql)
         self.assertNotIn('llm_hidden', sql)
         self.assertNotIn('unknown', sql)
+
+    def test_workspace_deduplication_defaults_exclude_provenance(self) -> None:
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchall.side_effect = [
+            [
+                {'column_name': 'id', 'data_type': 'integer'},
+                {'column_name': 'provenance', 'data_type': 'text'},
+                {'column_name': 'title', 'data_type': 'text'},
+            ],
+            [{'id': 1, 'provenance': 'PubMed', 'title': 'Study'}],
+        ]
+        cursor.fetchone.side_effect = [{'count': 1}, (1, 1)]
+
+        with patch('api.services.cit_db_service.postgres_server') as server:
+            server.conn = connection
+            result = CitsDPService().list_workspace_citations('screening_table')
+
+        assert 'provenance' not in result['duplicate_fields']
+
+
+class CitationDeletionTests(unittest.TestCase):
+    def test_delete_accepts_stable_revision_after_row_locking(self) -> None:
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchone.return_value = (2, 309)
+        cursor.rowcount = 1
+        service = CitsDPService()
+
+        with patch('api.services.cit_db_service.postgres_server') as server:
+            server.conn = connection
+            result = service.delete_citations(
+                'screening_table', [309], expected_revision=(2, 309),
+            )
+
+        self.assertEqual(
+            result,
+            {'deleted_count': 1, 'dataset_revision': (2, 309)},
+        )
+        connection.commit.assert_called_once_with()
+        self.assertIn(
+            'COALESCE(MAX(id), 0)',
+            cursor.execute.call_args_list[1].args[0],
+        )
+        self.assertNotIn('xmin', cursor.execute.call_args_list[1].args[0])
+
+    def test_delete_rejects_changed_dataset_revision(self) -> None:
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchone.return_value = (3, 309)
+        service = CitsDPService()
+
+        with patch('api.services.cit_db_service.postgres_server') as server:
+            server.conn = connection
+            with self.assertRaisesRegex(ValueError, 'dataset changed after preview'):
+                service.delete_citations(
+                    'screening_table', [309], expected_revision=(2, 309),
+                )
+
+        connection.rollback.assert_called_once_with()
+        connection.commit.assert_not_called()
 
 
 if __name__ == '__main__':
