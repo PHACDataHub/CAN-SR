@@ -11,7 +11,9 @@ import {
   Eye,
   EyeOff,
   Filter,
+  Loader2,
   Plus,
+  RefreshCw,
   Settings,
   Play,
 } from 'lucide-react'
@@ -83,6 +85,10 @@ const validMemberId = (group: DuplicateGroup, id: unknown) => {
 export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [importColumns, setImportColumns] = useState<string[]>([])
+  const [selectedImportColumns, setSelectedImportColumns] = useState<string[]>(
+    [],
+  )
   const [includeDuplicates, setIncludeDuplicates] = useState(false)
   const [hasDuplicates, setHasDuplicates] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
@@ -110,7 +116,6 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [visibleColumns, setVisibleColumns] = useState<string[] | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [draftColumns, setDraftColumns] = useState<string[]>([])
-  const [columnsSaving, setColumnsSaving] = useState(false)
   const [datasetReady, setDatasetReady] = useState(Boolean(hasDataset))
   const [selectedDatabase, setSelectedDatabase] = useState('')
   const [searchStrings, setSearchStrings] = useState<Record<string, string>>({})
@@ -119,6 +124,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [draftDuplicateStatus, setDraftDuplicateStatus] = useState('')
   const [dedupOpen, setDedupOpen] = useState(false)
   const [dedupFields, setDedupFields] = useState<string[]>([])
+  const [matchingThreshold, setMatchingThreshold] = useState(0.7)
   const [draftDedupFields, setDraftDedupFields] = useState<string[]>([])
   const [dedupRunning, setDedupRunning] = useState(false)
   const [dedupRunStatus, setDedupRunStatus] = useState<
@@ -136,6 +142,20 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   useEffect(() => {
     setDatasetReady(Boolean(hasDataset))
   }, [hasDataset])
+
+  useEffect(() => {
+    const dismiss = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (!(target as HTMLElement).closest('[data-reference-popover]')) {
+        setColumnsOpen(false)
+        setDedupOpen(false)
+        setDuplicateFilterOpen(false)
+        setOpenFilter(null)
+      }
+    }
+    document.addEventListener('mousedown', dismiss)
+    return () => document.removeEventListener('mousedown', dismiss)
+  }, [])
 
   const loadWorkspace = async () => {
     if (!datasetReady) {
@@ -167,8 +187,12 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       return
     }
     setWorkspace(data)
-    setDedupRunStatus(
-      data?.duplicate_run?.status === 'succeeded' ? 'succeeded' : 'not_run',
+    setDedupRunStatus((current) =>
+      current === 'stale'
+        ? 'stale'
+        : data?.duplicate_run?.status === 'succeeded'
+          ? 'succeeded'
+          : 'not_run',
     )
   }
 
@@ -203,6 +227,12 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       const dedupData = await dedupResponse.json().catch(() => ({}))
       if (dedupResponse.ok && Array.isArray(dedupData?.fields)) {
         setDedupFields(dedupData.fields)
+      }
+      if (
+        dedupResponse.ok &&
+        [0.5, 0.7, 0.8].includes(Number(dedupData?.threshold))
+      ) {
+        setMatchingThreshold(Number(dedupData.threshold))
       }
       const reviewResponse = await authenticatedFetch(
         `/api/can-sr/citations/workspace/duplicate-reviews?sr_id=${encodeURIComponent(srId)}`,
@@ -255,6 +285,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const close = () => {
     setOpen(false)
     setFile(null)
+    setImportColumns([])
+    setSelectedImportColumns([])
     setIncludeDuplicates(false)
     setHasDuplicates(false)
     setWarnings([])
@@ -343,11 +375,30 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   }
 
   const tableWidth =
-    152 +
+    280 +
     (workspace?.columns || []).reduce(
       (total, column) => total + (columnWidths[column] || 160),
       0,
     )
+
+  const parseImportColumns = async (selectedFile: File | null) => {
+    if (!selectedFile || !selectedFile.name.toLowerCase().endsWith('.csv')) {
+      setImportColumns([])
+      setSelectedImportColumns([])
+      return
+    }
+    const headerLine = (await selectedFile.text()).split(/\r?\n/, 1)[0] || ''
+    const headers = headerLine
+      .split(',')
+      .map((value) => value.trim().replace(/^"|"$/g, ''))
+      .filter(Boolean)
+    setImportColumns(headers)
+    setSelectedImportColumns((current) =>
+      current.length
+        ? current.filter((column) => headers.includes(column))
+        : headers.filter((column) => !['id', 'provenance'].includes(column)),
+    )
+  }
 
   const importFile = async () => {
     if (!file) return
@@ -415,6 +466,33 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
           ).replace('{count}', String(data.duplicates_skipped))}`
         : importedMessage,
     )
+    if (selectedImportColumns.length) {
+      const columns = [
+        'id',
+        ...selectedImportColumns.filter((column) => column !== 'id'),
+      ]
+      await authenticatedFetch(
+        `/api/can-sr/citations/workspace/preferences?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ columns }),
+        },
+      )
+      await authenticatedFetch(
+        `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: selectedImportColumns,
+            threshold: matchingThreshold,
+          }),
+        },
+      )
+      setVisibleColumns(columns)
+      setDedupFields(selectedImportColumns)
+    }
     setDatasetReady(true)
     await loadWorkspace()
     setFile(null)
@@ -562,7 +640,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   }
   const openColumns = () => {
     setDraftColumns(workspace?.columns || visibleColumns || ['id'])
-    setColumnsOpen(true)
+    setColumnsOpen((current) => !current)
   }
   const openDeduplication = () => {
     setDraftDedupFields(
@@ -572,33 +650,39 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
             (column) => column !== 'id' && column !== 'provenance',
           ) || [],
     )
-    setDedupOpen(true)
+    setDedupOpen((current) => !current)
   }
-  const saveDeduplication = async () => {
-    const merged = [
-      ...new Set(
-        [...dedupFields, ...draftDedupFields].filter(
-          (field) => field !== 'id' && field !== 'provenance',
-        ),
+  const persistColumnPreferences = async (
+    columns: string[],
+    fields: string[],
+    threshold = matchingThreshold,
+  ) => {
+    const [columnsResponse, dedupResponse] = await Promise.all([
+      authenticatedFetch(
+        `/api/can-sr/citations/workspace/preferences?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ columns }),
+        },
       ),
-    ]
-    const response = await authenticatedFetch(
-      `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: merged }),
-      },
-    )
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) {
+      authenticatedFetch(
+        `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields, threshold }),
+        },
+      ),
+    ])
+    if (!columnsResponse.ok || !dedupResponse.ok) {
+      const response = !columnsResponse.ok ? columnsResponse : dedupResponse
+      const data = await response.json().catch(() => ({}))
       setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
-      return
+      return false
     }
-    setDedupFields(data.fields || merged)
     setDedupRunStatus('stale')
-    setDedupOpen(false)
-    await loadWorkspace()
+    return true
   }
   const runDeduplication = async () => {
     setDedupRunning(true)
@@ -618,7 +702,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   }
   const openDuplicateFilter = () => {
     setDraftDuplicateStatus(duplicateStatus)
-    setDuplicateFilterOpen(true)
+    setDuplicateFilterOpen((current) => !current)
   }
   const applyDuplicateFilter = () => {
     setDuplicateStatus(draftDuplicateStatus)
@@ -626,61 +710,52 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   }
   const toggleColumn = (column: string) => {
     if (column === 'id') return
-    setDraftColumns((current) =>
-      current.includes(column)
-        ? current.filter((value) => value !== column)
-        : [...current, column],
+    const currentColumns = workspace?.columns || visibleColumns || ['id']
+    const nextColumns = currentColumns.includes(column)
+      ? currentColumns.filter((value) => value !== column)
+      : [...currentColumns, column]
+    const nextFields = nextColumns.filter(
+      (value) => value !== 'id' && value !== 'provenance',
     )
+    setDraftColumns(nextColumns)
+    setVisibleColumns(nextColumns)
+    setDedupFields(nextFields)
+    void persistColumnPreferences(nextColumns, nextFields)
   }
   const moveColumn = (column: string, offset: -1 | 1) => {
-    setDraftColumns((current) => {
-      const index = current.indexOf(column)
-      const nextIndex = index + offset
-      if (index < 0 || nextIndex < 1 || nextIndex >= current.length)
-        return current
-      const next = [...current]
-      ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
-      return next
-    })
-  }
-  const saveColumns = async () => {
-    const columns = draftColumns.includes('id')
-      ? draftColumns
-      : ['id', ...draftColumns]
-    setColumnsSaving(true)
-    const response = await authenticatedFetch(
-      `/api/can-sr/citations/workspace/preferences?sr_id=${encodeURIComponent(srId)}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ columns }),
-      },
+    const current = workspace?.columns || visibleColumns || ['id']
+    const index = current.indexOf(column)
+    const nextIndex = index + offset
+    if (index < 0 || nextIndex < 1 || nextIndex >= current.length) return
+    const next = [...current]
+    ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+    setDraftColumns(next)
+    setVisibleColumns(next)
+    void persistColumnPreferences(
+      next,
+      next.filter((value) => value !== 'id' && value !== 'provenance'),
     )
-    setColumnsSaving(false)
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
-      return
-    }
-    setVisibleColumns(columns)
-    setColumnsOpen(false)
-    const mergedDedupFields = [
-      ...new Set([
-        ...dedupFields,
-        ...columns.filter(
-          (column) => column !== 'id' && column !== 'provenance',
-        ),
-      ]),
-    ]
-    const dedupResponse = await authenticatedFetch(
+  }
+  const setMatchingStrength = (threshold: number) => {
+    setMatchingThreshold(threshold)
+    void authenticatedFetch(
       `/api/can-sr/citations/workspace/deduplication-preferences?sr_id=${encodeURIComponent(srId)}`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: mergedDedupFields }),
+        body: JSON.stringify({
+          fields: dedupFields,
+          threshold,
+        }),
       },
-    )
-    if (dedupResponse.ok) setDedupFields(mergedDedupFields)
+    ).then(async (response) => {
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
+        return
+      }
+      setDedupRunStatus('stale')
+    })
   }
 
   return (
@@ -1046,7 +1121,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                           style={{ width: columnWidths[column] || 160 }}
                         />
                       ))}
-                      <col />
+                      <col style={{ width: 48 }} />
+                      <col style={{ width: 48 }} />
                     </colgroup>
                     <thead className="sticky top-0 z-10 bg-gray-100 text-gray-700">
                       <tr>
@@ -1066,7 +1142,10 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               onCheckedChange={() => setSelectionMenuOpen(true)}
                             />
                             {selectionMenuOpen ? (
-                              <div className="absolute top-full left-0 z-30 w-48 rounded-md border bg-white p-1 text-left font-normal shadow-lg">
+                              <div
+                                data-reference-popover
+                                className="absolute top-full left-0 z-30 w-48 rounded-md border bg-white p-1 text-left font-normal shadow-lg"
+                              >
                                 {[
                                   [copy.none, []],
                                   [
@@ -1077,42 +1156,23 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                                   ],
                                   [
                                     copy.suggestedDuplicates,
-                                    (workspace.duplicate_groups || [])
-                                      .filter((group) => {
-                                        const review =
-                                          group.review ||
-                                          reviews.find(
-                                            (item) =>
-                                              item.group_id === group.group_id,
-                                          )
-                                        return (
-                                          review?.decision !== 'not_duplicate'
-                                        )
-                                      })
-                                      .flatMap((group) =>
+                                    (workspace.duplicate_groups || []).flatMap(
+                                      (group) =>
                                         group.citation_ids
                                           .map(Number)
                                           .filter(
                                             (id) =>
                                               id !== getReviewSurvivor(group),
                                           ),
-                                      )
-                                      .filter((id) =>
-                                        workspace.citations.some(
-                                          (citation) =>
-                                            Number(citation.id) === id,
-                                        ),
-                                      ),
+                                    ),
                                   ],
                                 ].map(([label, ids]) => (
                                   <button
                                     key={String(label)}
                                     type="button"
-                                    className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-gray-100"
+                                    className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
                                     onClick={() => {
-                                      setSelectedIds([
-                                        ...new Set(ids as number[]),
-                                      ])
+                                      setSelectedIds(ids as number[])
                                       setSelectionMenuOpen(false)
                                     }}
                                   >
@@ -1127,6 +1187,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                           <div className="flex items-center justify-center gap-2">
                             <button
                               type="button"
+                              data-reference-popover
                               onClick={openDuplicateFilter}
                               className={`rounded p-1 ${duplicateStatus ? 'text-emerald-700' : 'text-gray-500'} hover:bg-gray-200`}
                               aria-label={
@@ -1146,7 +1207,10 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               )}
                             </button>
                             {duplicateFilterOpen ? (
-                              <div className="absolute top-full left-0 z-30 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
+                              <div
+                                data-reference-popover
+                                className="absolute top-full left-0 z-30 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg"
+                              >
                                 <p className="font-semibold">
                                   {copy.duplicateStatus}
                                 </p>
@@ -1197,6 +1261,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                             ) : null}
                             <button
                               type="button"
+                              data-reference-popover
                               onClick={openDeduplication}
                               className="rounded p-1 text-gray-500 hover:bg-gray-200"
                               aria-label={copy.configureDuplicateFields}
@@ -1211,34 +1276,88 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               type="button"
                               onClick={() => void runDeduplication()}
                               disabled={dedupRunning}
-                              className={`rounded p-1 hover:bg-gray-200 ${dedupRunStatus === 'stale' ? 'text-amber-600' : 'text-emerald-700'}`}
+                              className={`rounded p-1 hover:bg-gray-200 ${dedupRunning ? 'text-emerald-700' : dedupRunStatus === 'stale' ? 'text-amber-600' : 'text-emerald-700'}`}
                               aria-label={
                                 dedupRunning
                                   ? copy.runningDuplicateCalculation
-                                  : copy.runDuplicateCalculation
+                                  : dedupRunStatus === 'succeeded'
+                                    ? copy.rerunDuplicateCalculation
+                                    : dedupRunStatus === 'stale'
+                                      ? copy.rerunDuplicateCalculation
+                                      : copy.runDuplicateCalculation
                               }
                               title={
                                 dedupRunning
                                   ? copy.runningDuplicateCalculation
-                                  : dedupRunStatus === 'stale'
+                                  : dedupRunStatus === 'succeeded' ||
+                                      dedupRunStatus === 'stale'
                                     ? copy.rerunDuplicateCalculation
                                     : copy.runDuplicateCalculation
                               }
                             >
-                              <Play
-                                className={`h-4 w-4 ${dedupRunning ? 'animate-pulse' : ''}`}
-                                aria-hidden="true"
-                              />
+                              {dedupRunning ? (
+                                <Loader2
+                                  className="h-4 w-4 animate-spin"
+                                  aria-hidden="true"
+                                />
+                              ) : dedupRunStatus === 'succeeded' ? (
+                                <RefreshCw
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Play className="h-4 w-4" aria-hidden="true" />
+                              )}
                             </button>
                           </div>
                           {dedupOpen ? (
-                            <div className="absolute top-full left-0 z-30 w-72 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
-                              <p className="font-semibold">
-                                {copy.duplicateMatchingFields}
-                              </p>
-                              <p className="mt-1 text-xs text-gray-600">
-                                {copy.duplicateFieldsDescription}
-                              </p>
+                            <div
+                              data-reference-popover
+                              className="absolute top-full left-0 z-30 w-72 rounded-md border bg-white p-3 text-left font-normal shadow-lg"
+                            >
+                              <h2 className="text-sm font-semibold text-gray-900">
+                                {copy.deduplicationSettings ||
+                                  'Deduplication Settings'}
+                              </h2>
+                              <fieldset className="mt-4">
+                                <legend className="text-xs font-semibold text-gray-700">
+                                  {copy.matchingStrength || 'Matching strength'}
+                                </legend>
+                                <div
+                                  className="mt-2 grid grid-cols-3 rounded-md border border-gray-200 bg-gray-50 p-0.5"
+                                  role="radiogroup"
+                                  aria-label={
+                                    copy.matchingStrength || 'Matching Strength'
+                                  }
+                                >
+                                  {[
+                                    [0.5, copy.permissive || 'Permissive'],
+                                    [0.7, copy.balanced || 'Balanced'],
+                                    [0.8, copy.strict || 'Strict'],
+                                  ].map(([threshold, label]) => {
+                                    const selected =
+                                      matchingThreshold === threshold
+                                    return (
+                                      <button
+                                        key={String(threshold)}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={selected}
+                                        onClick={() =>
+                                          setMatchingStrength(Number(threshold))
+                                        }
+                                        className={`rounded px-1.5 py-1.5 text-xs font-medium transition-colors focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none ${selected ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-gray-200' : 'text-gray-500 hover:bg-white/80 hover:text-gray-700'}`}
+                                      >
+                                        {String(label)}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </fieldset>
+                              <h3 className="mt-4 border-t border-gray-100 pt-3 text-xs font-semibold text-gray-700">
+                                {copy.selectDeduplicationFields ||
+                                  'Select Deduplication Fields'}
+                              </h3>
                               <div className="mt-2 max-h-56 space-y-1 overflow-auto">
                                 {(
                                   workspace.available_columns ||
@@ -1259,39 +1378,42 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                                           column,
                                         )}
                                         onCheckedChange={(checked) => {
-                                          setDraftDedupFields((current) =>
-                                            checked
-                                              ? [
-                                                  ...new Set([
-                                                    ...current,
-                                                    column,
-                                                  ]),
-                                                ]
-                                              : current.filter(
-                                                  (value) => value !== column,
-                                                ),
+                                          const currentColumns =
+                                            workspace.columns || []
+                                          const nextFields = checked
+                                            ? [
+                                                ...new Set([
+                                                  ...dedupFields,
+                                                  column,
+                                                ]),
+                                              ]
+                                            : dedupFields.filter(
+                                                (value) => value !== column,
+                                              )
+                                          const nextColumns = checked
+                                            ? [
+                                                ...new Set([
+                                                  ...currentColumns,
+                                                  column,
+                                                ]),
+                                              ]
+                                            : currentColumns.filter(
+                                                (value) => value !== column,
+                                              )
+                                          setDraftDedupFields(nextFields)
+                                          setDedupFields(nextFields)
+                                          setDraftColumns(nextColumns)
+                                          setVisibleColumns(nextColumns)
+                                          setDedupRunStatus('stale')
+                                          void persistColumnPreferences(
+                                            nextColumns,
+                                            nextFields,
                                           )
                                         }}
                                       />
                                       {column}
                                     </label>
                                   ))}
-                              </div>
-                              <div className="mt-3 flex justify-end gap-2">
-                                <button
-                                  type="button"
-                                  className="rounded border px-2 py-1 text-xs"
-                                  onClick={() => setDedupOpen(false)}
-                                >
-                                  {copy.cancel}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white"
-                                  onClick={() => void saveDeduplication()}
-                                >
-                                  {copy.saveColumns}
-                                </button>
                               </div>
                             </div>
                           ) : null}
@@ -1321,6 +1443,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               {column !== 'id' ? (
                                 <button
                                   type="button"
+                                  data-reference-popover
                                   className={`rounded p-1 hover:bg-gray-200 ${filters[column] ? 'text-emerald-700' : 'text-gray-500'}`}
                                   aria-label={copy.filterBy.replace(
                                     '{column}',
@@ -1342,7 +1465,10 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               ) : null}
                             </div>
                             {column !== 'id' && openFilter === column ? (
-                              <div className="absolute top-full right-1 z-20 mt-1 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg">
+                              <div
+                                data-reference-popover
+                                className="absolute top-full right-1 z-20 mt-1 w-64 rounded-md border bg-white p-3 text-left font-normal shadow-lg"
+                              >
                                 <label className="text-xs font-medium text-gray-700">
                                   {copy.filterBy.replace('{column}', column)}
                                   <input
@@ -1396,10 +1522,11 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                             />
                           </th>
                         ))}
-                        <th aria-hidden="true" />
-                        <th className="relative w-full px-3 py-2 text-left">
+                        <th aria-hidden="true" className="w-12" />
+                        <th className="relative w-12 px-3 py-2 text-left">
                           <button
                             type="button"
+                            data-reference-popover
                             onClick={openColumns}
                             className="inline-flex h-6 w-6 items-center justify-center rounded border text-base leading-none hover:bg-gray-200"
                             aria-label={copy.columns || 'Add or remove columns'}
@@ -1409,6 +1536,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                           {columnsOpen ? (
                             <div
                               role="dialog"
+                              data-reference-popover
                               aria-labelledby="columns-panel-title"
                               className="absolute top-full right-0 z-20 max-h-[min(40rem,calc(100vh-2rem))] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-md border bg-white p-4 text-left font-normal shadow-lg"
                             >
@@ -1479,27 +1607,6 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                                     ) : null}
                                   </div>
                                 ))}
-                              </div>
-                              <div className="mt-4 flex justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setColumnsOpen(false)}
-                                  className="rounded-md border px-4 py-2 text-sm"
-                                >
-                                  {copy.cancel}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    columnsSaving || draftColumns.length === 0
-                                  }
-                                  onClick={() => void saveColumns()}
-                                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-                                >
-                                  {columnsSaving
-                                    ? copy.working
-                                    : copy.saveColumns}
-                                </button>
                               </div>
                             </div>
                           ) : null}
@@ -1709,6 +1816,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                   onChange={(event) => {
                     const selectedFile = event.target.files?.[0] || null
                     setFile(selectedFile)
+                    void parseImportColumns(selectedFile)
                     void checkFileForDuplicates(selectedFile)
                   }}
                 />
@@ -1722,22 +1830,58 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                   <button
                     type="button"
                     className="ml-3 text-xs font-medium text-gray-600 underline"
-                    onClick={() => setFile(null)}
+                    onClick={() => {
+                      setFile(null)
+                      setImportColumns([])
+                      setSelectedImportColumns([])
+                    }}
                   >
                     {copy.removeFile}
                   </button>
                 </div>
               ) : null}
-              {hasDuplicates ? (
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                  <Checkbox
-                    checked={includeDuplicates}
-                    onCheckedChange={(checked) =>
-                      setIncludeDuplicates(checked === true)
-                    }
-                  />
-                  <span>{copy.includeDuplicates}</span>
-                </label>
+              {file && importColumns.length ? (
+                <fieldset className="max-h-48 space-y-2 overflow-y-auto rounded-md border p-3">
+                  <legend className="px-1 text-sm font-semibold">
+                    {copy.selectDeduplicationColumns ||
+                      'Select deduplication columns'}
+                  </legend>
+                  <label className="flex items-center gap-2 border-b pb-2 text-sm font-medium">
+                    <Checkbox
+                      checked={
+                        selectedImportColumns.length === importColumns.length
+                      }
+                      onCheckedChange={(checked) =>
+                        setSelectedImportColumns(
+                          checked === true ? importColumns : [],
+                        )
+                      }
+                      aria-label={
+                        copy.selectAllDeduplicationColumns ||
+                        'Select All Columns'
+                      }
+                    />
+                    {copy.selectAllDeduplicationColumns || 'Select All Columns'}
+                  </label>
+                  {importColumns.map((column) => (
+                    <label
+                      key={column}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={selectedImportColumns.includes(column)}
+                        onCheckedChange={(checked) =>
+                          setSelectedImportColumns((current) =>
+                            checked === true
+                              ? [...new Set([...current, column])]
+                              : current.filter((value) => value !== column),
+                          )
+                        }
+                      />
+                      {column}
+                    </label>
+                  ))}
+                </fieldset>
               ) : null}
               {warnings.length ? (
                 <ul className="list-disc space-y-1 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
@@ -1746,6 +1890,19 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                       {warning.replace('__duplicate_warning__', '')}
                     </li>
                   ))}
+                  {hasDuplicates ? (
+                    <li className="list-none pt-2">
+                      <label className="flex items-center gap-2">
+                        <Checkbox
+                          checked={includeDuplicates}
+                          onCheckedChange={(checked) =>
+                            setIncludeDuplicates(checked === true)
+                          }
+                        />
+                        <span>{copy.includeDuplicates}</span>
+                      </label>
+                    </li>
+                  ) : null}
                 </ul>
               ) : null}
               {message ? (

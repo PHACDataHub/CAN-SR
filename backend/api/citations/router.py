@@ -1393,6 +1393,10 @@ async def list_workspace_citations(
             citation_deduplication_preferences_service.get_fields,
             sr_id, table_name, actor_id,
         )
+        configured_threshold = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_threshold,
+            sr_id, table_name, actor_id,
+        )
         response = await run_in_threadpool(
             cits_dp_service.list_workspace_citations,
             table_name, search, sort, direction,
@@ -1406,6 +1410,7 @@ async def list_workspace_citations(
             duplicate_status,
             None,
             False,
+            configured_threshold,
         )
         cached = await run_in_threadpool(
             citation_duplicate_run_service.get_cached,
@@ -1416,6 +1421,8 @@ async def list_workspace_citations(
                 ) if column not in {'id', 'provenance'}
             ],
         )
+        if cached and cached.get('result', {}).get('threshold') != configured_threshold:
+            cached = None
         response = await run_in_threadpool(
             cits_dp_service.list_workspace_citations,
             table_name, search, sort, direction,
@@ -1427,7 +1434,7 @@ async def list_workspace_citations(
             json.loads(
                 filters,
             ) if filters else None, configured_fields, duplicate_status,
-            (cached or {}).get('result'), False,
+            (cached or {}).get('result'), False, configured_threshold,
         )
         reviews = await run_in_threadpool(
             citation_duplicate_review_service.list_reviews, sr_id, table_name,
@@ -1758,6 +1765,7 @@ async def save_workspace_column_preferences(
 
 class CitationDeduplicationFieldsRequest(BaseModel):
     fields: list[str]
+    threshold: float = 0.70
 
 
 @router.get('/{sr_id}/citations/workspace/deduplication-preferences')
@@ -1773,7 +1781,8 @@ async def get_workspace_deduplication_preferences(
         citation_deduplication_preferences_service.get_fields,
         sr_id, table_name, actor_id,
     )
-    return {'fields': fields}
+    threshold = await run_in_threadpool(citation_deduplication_preferences_service.get_threshold, sr_id, table_name, actor_id)
+    return {'fields': fields, 'threshold': threshold}
 
 
 @router.post('/{sr_id}/citations/workspace/duplicate-runs')
@@ -1798,7 +1807,7 @@ async def run_workspace_deduplication(
         citation_duplicate_run_service.get_cached, sr_id, table_name, (), configured,
     )
     try:
-        revision, result = await run_in_threadpool(cits_dp_service.load_duplicate_rows, table_name, configured)
+        revision, result = await run_in_threadpool(cits_dp_service.load_duplicate_rows, table_name, configured, await run_in_threadpool(citation_deduplication_preferences_service.get_threshold, sr_id, table_name, actor_id))
         run_id = await run_in_threadpool(
             citation_duplicate_run_service.start, sr_id, table_name, revision, configured, actor_id,
         )
@@ -1833,7 +1842,11 @@ async def save_workspace_deduplication_preferences(
             citation_deduplication_preferences_service.save_fields,
             sr_id, table_name, actor_id, payload.fields, available,
         )
-        return {'fields': fields}
+        threshold = await run_in_threadpool(
+            citation_deduplication_preferences_service.save_threshold,
+            sr_id, table_name, actor_id, payload.threshold,
+        )
+        return {'fields': fields, 'threshold': threshold}
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
