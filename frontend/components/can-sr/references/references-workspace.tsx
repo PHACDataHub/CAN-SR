@@ -129,7 +129,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [selectedSurvivors, setSelectedSurvivors] = useState<
     Record<string, number>
   >({})
-  const [reviewMinimized, setReviewMinimized] = useState(false)
+  const [reviewMinimized, setReviewMinimized] = useState(true)
   const [reviewSaving, setReviewSaving] = useState(false)
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false)
 
@@ -825,21 +825,22 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                         <div>
                           <button
                             type="button"
-                            className="text-amber-950 hover:text-amber-800 disabled:opacity-50"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-amber-300 bg-amber-100 text-amber-950 shadow-sm transition-colors hover:bg-amber-200 hover:text-amber-950 focus:ring-2 focus:ring-amber-700 focus:ring-offset-1 focus:outline-none disabled:opacity-50"
                             onClick={() =>
                               setReviewMinimized((minimized) => !minimized)
                             }
+                            aria-expanded={!reviewMinimized}
                             aria-label={`${reviewMinimized ? copy.restore : copy.minimize} ${copy.duplicateGroupReview}`}
                             title={`${reviewMinimized ? copy.restore : copy.minimize} ${copy.duplicateGroupReview}`}
                           >
                             {reviewMinimized ? (
                               <ChevronDown
-                                className="h-3.5 w-3.5"
+                                className="h-6 w-6 stroke-[2.5]"
                                 aria-hidden="true"
                               />
                             ) : (
                               <ChevronUp
-                                className="h-3.5 w-3.5"
+                                className="h-6 w-6 stroke-[2.5]"
                                 aria-hidden="true"
                               />
                             )}
@@ -1038,7 +1039,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                     <colgroup>
                       <col style={{ width: 48 }} />
                       <col style={{ width: 48 }} />
-                      <col style={{ width: 56 }} />
+                      <col style={{ width: 88 }} />
                       {workspace.columns.map((column) => (
                         <col
                           key={column}
@@ -1064,19 +1065,6 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               }
                               onCheckedChange={() => setSelectionMenuOpen(true)}
                             />
-                            <button
-                              type="button"
-                              aria-label={copy.chooseSelection}
-                              className="rounded p-0.5 text-gray-500 hover:bg-gray-200"
-                              onClick={() =>
-                                setSelectionMenuOpen((open) => !open)
-                              }
-                            >
-                              <ChevronDown
-                                className="h-3.5 w-3.5"
-                                aria-hidden="true"
-                              />
-                            </button>
                             {selectionMenuOpen ? (
                               <div className="absolute top-full left-0 z-30 w-48 rounded-md border bg-white p-1 text-left font-normal shadow-lg">
                                 {[
@@ -1135,8 +1123,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                             ) : null}
                           </div>
                         </th>
-                        <th className="relative w-14 px-2 py-2 text-center">
-                          <div className="flex items-center justify-center gap-1">
+                        <th className="relative w-[88px] px-4 py-2 text-center">
+                          <div className="flex items-center justify-center gap-2">
                             <button
                               type="button"
                               onClick={openDuplicateFilter}
@@ -1542,7 +1530,7 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                             />
                           </td>
                           <td
-                            className={`px-2 py-2 text-center ${citation.duplicate_status === 'exact' ? 'bg-red-50 text-red-700' : citation.duplicate_status === 'possible' ? 'bg-amber-50 text-amber-700' : reviews.find((review) => review.group_id === citation.duplicate_group_id)?.decision === 'not_duplicate' ? 'bg-green-50 text-green-700' : 'text-gray-300'}`}
+                            className={`px-4 py-2 text-center ${citation.duplicate_status === 'exact' ? 'bg-red-50 text-red-700' : citation.duplicate_status === 'possible' ? 'bg-amber-50 text-amber-700' : reviews.find((review) => review.group_id === citation.duplicate_group_id)?.decision === 'not_duplicate' ? 'bg-green-50 text-green-700' : 'text-gray-300'}`}
                             title={
                               citation.duplicate_status === 'exact'
                                 ? copy.exactDuplicateMatch

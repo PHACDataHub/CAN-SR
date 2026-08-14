@@ -300,6 +300,81 @@ class CitsDPService:
             'TIMESTAMPTZ', table_name=table_name,
         )
 
+    def cleanup_set_answer_validation_metadata(
+        self,
+        table_name: str,
+        step: str,
+        *,
+        execute: bool = False,
+    ) -> dict[str, Any]:
+        """Report or clear legacy validation metadata attributable to Set Answer.
+
+        Set Answer historically marked rows as validated without provenance.  The
+        only safe historical scope available is rows whose stage-specific human
+        answer explicitly carries ``source=retrospective_validation``.  This
+        command is therefore dry-run by default and requires an explicit execute
+        flag; it never runs implicitly during normal requests.
+        """
+        table_name = _validate_ident(str(table_name or ''), kind='table_name')
+        step = str(step or '').strip().lower()
+        if step not in {'l1', 'l2', 'parameters'}:
+            raise ValueError('step must be l1, l2, or parameters')
+        validation_col = f'{step}_validations'
+        validated_by_col = f'{step}_validated_by'
+        validated_at_col = f'{step}_validated_at'
+        columns = {
+            str(row.get('column_name'))
+            for row in self.get_table_columns(table_name)
+            if row.get('column_name')
+        }
+        human_prefix = 'human_param_' if step == 'parameters' else f'human_{step}_'
+        human_cols = sorted(c for c in columns if c.startswith(human_prefix))
+        metadata_cols = [
+            c for c in (
+                validation_col, validated_by_col, validated_at_col,
+            ) if c in columns
+        ]
+        if not human_cols or not metadata_cols:
+            return {'table_name': table_name, 'step': step, 'candidates': 0, 'cleared': 0, 'dry_run': not execute}
+
+        source_checks = ' OR '.join(
+            f'COALESCE("{col}"->>\'source\', \'\') = %s' for col in human_cols
+        )
+        params = [*(['retrospective_validation'] * len(human_cols))]
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                f'''SELECT COUNT(*) FROM "{table_name}"
+                    WHERE ({source_checks})
+                      AND ({' OR '.join(f'"{col}" IS NOT NULL' for col in metadata_cols)})''',
+                params,
+            )
+            candidates = int((cur.fetchone() or [0])[0] or 0)
+            cleared = 0
+            if execute and candidates:
+                assignments = ', '.join(
+                    f'"{col}" = NULL' for col in metadata_cols
+                )
+                cur.execute(
+                    f'''UPDATE "{table_name}" SET {assignments}
+                        WHERE ({source_checks})
+                          AND ({' OR '.join(f'"{col}" IS NOT NULL' for col in metadata_cols)})''',
+                    [*params, *params],
+                )
+                cleared = int(cur.rowcount or 0)
+            if execute:
+                conn.commit()
+            return {
+                'table_name': table_name, 'step': step,
+                'candidates': candidates, 'cleared': cleared,
+                'dry_run': not execute,
+            }
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
     def ensure_screening_agent_runs_table(self) -> None:
         """Ensure the normalized agent-run storage table exists.
 
@@ -1965,20 +2040,31 @@ class CitsDPService:
         self.create_column('human_l1_decision', 'TEXT', table_name=table_name)
         self.create_column('human_l2_decision', 'TEXT', table_name=table_name)
 
-        def _human_col(q: str) -> str:
+        def _human_col(q: str, stage: str) -> str:
             core = snake_case(q, max_len=56)
-            return f"human_{core}" if core else 'human_col'
+            return f"human_{stage}_{core}" if core else 'human_col'
 
-        def _llm_col(q: str) -> str:
+        def _llm_col(q: str, stage: str) -> str:
             core = snake_case(q, max_len=56)
-            return f"llm_{core}" if core else 'llm_col'
+            return f"llm_{stage}_{core}" if core else 'llm_col'
 
         needed_cols: list[str] = []
-        for q in list(l2_union_qs):
+        for q in l1_qs:
             if not isinstance(q, str) or not q.strip():
                 continue
-            needed_cols.append(_human_col(q))
-            needed_cols.append(_llm_col(q))
+            needed_cols.extend((
+                _human_col(q, 'l1'), _llm_col(
+                    q, 'l1',
+                ), f'llm_{snake_case(q, max_len=56)}',
+            ))
+        for q in l2_qs:
+            if not isinstance(q, str) or not q.strip():
+                continue
+            needed_cols.extend((
+                _human_col(q, 'l2'), _llm_col(
+                    q, 'l2',
+                ), f'llm_{snake_case(q, max_len=56)}',
+            ))
         # stable unique
         seen = set()
         uniq_cols = []

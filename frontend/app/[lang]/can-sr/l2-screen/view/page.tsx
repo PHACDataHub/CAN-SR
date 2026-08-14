@@ -72,7 +72,7 @@ function parseObject(value: any): Record<string, any> | null {
   - Render a workspace (left) that shows the full-text PDF viewer with support for sentence-index scrolling
   - Render a selection sidebar (right) with one section per L2 question:
       - Dropdown containing options from criteriaData.possible_answers
-      - Default selection set to AI answer from the citation row (column name computed via snake_case_column)
+ *       - Default selection set only from the persisted stage-specific human answer
       - "AI" button that calls the backend classify endpoint with screening_step='l2' and updates the AI panel
   - If an AI answer exists for that question, show a collapsible panel containing the parsed LLM JSON
     including confidence, explanation, and evidence_sentences chips that scroll the PDF to the sentence.
@@ -102,8 +102,8 @@ function snakeCaseColumn(name: string) {
 }
 
 /**
- * Human classification column for screening (mirrors llm_ prefix but with human_).
- * Example: question -> llm_question, human_question
+ * Human classification column for screening.
+ * Example: question -> human_question
  */
 function humanScreenColumn(name: string) {
   const base = snakeCaseColumn(name)
@@ -775,18 +775,6 @@ export default function CanSrL2ScreenViewPage() {
         newPanelOpen[idx] = false
       }
 
-      // For L2 questions: if no human selection present, allow llm_* to prefill the dropdown
-      const hasSelection =
-        newSelections[idx] !== undefined && newSelections[idx] !== ''
-      if (sourceFlags[idx] === 'l2' && !hasSelection) {
-        const aiSelected =
-          newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string'
-            ? newAiPanels[idx].selected
-            : null
-        if (aiSelected) {
-          newSelections[idx] = aiSelected
-        }
-      }
     })
 
     setSelections(newSelections)
@@ -1273,9 +1261,6 @@ export default function CanSrL2ScreenViewPage() {
                       )
                       const current = selections[idx] ?? ''
                       const aiData = aiPanels[idx]
-                      const aiSelected =
-                        aiData && aiData.selected ? aiData.selected : undefined
-
                       // Per-question highlight aligned with list/back-end logic.
                       // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
                       // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
@@ -1400,7 +1385,7 @@ export default function CanSrL2ScreenViewPage() {
                               ) : null}
 
                               <select
-                                value={current || (aiSelected ?? '')}
+                                value={current}
                                 onChange={(e) =>
                                   onSelectOption(idx, e.target.value)
                                 }

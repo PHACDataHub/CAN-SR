@@ -90,8 +90,13 @@ export default function CitationsListPage({
     'needs' | 'validated' | 'unvalidated' | 'not_screened' | 'all'
   >('all')
   const [filterHydrated, setFilterHydrated] = useState<boolean>(false)
+  const [decisionFilter, setDecisionFilter] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [draftSearchQuery, setDraftSearchQuery] = useState('')
 
   const filterParam = searchParams?.get('filter')
+  const decisionParam = searchParams?.get('decision') || 'all'
+  const queryParam = searchParams?.get('q') || ''
   const filterStorageKey = useMemo(() => {
     if (!srId) return null
     if (!(screeningStep === 'l1' || screeningStep === 'l2')) return null
@@ -164,6 +169,13 @@ export default function CitationsListPage({
       // ignore
     }
   }, [srId, screeningStep, filterMode, filterStorageKey])
+
+  useEffect(() => {
+    const valid = ['all', 'included', 'excluded', 'undecided']
+    setDecisionFilter(valid.includes(decisionParam) ? decisionParam : 'all')
+    setSearchQuery(queryParam)
+    setDraftSearchQuery(queryParam)
+  }, [decisionParam, queryParam])
   // page-local stats no longer shown (SR-wide progress bar is in metrics panel)
   const [_pageStats, setPageStats] = useState<
     ScreeningMetricsStats | undefined
@@ -309,7 +321,9 @@ export default function CitationsListPage({
           const res = await fetch(
             `/api/can-sr/screen/citation-ids?sr_id=${encodeURIComponent(srId)}&step=${encodeURIComponent(
               screeningStep,
-            )}&filter=${encodeURIComponent(filterMode)}`,
+            )}&filter=${encodeURIComponent(filterMode)}&decision=${encodeURIComponent(
+              decisionFilter,
+            )}&q=${encodeURIComponent(searchQuery)}`,
             { method: 'GET', headers },
           )
           const data = await res.json().catch(() => ({}))
@@ -382,7 +396,15 @@ export default function CitationsListPage({
 
     loadCriteria()
     loadCitations()
-  }, [srId, router, screeningStep, filterMode, filterHydrated])
+  }, [
+    srId,
+    router,
+    screeningStep,
+    filterMode,
+    decisionFilter,
+    searchQuery,
+    filterHydrated,
+  ])
 
   // Load SR thresholds + metrics (L1/L2 only)
   useEffect(() => {
@@ -941,35 +963,101 @@ export default function CitationsListPage({
               <div className="mt-6">
                 {/* Filter bar moved above the list view */}
                 {screeningStep === 'l1' || screeningStep === 'l2' ? (
-                  <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-gray-200 bg-white p-3">
-                    <label className="text-sm text-gray-700">Filter</label>
-                    <select
-                      value={filterMode}
-                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                        const next = e.target.value as any
-                        setFilterMode(next)
-                        // Keep URL in sync on *user intent* (safe, avoids effect-driven loops).
-                        try {
+                  <div className="mb-4 flex flex-wrap items-end gap-3 rounded-md border border-gray-200 bg-white p-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        Filter
+                      </label>
+                      <select
+                        value={filterMode}
+                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                          const next = e.target.value as any
+                          setFilterMode(next)
+                          // Keep URL in sync on *user intent* (safe, avoids effect-driven loops).
+                          try {
+                            const params = new URLSearchParams(
+                              searchParams?.toString() || '',
+                            )
+                            params.set('sr_id', String(srId || ''))
+                            params.set('filter', String(next))
+                            router.replace(
+                              `/${encodeURIComponent(String(lang || 'en'))}/can-sr/${encodeURIComponent(pageview)}?${params.toString()}`,
+                            )
+                          } catch {
+                            // ignore
+                          }
+                        }}
+                        className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+                      >
+                        <option value="all">All</option>
+                        <option value="needs">Needs human review</option>
+                        <option value="unvalidated">Unvalidated</option>
+                        <option value="validated">Validated</option>
+                        <option value="not_screened">Not screened yet</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        Decision
+                      </label>
+                      <select
+                        aria-label="Citation decision"
+                        value={decisionFilter}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setDecisionFilter(next)
                           const params = new URLSearchParams(
                             searchParams?.toString() || '',
                           )
                           params.set('sr_id', String(srId || ''))
-                          params.set('filter', String(next))
+                          params.set('decision', next)
                           router.replace(
                             `/${encodeURIComponent(String(lang || 'en'))}/can-sr/${encodeURIComponent(pageview)}?${params.toString()}`,
                           )
-                        } catch {
-                          // ignore
-                        }
-                      }}
-                      className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="needs">Needs human review</option>
-                      <option value="unvalidated">Unvalidated</option>
-                      <option value="validated">Validated</option>
-                      <option value="not_screened">Not screened yet</option>
-                    </select>
+                        }}
+                        className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+                      >
+                        <option value="all">All decisions</option>
+                        <option value="included">Included</option>
+                        <option value="excluded">Excluded</option>
+                        <option value="undecided">Undecided</option>
+                      </select>
+                    </div>
+                    <div className="min-w-0 flex-1 sm:max-w-sm">
+                      <label
+                        htmlFor="citation-list-search"
+                        className="mb-1 block text-xs font-semibold text-gray-700"
+                      >
+                        Search citations
+                      </label>
+                      <input
+                        id="citation-list-search"
+                        type="search"
+                        value={draftSearchQuery}
+                        onChange={(e) => {
+                          setDraftSearchQuery(e.target.value)
+                          if (!e.target.value.trim()) setSearchQuery('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            const next = draftSearchQuery.trim()
+                            setSearchQuery(next)
+                            const params = new URLSearchParams(
+                              searchParams?.toString() || '',
+                            )
+                            params.set('sr_id', String(srId || ''))
+                            if (next) params.set('q', next)
+                            else params.delete('q')
+                            router.replace(
+                              `/${encodeURIComponent(String(lang || 'en'))}/can-sr/${encodeURIComponent(pageview)}?${params.toString()}`,
+                            )
+                          }
+                        }}
+                        placeholder="Search citations"
+                        className="h-9 w-full rounded-md border border-gray-200 px-2.5 text-sm"
+                      />
+                    </div>
                   </div>
                 ) : null}
 

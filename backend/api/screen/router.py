@@ -85,8 +85,16 @@ class ScreeningMetricsCriterion(BaseModel):
     confident_exclude_count: int
     needs_human_review_count: int
     accuracy: float | None = None
+    accuracy_all: float | None = None
     # NOTE: this is NOT human accuracy; it is agreement between screening + critical agents.
     accuracy_critical_agent: float | None = None
+    f1_score: float | None = None
+    precision: float | None = None
+    recall: float | None = None
+    npv: float | None = None
+    confusion_matrix: dict[str, int] | None = None
+    queue_confusion_matrix: dict[str, int] | None = None
+    human_total_count_all: int = 0
 
 
 class ScreeningMetricsSummary(BaseModel):
@@ -227,6 +235,8 @@ async def get_filtered_citation_ids(
     sr_id: str,
     step: str = 'l1',
     filter: str = 'all',
+    decision: str = 'all',
+    q: str = '',
     current_user: dict[str, Any] = Depends(get_current_active_user),
 ):
     """Return a filtered citation id list for list pagination and viewer navigation.
@@ -237,6 +247,8 @@ async def get_filtered_citation_ids(
     - validated: validated citations (for this step)
     - unvalidated: not validated
     - not_screened: no agent runs yet (for this step pipeline)
+    - decision: all, included, excluded, or undecided
+    - q: case-insensitive search across citation text and uploaded metadata
     """
 
     step_norm = str(step or 'l1').lower().strip()
@@ -250,6 +262,13 @@ async def get_filtered_citation_ids(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid filter',
         )
+
+    decision_norm = str(decision or 'all').lower().strip()
+    if decision_norm not in {'all', 'included', 'excluded', 'undecided'}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid decision',
+        )
+    search_norm = str(q or '').strip().lower()
 
     try:
         sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
@@ -341,7 +360,7 @@ async def get_filtered_citation_ids(
             cits_dp_service.get_citations_by_ids,
             ids,
             table_name,
-            ['id', validations_col, legacy_validated_by],
+            None,
         )
     except Exception as e:
         raise HTTPException(
@@ -367,6 +386,25 @@ async def get_filtered_citation_ids(
                 cid,
             ), per_crit=per_crit, criteria=criteria,
         )
+
+        if decision_norm != 'all' or search_norm:
+            decision_l1, decision_l2 = compute_screening_decisions(row, cp)
+            stage_decision = decision_l1 if step_norm == 'l1' else decision_l2
+            expected_decision = {
+                'included': 'include',
+                'excluded': 'exclude',
+                'undecided': 'undecided',
+            }.get(decision_norm)
+            if expected_decision and stage_decision != expected_decision:
+                continue
+            if search_norm:
+                searchable = ' '.join(
+                    str(value) for key, value in row.items()
+                    if key not in {validations_col, legacy_validated_by}
+                    and value is not None
+                ).lower()
+                if search_norm not in searchable:
+                    continue
 
         if filter_norm == 'all':
             filtered_ids.append(int(cid))
@@ -695,7 +733,7 @@ def _parse_selected_from_human_payload(v: Any) -> str | None:
         try:
             obj = json.loads(s)
             if isinstance(obj, dict):
-                if obj.get('source') == 'llm':
+                if obj.get('source') in {'llm', 'csv_upload'}:
                     return None
                 sel = obj.get('selected')
                 return str(sel).strip() if isinstance(sel, str) else None
@@ -703,7 +741,7 @@ def _parse_selected_from_human_payload(v: Any) -> str | None:
             return s
         return None
     if isinstance(v, dict):
-        if v.get('source') == 'llm':
+        if v.get('source') in {'llm', 'csv_upload'}:
             return None
         sel = v.get('selected')
         return str(sel).strip() if isinstance(sel, str) else None
@@ -723,6 +761,54 @@ def _criterion_key_from_question(question: str) -> str:
         s = re.sub(r'_+', '_', s)
         s = re.sub(r'^_+|_+$', '', s)
         return s[:56]
+
+
+def _human_answer_column(step_norm: str, criterion_key: str) -> str:
+    """Return the stage-specific human answer column for a criterion."""
+    prefix = 'l2' if str(step_norm).lower().strip() == 'l2' else 'l1'
+    return f'human_{prefix}_{criterion_key}' if criterion_key else 'human_col'
+
+
+def _screening_metric_values(aggregate: dict[str, Any]) -> dict[str, Any]:
+    """Calculate human-agreement metrics from one criterion aggregate."""
+    result: dict[str, Any] = {}
+    human_total = int(aggregate.get('human_total_count') or 0)
+    human_agree = int(aggregate.get('human_agree_count') or 0)
+    if human_total > 0:
+        result['accuracy'] = human_agree / human_total
+    human_total_all = int(aggregate.get('human_total_count_all') or 0)
+    human_agree_all = int(aggregate.get('human_agree_count_all') or 0)
+    if human_total_all > 0:
+        result['accuracy_all'] = human_agree_all / human_total_all
+
+    critical_total = int(aggregate.get('crit_total_count') or 0)
+    critical_agree = int(aggregate.get('crit_agree_count') or 0)
+    if critical_total > 0:
+        result['accuracy_critical_agent'] = critical_agree / critical_total
+
+    tp = int(aggregate.get('cm_tp') or 0)
+    fp = int(aggregate.get('cm_fp') or 0)
+    fn = int(aggregate.get('cm_fn') or 0)
+    tn = int(aggregate.get('cm_tn') or 0)
+    if tp + fp + fn + tn > 0:
+        f1_denominator = 2 * tp + fp + fn
+        result['f1_score'] = (
+            2 * tp / f1_denominator
+        ) if f1_denominator else None
+        result['precision'] = tp / (tp + fp) if tp + fp else None
+        result['recall'] = tp / (tp + fn) if tp + fn else None
+        result['npv'] = tn / (tn + fn) if tn + fn else None
+        result['confusion_matrix'] = {'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn}
+
+    queue = {
+        'tp': int(aggregate.get('queue_cm_tp') or 0),
+        'fp': int(aggregate.get('queue_cm_fp') or 0),
+        'fn': int(aggregate.get('queue_cm_fn') or 0),
+        'tn': int(aggregate.get('queue_cm_tn') or 0),
+    }
+    if sum(queue.values()) > 0:
+        result['queue_confusion_matrix'] = queue
+    return result
 
 
 def _questions_for_step(cp: Any, step_norm: str) -> list[str]:
@@ -1077,7 +1163,11 @@ async def classify_citation(
     }
 
     # Persist into Postgres under a dynamic column name derived from question
-    col_name = snake_case_column(payload.question)
+    col_core = snake_case(payload.question, max_len=56)
+    stage_prefix = 'l2' if (
+        payload.screening_step or ''
+    ).lower() == 'l2' else 'l1'
+    col_name = f'llm_{stage_prefix}_{col_core}' if col_core else 'llm_col'
 
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
@@ -1179,7 +1269,10 @@ async def human_classify_citation(
     # Persist into Postgres under a dynamic column name derived from question
     # Use snake_case to create a stable core name and prefix with 'human_'
     col_core = snake_case(payload.question, max_len=56) if snake_case else None
-    col_name = f"human_{col_core}" if col_core else 'human_col'
+    stage_prefix = 'l2' if (
+        payload.screening_step or ''
+    ).lower() == 'l2' else 'l1'
+    col_name = f"human_{stage_prefix}_{col_core}" if col_core else 'human_col'
 
     try:
         updated = await run_in_threadpool(cits_dp_service.update_jsonb_column, citation_id, col_name, classification_json, table_name)
@@ -1514,7 +1607,7 @@ async def run_title_abstract_agentic(
         # Write-back to llm_* column so the UI can display the result in aiPanels
         # (same shape as the legacy /classify endpoint, minus evidence fields for TA)
         try:
-            llm_col = snake_case_column(q)
+            llm_col = f'llm_l1_{snake_case(q, max_len=56)}'
             llm_payload = {
                 'selected': screening_answer,
                 'confidence': screening_parsed.confidence,
@@ -2114,7 +2207,7 @@ async def run_fulltext_agentic(
         # missing inputs.
         if 'answer' in screening_missing_fields or 'confidence' in screening_missing_fields:
             try:
-                llm_col = snake_case_column(q)
+                llm_col = f'llm_l2_{snake_case(q, max_len=56)}'
                 partial_payload = {
                     'selected': screening_answer or '',
                     'confidence': screening_confidence,
@@ -2252,7 +2345,7 @@ async def run_fulltext_agentic(
         # Write-back to llm_* column so the UI can display the result in aiPanels
         # (fulltext: includes evidence fields parsed from the XML response)
         try:
-            llm_col = snake_case_column(q)
+            llm_col = f'llm_l2_{snake_case(q, max_len=56)}'
             llm_payload = {
                 'selected': screening_answer,
                 'confidence': screening_confidence,
@@ -2467,12 +2560,12 @@ async def get_screening_metrics(
 
     needed_cols.extend([validations_col, legacy_validated_by])
 
-    # Phase 2: canonical human labels (per criterion) live in human_{criterion_key} JSONB.
+    # Canonical human labels are stored in stage-specific JSONB columns.
     # We only need these to compute validated-set agreement metrics.
     human_cols: dict[str, str] = {}
     for c in criteria:
         ck = c['criterion_key']
-        col = f"human_{ck}" if ck else 'human_col'
+        col = _human_answer_column(step_norm, ck)
         human_cols[ck] = col
         needed_cols.append(col)
 
@@ -2653,7 +2746,9 @@ async def get_screening_metrics(
                 ans = scr.get('answer')
 
                 # Compute agreement for ALL citations with human answers (not just validated)
-                hcol = human_cols.get(ck) or f"human_{ck}"
+                hcol = human_cols.get(
+                    ck,
+                ) or _human_answer_column(step_norm, ck)
                 human_sel = _parse_selected_from_human_payload(row.get(hcol))
                 if human_sel is not None:
                     a['human_total_count_all'] += 1
@@ -2782,90 +2877,13 @@ async def get_screening_metrics(
     for c in criteria:
         ck = c['criterion_key']
         a = agg.get(ck) or {}
-        # Accuracy is human-vs-AI agreement on the validated set (when canonical human labels exist).
-        # Do NOT fall back to critical agreement here (misleading).
-        accuracy: float | None = None
-        accuracy_all: float | None = None
-        accuracy_critical_agent: float | None = None
-        try:
-            h_total = int(a.get('human_total_count') or 0)
-            h_agree = int(a.get('human_agree_count') or 0)
-            if h_total > 0:
-                accuracy = (h_agree / h_total)
-        except Exception:
-            accuracy = None
-
-        # Accuracy for all citations with human answers (not just validated)
-        try:
-            h_total_all = int(a.get('human_total_count_all') or 0)
-            h_agree_all = int(a.get('human_agree_count_all') or 0)
-            if h_total_all > 0:
-                accuracy_all = (h_agree_all / h_total_all)
-        except Exception:
-            accuracy_all = None
-
-        # Separate metric: agreement between screening agent and critical agent.
-        try:
-            crit_total = int(a.get('crit_total_count') or 0)
-            crit_agree = int(a.get('crit_agree_count') or 0)
-            accuracy_critical_agent = (
-                crit_agree / crit_total
-            ) if crit_total > 0 else None
-        except Exception:
-            accuracy_critical_agent = None
-
         row: dict[str, Any] = {
             'criterion_key': ck,
             'label': c['label'],
             'threshold': float(c['threshold']),
             **a,
         }
-        if accuracy is not None:
-            row['accuracy'] = accuracy
-        if accuracy_all is not None:
-            row['accuracy_all'] = accuracy_all
-        if accuracy_critical_agent is not None:
-            row['accuracy_critical_agent'] = accuracy_critical_agent
-
-        # Compute F1 and NPV from confusion matrix
-        cm_tp = int(a.get('cm_tp') or 0)
-        cm_fp = int(a.get('cm_fp') or 0)
-        cm_fn = int(a.get('cm_fn') or 0)
-        cm_tn = int(a.get('cm_tn') or 0)
-        cm_total = cm_tp + cm_fp + cm_fn + cm_tn
-
-        if cm_total > 0:
-            # F1 = 2*TP / (2*TP + FP + FN)
-            f1_denom = 2 * cm_tp + cm_fp + cm_fn
-            row['f1_score'] = (2 * cm_tp / f1_denom) if f1_denom > 0 else None
-            # Precision = TP / (TP + FP)
-            row['precision'] = (
-                cm_tp / (cm_tp + cm_fp)
-            ) if (cm_tp + cm_fp) > 0 else None
-            # Recall (sensitivity) = TP / (TP + FN)
-            row['recall'] = (
-                cm_tp / (cm_tp + cm_fn)
-            ) if (cm_tp + cm_fn) > 0 else None
-            # NPV = TN / (TN + FN) — "of papers AI excluded, what % were truly irrelevant"
-            row['npv'] = (
-                cm_tn / (cm_tn + cm_fn)
-            ) if (cm_tn + cm_fn) > 0 else None
-            # Include raw confusion matrix for frontend
-            row['confusion_matrix'] = {
-                'tp': cm_tp,
-                'fp': cm_fp, 'fn': cm_fn, 'tn': cm_tn,
-            }
-
-        # Queue-specific confusion matrix (citations that triggered human review for this criterion)
-        q_tp = int(a.get('queue_cm_tp') or 0)
-        q_fp = int(a.get('queue_cm_fp') or 0)
-        q_fn = int(a.get('queue_cm_fn') or 0)
-        q_tn = int(a.get('queue_cm_tn') or 0)
-        q_total = q_tp + q_fp + q_fn + q_tn
-        if q_total > 0:
-            row['queue_confusion_matrix'] = {
-                'tp': q_tp, 'fp': q_fp, 'fn': q_fn, 'tn': q_tn,
-            }
+        row.update(_screening_metric_values(a))
 
         crit_out.append(row)
 
@@ -3044,7 +3062,7 @@ async def get_screening_calibration(
     human_cols: dict[str, str] = {}
     for c in criteria:
         ck = c['criterion_key']
-        hcol = f"human_{ck}" if ck else 'human_col'
+        hcol = _human_answer_column(step_norm, ck)
         human_cols[ck] = hcol
         needed_cols.append(hcol)
 
@@ -3123,7 +3141,10 @@ async def get_screening_calibration(
                 continue
             ai_ans = str(scr.get('answer') or '').strip()
             human_sel = _parse_selected_from_human_payload(
-                row.get(human_cols.get(ck) or f"human_{ck}"),
+                row.get(
+                    human_cols.get(ck)
+                    or _human_answer_column(step_norm, ck),
+                ),
             )
             if human_sel is None:
                 continue
@@ -3337,7 +3358,7 @@ async def get_live_confidence_histogram(
         ck = c.get('criterion_key') or ''
         if not ck:
             continue
-        human_col = f"human_{ck}"
+        human_col = _human_answer_column(step_norm, ck)
         try:
             hist = await run_in_threadpool(
                 cits_dp_service.confidence_histogram_for_criterion,
@@ -3475,7 +3496,7 @@ async def get_calibration_samples(
     human_cols: dict[str, str] = {}
     for c in criteria:
         ck = c['criterion_key']
-        hcol = f"human_{ck}" if ck else 'human_col'
+        hcol = _human_answer_column(step_norm, ck)
         human_cols[ck] = hcol
         needed_cols.append(hcol)
 
@@ -3557,7 +3578,10 @@ async def get_calibration_samples(
             ai_ans = str(scr.get('answer') or '').strip(
             ) if scr.get('answer') is not None else None
             human_sel = _parse_selected_from_human_payload(
-                row.get(human_cols.get(ck) or f"human_{ck}"),
+                row.get(
+                    human_cols.get(ck)
+                    or _human_answer_column(step_norm, ck),
+                ),
             )
             if human_sel is None:
                 continue

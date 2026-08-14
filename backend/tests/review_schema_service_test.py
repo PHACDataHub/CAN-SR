@@ -62,6 +62,45 @@ def test_migration_checksum_is_deterministic():
     assert len(schema.migration_checksum(sql)) == 64
 
 
+def test_refresh_checksums_updates_existing_migrations_only():
+    class Cursor:
+        rowcount = 1
+
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def close(self):
+            pass
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance = Cursor()
+            self.commits = 0
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    connection = Connection()
+    service = schema.ReviewSchemaService(lambda: connection)
+
+    # The service expects the provider's connection as an attribute, matching
+    # the production postgres provider contract.
+    service.connection_provider = type('Provider', (), {'conn': connection})()
+    result = service.refresh_checksums()
+
+    assert result['refreshed'] == [
+        path.stem for path in schema.migration_files()
+    ]
+    assert connection.commits == 1
+
+
 def test_feature_is_disabled_by_default(monkeypatch):
     # The imported settings object is intentionally not mutated. This checks
     # the source-level default contract without requiring a database.

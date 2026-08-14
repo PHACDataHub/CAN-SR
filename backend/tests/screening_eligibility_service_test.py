@@ -27,9 +27,10 @@ CRITERIA = {
 class ScreeningDecisionTests(unittest.TestCase):
     def test_human_answer_overrides_ai_answer(self) -> None:
         row = {
-            'human_relevant_population': {'selected': 'Include'},
-            'llm_relevant_population': {'selected': 'Exclude'},
-            'human_eligible_study_design': {'selected': 'Include'},
+            'human_l1_relevant_population': {'selected': 'Include'},
+            'human_l2_relevant_population': {'selected': 'Include'},
+            'llm_l1_relevant_population': {'selected': 'Exclude'},
+            'human_l2_eligible_study_design': {'selected': 'Include'},
         }
 
         self.assertEqual(
@@ -39,8 +40,8 @@ class ScreeningDecisionTests(unittest.TestCase):
 
     def test_ai_answer_is_used_when_human_answer_is_missing(self) -> None:
         row = {
-            'llm_relevant_population': '{"selected": "Include"}',
-            'llm_eligible_study_design': {'selected': 'Include'},
+            'llm_l1_relevant_population': '{"selected": "Include"}',
+            'llm_l2_eligible_study_design': {'selected': 'Include'},
         }
 
         self.assertEqual(
@@ -48,13 +49,25 @@ class ScreeningDecisionTests(unittest.TestCase):
             ('include', 'include'),
         )
 
+    def test_empty_human_answer_falls_back_but_explicit_exclude_wins(self) -> None:
+        row = {
+            'human_l1_relevant_population': {'selected': '  '},
+            'llm_l1_relevant_population': {'selected': 'Include'},
+            'human_l2_eligible_study_design': {'selected': 'Exclude'},
+            'llm_l2_eligible_study_design': {'selected': 'Include'},
+        }
+        self.assertEqual(
+            compute_screening_decisions(row, CRITERIA),
+            ('include', 'exclude'),
+        )
+
     def test_critical_ai_answer_does_not_override_screening_ai_answer(self) -> None:
         row = {
-            'llm_relevant_population': {
+            'human_l1_relevant_population': {
                 'selected': 'Include',
-                'critical': {'selected': 'Exclude'},
             },
-            'llm_eligible_study_design': {'selected': 'Include'},
+            'human_l2_relevant_population': {'selected': 'Include'},
+            'human_l2_eligible_study_design': {'selected': 'Include'},
         }
 
         self.assertEqual(
@@ -63,7 +76,7 @@ class ScreeningDecisionTests(unittest.TestCase):
         )
 
     def test_l2_decision_is_cumulative_and_missing_answers_exclude(self) -> None:
-        row = {'human_relevant_population': {'selected': 'Include'}}
+        row = {'human_l1_relevant_population': {'selected': 'Include'}}
 
         self.assertEqual(
             compute_screening_decisions(row, CRITERIA),

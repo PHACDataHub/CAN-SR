@@ -19,7 +19,7 @@ import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolv
   - Render a workspace (left) that shows title + abstract (flexible container for future PDF/text viewers)
   - Render a selection sidebar (right) with one section per L1 question:
       - Dropdown containing options from criteriaData.possible_answers
-      - Default selection set to AI answer from the citation row (column name computed via snake_case_column)
+ *       - Default selection set only from the persisted stage-specific human answer
       - "Classify" button that calls the backend screen classify endpoint and updates the AI panel
   - If an AI answer exists for that question, show a collapsible panel containing the parsed LLM JSON
     (expected fields: selected, explanation, confidence, llm_raw/)
@@ -48,8 +48,8 @@ function snakeCaseColumn(name: string) {
 }
 
 /**
- * Human classification column for screening (mirrors llm_ prefix but with human_).
- * Example: question -> llm_question, human_question
+ * Human classification column for screening.
+ * Example: question -> human_question
  */
 function humanScreenColumn(name: string) {
   const base = snakeCaseColumn(name)
@@ -483,15 +483,6 @@ export default function CanSrL1ScreenPage() {
         newPanelOpen[idx] = false
       }
 
-      // 3) If no human selection exists, allow llm_* to prefill the dropdown (UI-only).
-      const hasSelection = newSelections[idx] !== undefined && newSelections[idx] !== ''
-      if (!hasSelection) {
-        const aiSelected =
-          newAiPanels[idx] && typeof (newAiPanels[idx] as any).selected === 'string'
-            ? (newAiPanels[idx] as any).selected
-            : null
-        if (aiSelected) newSelections[idx] = aiSelected
-      }
     })
 
     setSelections(newSelections)
@@ -762,9 +753,6 @@ export default function CanSrL1ScreenPage() {
                     const answerStatus = humanAnswerStatus(citation!, answerColumn, options)
                     const current = selections[idx] ?? ''
                     const aiData = aiPanels[idx]
-                    const aiSelected =
-                      aiData && aiData.selected ? aiData.selected : undefined
-
                     // Per-question highlight aligned with list/back-end logic.
                     // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
                     // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
@@ -816,7 +804,7 @@ export default function CanSrL1ScreenPage() {
                             </p>
 
                             <select
-                              value={current || (aiSelected ?? '')}
+                              value={current}
                               onChange={(e) =>
                                 onSelectOption(idx, e.target.value)
                               }
