@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
 import time
@@ -30,7 +31,7 @@ try:
 except Exception:  # pragma: no cover
     rispy = None
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import Response, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -41,6 +42,14 @@ from ..core.security import get_current_active_user
 from ..core.config import settings
 from ..services.cit_db_service import cits_dp_service, snake_case, snake_case_column, parse_dsn
 from ..services.citation_export_service import citation_export_service, ExportValidationError
+from ..services.citation_import_preview_service import CitationImportPreviewService
+from ..services.citation_import_service import citation_import_service
+from ..services.citation_workspace_preferences_service import citation_workspace_preferences_service
+from ..services.citation_deduplication_preferences_service import citation_deduplication_preferences_service
+from ..services.citation_deduplication_service import recompute_affected_duplicate_groups
+from ..services.citation_duplicate_review_service import citation_duplicate_review_service
+from ..services.citation_duplicate_run_service import citation_duplicate_run_service
+from ..services.storage import storage_service
 from ..criteria.context import resolve_source_value
 from .export_models import CitationExportRequest, CitationExportSchema
 from ..core.cit_utils import load_sr_and_check
@@ -90,6 +99,558 @@ class UploadResult(BaseModel):
     rows_inserted: int
     message: str
     created_at: str
+
+
+class CitationImportPreviewResponse(BaseModel):
+    id: str
+    source_format: str
+    source_sha256: str
+    schema_fingerprint: str
+    proposed_mapping: dict[str, str | None]
+    validation_report: dict[str, Any]
+    staging_expires_at: str
+
+
+class CitationImportPreviewCancelResponse(BaseModel):
+    id: str
+    cancelled: bool
+    staging_cleanup_pending: bool
+
+
+class CitationImportPreviewInspectionResponse(BaseModel):
+    id: str
+    citation_table_name: str | None
+    source_sha256: str
+    schema_fingerprint: str
+    proposed_mapping: dict[str, str | None]
+    validation_report: dict[str, Any]
+    staging_expires_at: str
+    created_at: str
+
+
+class CitationImportPreviewCommitRequest(BaseModel):
+    approved_mapping: dict[str, str | None]
+
+
+class CitationImportPreviewMappingUpdateRequest(BaseModel):
+    approved_mapping: dict[str, str | None]
+    excluded_source_columns: list[str]
+    excluded_ambiguous_row_numbers: list[int] = []
+
+
+class CitationImportPreviewMappingUpdateResponse(BaseModel):
+    id: str
+    proposed_mapping: dict[str, str | None]
+    mapping_decision: dict[str, Any]
+    validation_report: dict[str, Any]
+
+
+class CitationImportPreviewCommitResponse(BaseModel):
+    id: str
+    batch_id: str
+    idempotent: bool
+    inserted_count: int
+    existing_exact_match_count: int
+    invalid_count: int
+
+
+class CitationImportResponse(BaseModel):
+    sr_id: str
+    table_name: str
+    batch_id: str
+    idempotent: bool
+    rows_inserted: int
+    invalid_count: int
+    warnings: list[str] = []
+    duplicates_skipped: int = 0
+    rows_merged: int = 0
+
+
+class CitationWorkspaceColumnsRequest(BaseModel):
+    columns: list[str]
+
+
+class SetAnswerRequest(BaseModel):
+    item_type: str
+    item_id: str
+    source_column: str
+
+
+def _criteria_config_items(sr: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
+    if not isinstance(criteria, dict):
+        return [], []
+
+    def items(stage: str) -> list[dict[str, Any]]:
+        value = criteria.get(stage) or []
+        if isinstance(value, dict):
+            value = value.get('items') or []
+        return [item for item in value if isinstance(item, dict)]
+
+    return items('l1'), items('l2')
+
+
+def _parameter_items(sr: dict[str, Any]) -> list[dict[str, Any]]:
+    criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
+    parameters = criteria.get('parameters') if isinstance(
+        criteria, dict,
+    ) else []
+    if isinstance(parameters, dict):
+        parameters = parameters.get('items') or []
+    return [item for item in (parameters or []) if isinstance(item, dict)]
+
+
+def _set_answer_payload(value: Any, item_type: str, screening_step: str) -> dict[str, Any]:
+    value = str(value).strip()
+    provenance = 'retrospective_validation'
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+    if item_type == 'parameter':
+        return {
+            'found': True,
+            'value': value,
+            'explanation': '',
+            'evidence_sentences': [],
+            'human': True,
+            'reviewer': None,
+            'source': provenance,
+            'timestamp': timestamp,
+        }
+    return {
+        'selected': value,
+        'explanation': '',
+        'confidence': None,
+        'human': True,
+        'reviewer': None,
+        'source': provenance,
+        'timestamp': timestamp,
+        'screening_step': screening_step,
+        'pipeline': 'fulltext' if screening_step == 'l2' else 'title_abstract',
+    }
+
+
+def _set_answer_destinations(item_type: str, core: str) -> list[str]:
+    if item_type == 'parameter':
+        return [f'human_param_{core}']
+    if item_type == 'l1':
+        return [f'human_l1_{core}', f'human_l2_{core}']
+    return [f'human_l2_{core}']
+
+
+@router.post('/{sr_id}/set-answer')
+async def set_answer(
+    sr_id: str,
+    payload: SetAnswerRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Copy a configured retrospective citation field into human answer fields."""
+    item_type = payload.item_type.strip().lower()
+    if item_type not in {'l1', 'l2', 'parameter'}:
+        raise HTTPException(
+            status_code=400, detail='item_type must be l1, l2, or parameter',
+        )
+    source_column = payload.source_column.strip()
+    if not source_column:
+        raise HTTPException(
+            status_code=400, detail='source_column is required',
+        )
+
+    sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    l1_items, l2_items = _criteria_config_items(sr)
+    parameter_items = _parameter_items(sr)
+    if item_type == 'parameter':
+        item = next(
+            (
+                i for i in parameter_items if str(
+                    i.get('id'),
+                ) == payload.item_id
+            ), None,
+        )
+        stage = 'parameter'
+    else:
+        items = l1_items if item_type == 'l1' else l2_items
+        item = next(
+            (
+                i for i in items if str(
+                    i.get('id'),
+                ) == payload.item_id
+            ), None,
+        )
+        stage = item_type
+    if not item:
+        raise HTTPException(
+            status_code=404, detail='Configured item not found',
+        )
+    if item.get('answer_column') != source_column:
+        raise HTTPException(
+            status_code=409, detail='source_column does not match the configured answer column',
+        )
+
+    item_name = item.get(
+        'name',
+    ) if item_type == 'parameter' else item.get('question')
+    core = snake_case(
+        str(item_name or ''),
+        max_len=52 if item_type == 'parameter' else 56,
+    )
+    if not core:
+        raise HTTPException(
+            status_code=400, detail='Configured item has no usable name',
+        )
+    destinations = _set_answer_destinations(item_type, core)
+
+    table_name = (screening or {}).get('table_name') or 'citations'
+    try:
+        columns = await run_in_threadpool(cits_dp_service.get_table_columns, table_name)
+        available_columns = {
+            str(column.get('column_name'))
+            for column in columns
+        }
+        if source_column not in available_columns:
+            raise HTTPException(
+                status_code=400, detail=f"Source citation field '{source_column}' was not found",
+            )
+        citation_ids = await run_in_threadpool(cits_dp_service.list_citation_ids, None, table_name)
+        rows = await run_in_threadpool(
+            cits_dp_service.get_citations_by_ids,
+            citation_ids,
+            table_name,
+            [
+                'id', source_column,
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f'Failed to query screening DB: {exc}',
+        )
+
+    processed = copied = blank = 0
+    for row in rows:
+        processed += 1
+        value = row.get(source_column)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            blank += 1
+            continue
+        answer = _set_answer_payload(value, item_type, stage)
+        for destination in destinations:
+            await run_in_threadpool(
+                cits_dp_service.update_jsonb_column, int(
+                    row['id'],
+                ), destination, answer, table_name,
+            )
+        copied += 1
+
+    return {
+        'status': 'success', 'item_type': item_type, 'item_id': payload.item_id,
+        'processed': processed, 'copied': copied, 'blank': blank,
+        'destinations': destinations,
+    }
+
+
+@router.post('/{sr_id}/import-previews', response_model=CitationImportPreviewResponse)
+async def create_citation_import_preview(
+    sr_id: str,
+    file: UploadFile = File(...),
+    commit_key: str = Form(...),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Parse and encrypt-stage an import; this endpoint never mutates citations."""
+    sr, _screening = await load_sr_and_check(
+        sr_id, current_user, srdb_service, require_screening=False,
+    )
+    if not file or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+    try:
+        raw_bytes = await file.read()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Failed to read upload: {exc}',
+        )
+    if len(raw_bytes) > settings.MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail='Uploaded file is too large',
+        )
+    citation_table_name = (sr.get('screening_db') or {}).get('table_name')
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.create(
+            sr_id=sr_id, citation_table_name=citation_table_name, filename=file.filename,
+            raw_bytes=raw_bytes, commit_key=commit_key, actor_id=current_user.get(
+                'email',
+            ) or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to create import preview: {exc}',
+        )
+
+
+@router.post('/{sr_id}/imports', response_model=CitationImportResponse)
+async def import_citations(
+    sr_id: str,
+    file: UploadFile = File(...),
+    commit_key: str = Form(...),
+    title_header: str | None = Form(None),
+    abstract_header: str | None = Form(None),
+    include_duplicates: bool = Form(False),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Parse and append a citation file immediately, retaining batch provenance."""
+    sr, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+
+    try:
+        raw = await file.read()
+        if not raw:
+            raise ValueError('Uploaded file is empty')
+        max_bytes = int(getattr(settings, 'MAX_FILE_SIZE', 0) or 0)
+        if max_bytes and len(raw) > max_bytes:
+            raise ValueError(
+                f'Uploaded file exceeds the {max_bytes} byte limit',
+            )
+        from ..services.citation_import_preview_service import build_preview
+        parsed = build_preview(file.filename, raw)
+        result = await run_in_threadpool(
+            citation_import_service.append_rows_sync,
+            sr_id=sr_id,
+            table_name=(sr.get('screening_db') or {}).get('table_name'),
+            source_format=parsed['source_format'],
+            filename=file.filename,
+            raw_bytes=raw,
+            rows=parsed['normalized_rows'],
+            source_columns=parsed['validation_report']['source_columns'],
+            actor_id=current_user.get('email') or current_user.get('id'),
+            commit_key=commit_key,
+            title_header=title_header,
+            abstract_header=abstract_header,
+            include_duplicates=include_duplicates,
+        )
+        if not result['idempotent'] and not (sr.get('screening_db') or {}).get('table_name'):
+            await run_in_threadpool(
+                srdb_service.update_screening_db_info, sr_id, {
+                    'table_name': result['table_name'], 'created_at': datetime.utcnow().isoformat(),
+                    'rows': result['rows_inserted'],
+                },
+            )
+        return CitationImportResponse(sr_id=sr_id, **result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to import citations: {exc}',
+        )
+
+
+@router.post('/{sr_id}/duplicates/check')
+async def check_citation_duplicates(
+    sr_id: str,
+    file: UploadFile = File(...),
+    title_header: str | None = Form(None),
+    abstract_header: str | None = Form(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Count duplicate rows for upload UI feedback without inserting anything."""
+    sr, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+    try:
+        raw = await file.read()
+        from ..services.citation_import_preview_service import build_preview
+        parsed = build_preview(file.filename, raw)
+        count = await run_in_threadpool(
+            citation_import_service.count_duplicates_sync,
+            sr_id=sr_id,
+            table_name=(sr.get('screening_db') or {}).get('table_name'),
+            rows=parsed['normalized_rows'],
+            source_columns=parsed['validation_report']['source_columns'],
+            title_header=title_header,
+            abstract_header=abstract_header,
+        )
+        return {'duplicates_count': count}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+
+
+@router.get('/{sr_id}/import-previews/{preview_id}', response_model=CitationImportPreviewInspectionResponse)
+async def inspect_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return active owned preview metadata without exposing staged file contents."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return service.inspect(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to inspect import preview: {exc}',
+        )
+
+
+@router.put('/{sr_id}/import-previews/{preview_id}/mapping', response_model=CitationImportPreviewMappingUpdateResponse)
+async def update_citation_import_preview_mapping(
+    sr_id: str,
+    preview_id: str,
+    payload: CitationImportPreviewMappingUpdateRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Persist an active owner's mapping decision without mutating citation tables."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.update_mapping(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+            approved_mapping=payload.approved_mapping,
+            excluded_source_columns=payload.excluded_source_columns,
+            excluded_ambiguous_row_numbers=payload.excluded_ambiguous_row_numbers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to update import preview mapping: {exc}',
+        )
+
+
+@router.post('/{sr_id}/import-previews/{preview_id}/commit', response_model=CitationImportPreviewCommitResponse)
+async def commit_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    payload: CitationImportPreviewCommitRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Commit an owned preview through the transactional import-batch workflow."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.commit(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+            approved_mapping=payload.approved_mapping,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to commit import preview: {exc}',
+        )
+
+
+@router.delete('/{sr_id}/import-previews/{preview_id}', response_model=CitationImportPreviewCancelResponse)
+async def cancel_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Cancel an authorized user's uncommitted import preview."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.cancel(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to cancel import preview: {exc}',
+        )
 
 
 def _sniff_citations_format(filename: str, raw_bytes: bytes) -> str:
@@ -426,9 +987,8 @@ def _populate_human_answers_from_csv(
     This function:
     1. Extracts criteria questions from SR
     2. Matches CSV columns to criteria questions
-    3. For each matched column, populates the corresponding human_* column
-    4. Updates validation metadata (l1_validated_by, l1_validated_at)
-    5. Backfills human decision columns
+    3. For each matched column, populates the corresponding human_l1_* column
+    4. Backfills human decision columns
     """
     if not sr or not normalized_rows or not include_columns:
         return
@@ -486,8 +1046,8 @@ def _populate_human_answers_from_csv(
             # Convert to JSONB format
             human_jsonb = _parse_human_answer_to_jsonb(answer_value)
 
-            # Create human_* column name
-            human_col = f"human_{criterion_key}"
+            # Uploaded retrospective answers are L1 source answers.
+            human_col = f"human_l1_{criterion_key}"
 
             # Update the JSONB column
             try:
@@ -610,18 +1170,8 @@ async def _upload_screening_citations_impl(
             detail=f"Failed to create table or insert rows: {e}",
         )
 
-    # Populate human answers from CSV if criteria config exists
-    try:
-        await run_in_threadpool(
-            _populate_human_answers_from_csv,
-            table_name,
-            normalized_rows,
-            include_columns,
-            sr,
-        )
-    except Exception:
-        # Best-effort; human answer population should not block the upload
-        pass
+    # CSV values remain citation metadata. Human screening answers must come
+    # from an explicit set-answer or human-classify action, never from import.
 
     # Save DB connection metadata into SR Mongo doc
     try:
@@ -811,6 +1361,483 @@ async def get_citations_batch(
         )
 
     return {'citations': rows}
+
+
+@router.get('/{sr_id}/citations/workspace')
+async def list_workspace_citations(
+    sr_id: str,
+    search: str | None = None,
+    sort: str | None = None,
+    direction: str | None = None,
+    columns: str | None = None,
+    filters: str | None = None,
+    duplicate_status: str | None = None,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return all review-authorized References workspace citations."""
+    try:
+        _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to load systematic review or screening: {e}',
+        )
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'citations': [], 'total_count': 0, 'columns': ['id']}
+    try:
+        actor_id = current_user.get('email') or current_user.get('id')
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        response = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, search, sort, direction,
+            [
+                column.strip() for column in columns.split(
+                    ',',
+                ) if column.strip()
+            ] if columns else None,
+            json.loads(filters) if filters else None,
+            configured_fields,
+            duplicate_status,
+            None,
+            False,
+        )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id, table_name, response.get('dataset_revision'),
+            configured_fields or [
+                column for column in response.get(
+                    'columns', [],
+                ) if column not in {'id', 'provenance'}
+            ],
+        )
+        response = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, search, sort, direction,
+            [
+                column.strip() for column in columns.split(
+                    ',',
+                ) if column.strip()
+            ] if columns else None,
+            json.loads(
+                filters,
+            ) if filters else None, configured_fields, duplicate_status,
+            (cached or {}).get('result'), False,
+        )
+        reviews = await run_in_threadpool(
+            citation_duplicate_review_service.list_reviews, sr_id, table_name,
+        )
+        reviews_by_group = {review['group_id']: review for review in reviews}
+        for group in response.get('duplicate_groups', []):
+            review = reviews_by_group.get(group.get('group_id'))
+            if not review or review.get('decision') != 'confirmed_duplicate':
+                continue
+            member_ids = {
+                int(value)
+                for value in group.get('citation_ids', [])
+                if value is not None
+            }
+            member_ids.update(
+                int(member['id'])
+                for member in group.get('members', [])
+                if member.get('id') is not None
+            )
+            survivor_id = review.get('survivor_id')
+            if survivor_id is None or int(survivor_id) not in member_ids:
+                review['survivor_id'] = None
+                review['stale'] = True
+        resolved_group_ids = {
+            group_id for group_id, review in reviews_by_group.items()
+            if review.get('decision') == 'not_duplicate'
+        }
+        if resolved_group_ids:
+            resolved_citation_ids = {
+                int(citation_id)
+                for group in response.get('duplicate_groups', [])
+                if group.get('group_id') in resolved_group_ids
+                for citation_id in group.get('citation_ids', [])
+            }
+            for citation in response.get('citations', []):
+                if int(citation.get('id', 0)) in resolved_citation_ids:
+                    citation['duplicate_status'] = 'no_match'
+                    citation['duplicate_score'] = None
+            for group in response.get('duplicate_groups', []):
+                if group.get('group_id') in resolved_group_ids:
+                    for member in group.get('members', []):
+                        member['duplicate_status'] = 'no_match'
+                        member['duplicate_score'] = None
+            response['duplicate_counts'] = {
+                status: sum(
+                    1 for citation in response.get('citations', [])
+                    if citation.get('duplicate_status') == status
+                )
+                for status in ('exact', 'possible', 'no_match')
+            }
+            if duplicate_status in {'exact', 'possible', 'no_match'}:
+                response['citations'] = [
+                    citation for citation in response.get('citations', [])
+                    if citation.get('duplicate_status') == duplicate_status
+                ]
+                response['total_count'] = len(response['citations'])
+        for group in response.get('duplicate_groups', []):
+            group['review'] = reviews_by_group.get(group['group_id'])
+        configured_fields = [
+            column for column in (configured_fields or response.get('columns', []))
+            if column not in {'id', 'provenance'}
+        ]
+        response['deduplication_fields'] = configured_fields
+        response['duplicate_run'] = {
+            'run_id': (cached or {}).get('run_id'),
+            'status': 'succeeded' if cached else 'not_run',
+        }
+        return response
+    except RuntimeError as rexc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
+    except Exception as e:
+        if _is_undefined_table_error(e):
+            return {'citations': [], 'total_count': 0, 'columns': ['id']}
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to query screening DB: {e}',
+        )
+
+
+@router.get('/{sr_id}/citations/workspace/preferences')
+async def get_workspace_column_preferences(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'columns': None}
+    actor_id = current_user.get('email') or current_user.get('id')
+    columns = await run_in_threadpool(
+        citation_workspace_preferences_service.get_columns, sr_id, table_name, actor_id,
+    )
+    return {'columns': columns}
+
+
+@router.delete('/{sr_id}/citations/workspace')
+async def delete_workspace_citations(
+    sr_id: str,
+    payload: dict[str, Any],
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    citation_ids = [int(value) for value in payload.get('citation_ids', [])]
+    if not table_name or not citation_ids:
+        return {'deleted_count': 0}
+    try:
+        if payload.get('confirmed') is not True:
+            raise HTTPException(
+                status_code=400, detail='Deletion requires explicit confirmation',
+            )
+        query = payload.get('query') or {}
+        actor_id = current_user.get('email') or current_user.get('id')
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name,
+            query.get('search'), query.get('sort'), query.get('direction'),
+            query.get('columns'), query.get('filters'), configured_fields,
+            query.get('duplicate_status'),
+        )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id,
+            table_name,
+            current_workspace.get('dataset_revision'),
+            configured_fields or [
+                column
+                for column in current_workspace.get('columns', [])
+                if column not in {'id', 'provenance'}
+            ],
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name,
+            query.get('search'), query.get('sort'), query.get('direction'),
+            query.get('columns'), query.get('filters'), configured_fields,
+            query.get('duplicate_status'),
+            (cached or {}).get('result'),
+            False,
+        )
+        if payload.get('query_fingerprint') != current_workspace.get('query_fingerprint'):
+            raise HTTPException(
+                status_code=409, detail='The active query is stale',
+            )
+        active_ids = {
+            int(row['id'])
+            for row in current_workspace.get('citations', [])
+        }
+        if not set(citation_ids).issubset(active_ids):
+            raise HTTPException(
+                status_code=409, detail='Selection is outside the active query',
+            )
+        deletion = await run_in_threadpool(
+            cits_dp_service.delete_citations,
+            table_name,
+            citation_ids,
+            sr_id,
+            current_workspace.get('dataset_revision'),
+        )
+        if cached and deletion.get('deleted_count'):
+            updated_result = await run_in_threadpool(
+                recompute_affected_duplicate_groups,
+                cached.get('result') or {},
+                set(citation_ids),
+                configured_fields,
+            )
+            run_id = await run_in_threadpool(
+                citation_duplicate_run_service.start,
+                sr_id,
+                table_name,
+                deletion.get('dataset_revision'),
+                configured_fields,
+                actor_id,
+            )
+            await run_in_threadpool(
+                citation_duplicate_run_service.finish,
+                run_id,
+                updated_result,
+                None,
+            )
+            deletion['duplicate_run'] = {
+                'run_id': run_id,
+                'status': 'succeeded',
+            }
+        return deletion
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to delete citations: {exc}',
+        )
+
+
+class CitationDuplicateReviewRequest(BaseModel):
+    group_id: str
+    decision: str
+    survivor_id: int | None = None
+
+
+@router.get('/{sr_id}/citations/workspace/duplicate-reviews')
+async def get_duplicate_reviews(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'reviews': []}
+    return {'reviews': await run_in_threadpool(citation_duplicate_review_service.list_reviews, sr_id, table_name)}
+
+
+@router.put('/{sr_id}/citations/workspace/duplicate-reviews')
+async def save_duplicate_review(
+    sr_id: str,
+    payload: CitationDuplicateReviewRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=400, detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id') or 'unknown'
+    try:
+        configured_fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.get_fields,
+            sr_id, table_name, actor_id,
+        )
+        current_workspace = await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, None, None, None, None, None, configured_fields, None,
+        )
+        cached = await run_in_threadpool(
+            citation_duplicate_run_service.get_cached,
+            sr_id,
+            table_name,
+            current_workspace.get('dataset_revision'),
+            configured_fields or [
+                column
+                for column in current_workspace.get('columns', [])
+                if column not in {'id', 'provenance'}
+            ],
+        )
+        if cached:
+            current_workspace = await run_in_threadpool(
+                cits_dp_service.list_workspace_citations,
+                table_name,
+                None,
+                None,
+                None,
+                None,
+                None,
+                configured_fields,
+                None,
+                cached.get('result'),
+                False,
+            )
+        group = next(
+            (
+                item for item in current_workspace.get('duplicate_groups', [])
+                if item.get('group_id') == payload.group_id
+            ),
+            None,
+        )
+        if not group:
+            raise HTTPException(
+                status_code=409, detail='Duplicate group is stale',
+            )
+        member_ids = {
+            int(value)
+            for value in group.get('citation_ids', [])
+            if value is not None
+        }
+        member_ids.update(
+            int(member['id'])
+            for member in group.get('members', [])
+            if member.get('id') is not None
+        )
+        survivor_id = (
+            int(payload.survivor_id) if payload.survivor_id is not None else None
+        )
+        if payload.decision == 'confirmed_duplicate' and survivor_id not in member_ids:
+            raise HTTPException(
+                status_code=400, detail='Survivor must belong to the duplicate group',
+            )
+        review = await run_in_threadpool(
+            citation_duplicate_review_service.save_review,
+            sr_id, table_name, payload.group_id, payload.decision,
+            survivor_id, actor_id,
+        )
+        return review
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put('/{sr_id}/citations/workspace/preferences')
+async def save_workspace_column_preferences(
+    sr_id: str,
+    payload: CitationWorkspaceColumnsRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Citation dataset is not configured',
+        )
+
+    actor_id = current_user.get('email') or current_user.get('id')
+    try:
+        columns = await run_in_threadpool(
+            citation_workspace_preferences_service.save_columns,
+            sr_id, table_name, actor_id, payload.columns,
+        )
+        return {'columns': columns}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+
+
+class CitationDeduplicationFieldsRequest(BaseModel):
+    fields: list[str]
+
+
+@router.get('/{sr_id}/citations/workspace/deduplication-preferences')
+async def get_workspace_deduplication_preferences(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'fields': None}
+    actor_id = current_user.get('email') or current_user.get('id')
+    fields = await run_in_threadpool(
+        citation_deduplication_preferences_service.get_fields,
+        sr_id, table_name, actor_id,
+    )
+    return {'fields': fields}
+
+
+@router.post('/{sr_id}/citations/workspace/duplicate-runs')
+async def run_workspace_deduplication(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=400, detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id') or 'unknown'
+    configured = await run_in_threadpool(
+        citation_deduplication_preferences_service.get_fields, sr_id, table_name, actor_id,
+    )
+    configured = configured or [
+        item['column_name'] for item in await run_in_threadpool(cits_dp_service.get_table_columns, table_name)
+        if item['column_name'] not in {'id', 'provenance'}
+    ]
+    cached = await run_in_threadpool(
+        citation_duplicate_run_service.get_cached, sr_id, table_name, (), configured,
+    )
+    try:
+        revision, result = await run_in_threadpool(cits_dp_service.load_duplicate_rows, table_name, configured)
+        run_id = await run_in_threadpool(
+            citation_duplicate_run_service.start, sr_id, table_name, revision, configured, actor_id,
+        )
+        await run_in_threadpool(citation_duplicate_run_service.finish, run_id, result, None)
+        return {'run_id': run_id, 'status': 'succeeded', 'dataset_revision': revision, 'fields': configured}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f'Duplicate calculation failed: {exc}',
+        )
+
+
+@router.put('/{sr_id}/citations/workspace/deduplication-preferences')
+async def save_workspace_deduplication_preferences(
+    sr_id: str,
+    payload: CitationDeduplicationFieldsRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id')
+    available = [
+        item['column_name']
+        for item in cits_dp_service.get_table_columns(table_name)
+    ]
+    try:
+        fields = await run_in_threadpool(
+            citation_deduplication_preferences_service.save_fields,
+            sr_id, table_name, actor_id, payload.fields, available,
+        )
+        return {'fields': fields}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
 
 
 # Helper to get citation row by id - delegated to backend.api.core.postgres.get_citation_by_id
@@ -1194,12 +2221,14 @@ async def hard_delete_screening_resources(sr_id: str, current_user: dict[str, An
             detail=f"Failed to load systematic review: {e}",
         )
 
-    requester_id = current_user.get('id')
-    if requester_id != sr.get('owner_id'):
+    requester_id = current_user.get('email')
+    try:
+        srdb_service.require_review_owner(sr_id, requester_id)
+    except HTTPException as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail='Only the owner may perform screening cleanup for this systematic review',
-        )
+        ) from exc
 
     if not screening:
         return {'status': 'no_screening_db', 'message': 'No screening table configured for this SR', 'deleted_table': False, 'deleted_files': 0}

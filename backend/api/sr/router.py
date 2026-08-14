@@ -224,6 +224,11 @@ class RemoveUserRequest(BaseModel):
     user_id: str | None = None
 
 
+class ReviewMemberRoleRequest(BaseModel):
+    member_id: str
+    role: str
+
+
 @router.post('/{sr_id}/add-user')
 async def add_user_to_systematic_review(
     sr_id: str,
@@ -258,7 +263,7 @@ async def add_user_to_systematic_review(
         )
 
     try:
-        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get('id'))
+        res = await run_in_threadpool(srdb_service.add_user, sr_id, target_user_id, current_user.get('email'))
     except HTTPException:
         raise
     except Exception as e:
@@ -301,15 +306,8 @@ async def remove_user_from_systematic_review(
             status_code=status.HTTP_400_BAD_REQUEST, detail='Missing data user_email',
         )
 
-    # do not allow removing the owner
-    if target_user_id == sr.get('owner_id'):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Cannot remove the owner from the systematic review',
-        )
-
     try:
-        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get('id'))
+        res = await run_in_threadpool(srdb_service.remove_user, sr_id, target_user_id, current_user.get('email'))
     except HTTPException:
         raise
     except Exception as e:
@@ -318,6 +316,47 @@ async def remove_user_from_systematic_review(
         )
 
     return {'status': 'success', 'sr_id': sr_id, 'removed_user_id': target_user_id, 'matched_count': res.get('matched_count'), 'modified_count': res.get('modified_count')}
+
+
+@router.get('/{sr_id}/members')
+async def list_review_members(sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user)):
+    """Return role-aware membership data only to existing review collaborators."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    return {'members': await run_in_threadpool(srdb_service.list_members, sr_id)}
+
+
+@router.put('/{sr_id}/members/{member_id}')
+async def set_review_member_role(
+    sr_id: str, member_id: str, payload: ReviewMemberRoleRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    if payload.member_id != member_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='member_id must match the URL',
+        )
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        result = await run_in_threadpool(srdb_service.set_member_role, sr_id, member_id, payload.role, current_user.get('email'))
+        return {'status': 'success', 'sr_id': sr_id, **result}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+
+
+@router.delete('/{sr_id}/members/{member_id}')
+async def delete_review_member(
+    sr_id: str, member_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        result = await run_in_threadpool(srdb_service.remove_member, sr_id, member_id, current_user.get('email'))
+        return {'status': 'success', 'sr_id': sr_id, **result}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
 
 
 @router.get('/mine', response_model=list[SystematicReviewRead])
@@ -476,14 +515,34 @@ async def save_criteria_config(
             status_code=status.HTTP_409_CONFLICT,
             detail='This SR already has screening data. Pass force=true to confirm criteria invalidation.',
         )
+    previous_criteria = review.get('criteria')
+    stored = None
+    if isinstance(previous_criteria, dict):
+        try:
+            stored = criteria_configuration_service.normalize(
+                previous_criteria,
+            )
+        except (KeyError, ValueError):
+            stored = None
+    if stored:
+        _require_migration_confirmation(stored, payload.migration_fingerprint)
     try:
         available = await run_in_threadpool(discover_citation_fields, review)
         available_names = {
             str(field.get('name'))
             for field in available.get('fields', [])
         }
+        criteria_payload = payload.criteria.model_dump(
+            mode='json', exclude_none=True,
+        )
+        citation_fields = criteria_payload.setdefault('citation_fields', {})
+        citation_fields.setdefault('title', 'Title')
+        citation_fields.setdefault('abstract', 'Abstract')
+        criteria_for_validation = CriteriaConfigV2.model_validate(
+            criteria_payload,
+        )
         required_errors = criteria_configuration_service.required_citation_field_errors(
-            payload.criteria, available_names,
+            criteria_for_validation, available_names,
         )
         if required_errors:
             raise HTTPException(
@@ -491,17 +550,11 @@ async def save_criteria_config(
                     'errors': required_errors,
                 },
             )
-        previous_criteria = review.get('criteria')
-        stored = None
-        if isinstance(previous_criteria, dict):
-            stored = criteria_configuration_service.normalize(
-                previous_criteria,
-            )
     except (KeyError, ValueError):
-        stored = None
-    if stored:
-        _require_migration_confirmation(stored, payload.migration_fingerprint)
-    criteria = payload.criteria.model_dump(mode='json', exclude_none=True)
+        raise
+    criteria = criteria_for_validation.model_dump(
+        mode='json', exclude_none=True,
+    )
     criteria_yaml = criteria_configuration_service.export_yaml(
         payload.criteria,
     )
@@ -867,12 +920,8 @@ async def delete_systematic_review(sr_id: str, current_user: dict[str, Any] = De
             detail=f"Failed to load systematic review: {e}",
         )
 
-    requester_id = current_user.get('id')
-    if requester_id != sr.get('owner_id'):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail='Only the owner may delete this systematic review',
-        )
+    requester_id = current_user.get('email')
+    srdb_service.require_review_owner(sr_id, requester_id)
 
     try:
         res = await run_in_threadpool(srdb_service.soft_delete_systematic_review, sr_id, requester_id)
@@ -905,12 +954,8 @@ async def undelete_systematic_review(sr_id: str, current_user: dict[str, Any] = 
             detail=f"Failed to load systematic review: {e}",
         )
 
-    requester_id = current_user.get('id')
-    if requester_id != sr.get('owner_id'):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail='Only the owner may undelete this systematic review',
-        )
+    requester_id = current_user.get('email')
+    srdb_service.require_review_owner(sr_id, requester_id)
 
     try:
         res = await run_in_threadpool(srdb_service.undelete_systematic_review, sr_id, requester_id)
@@ -946,12 +991,8 @@ async def hard_delete_systematic_review(sr_id: str, current_user: dict[str, Any]
             detail=f"Failed to load systematic review: {e}",
         )
 
-    requester_id = current_user.get('id')
-    if requester_id != sr.get('owner_id'):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail='Only the owner may hard-delete this systematic review',
-        )
+    requester_id = current_user.get('email')
+    srdb_service.require_review_owner(sr_id, requester_id)
 
     # Attempt to perform screening resources cleanup prior to deleting the SR document.
     cleanup_result = None

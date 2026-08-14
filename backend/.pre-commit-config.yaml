@@ -1,3 +1,7 @@
+# SQL migrations are immutable after release because their exact contents are
+# recorded in review_schema_migrations checksums.
+exclude: ^migrations/.*\.sql$
+
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

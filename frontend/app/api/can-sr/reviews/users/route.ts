@@ -14,8 +14,8 @@ import { BACKEND_URL } from '@/lib/config'
  * - Follows the pattern used in frontend/app/api/can-sr/reviews/create/route.ts (do not use cookies).
  */
 
-async function forwardJson(url: string, request: NextRequest) {
-  const body = await request.json()
+async function forwardJson(url: string, request: NextRequest, method = 'POST') {
+  const body = method === 'GET' || method === 'DELETE' ? undefined : await request.json()
   const authHeader = request.headers.get('authorization')
 
   if (!authHeader) {
@@ -31,7 +31,7 @@ async function forwardJson(url: string, request: NextRequest) {
   }
 
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     headers,
     body: JSON.stringify(body),
   })
@@ -67,4 +67,27 @@ export async function POST(request: NextRequest) {
     console.error('SR users POST API error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
+}
+
+export async function GET(request: NextRequest) {
+  const srId = request.nextUrl.searchParams.get('sr_id')
+  const authHeader = request.headers.get('authorization')
+  if (!srId || !authHeader) return NextResponse.json({ error: !srId ? 'sr_id query parameter is required' : 'Authorization header is required' }, { status: !srId ? 400 : 401 })
+  return forwardJson(`${BACKEND_URL}/api/sr/${encodeURIComponent(srId)}/members`, request, 'GET')
+}
+
+export async function PUT(request: NextRequest) {
+  const srId = request.nextUrl.searchParams.get('sr_id')
+  const memberId = request.nextUrl.searchParams.get('member_id')
+  const authHeader = request.headers.get('authorization')
+  if (!srId || !memberId || !authHeader) return NextResponse.json({ error: 'sr_id, member_id, and Authorization header are required' }, { status: 400 })
+  return forwardJson(`${BACKEND_URL}/api/sr/${encodeURIComponent(srId)}/members/${encodeURIComponent(memberId)}`, request, 'PUT')
+}
+
+export async function DELETE(request: NextRequest) {
+  const srId = request.nextUrl.searchParams.get('sr_id')
+  const memberId = request.nextUrl.searchParams.get('member_id')
+  const authHeader = request.headers.get('authorization')
+  if (!srId || !memberId || !authHeader) return NextResponse.json({ error: 'sr_id, member_id, and Authorization header are required' }, { status: 400 })
+  return forwardJson(`${BACKEND_URL}/api/sr/${encodeURIComponent(srId)}/members/${encodeURIComponent(memberId)}`, request, 'DELETE')
 }

@@ -15,16 +15,90 @@ def test_migration_files_are_ordered():
     files = schema.migration_files()
     assert files == sorted(files)
     assert files[0].stem == '001_multi_reviewer_schema'
+    assert files[1].stem == '002_citation_workspace_schema'
+    assert files[2].stem == '003_citation_import_preview_mapping_decisions'
+    assert files[3].stem == '004_systematic_review_memberships'
+    assert files[4].stem == '005_citation_workspace_column_preferences'
 
 
 def test_canonical_version_is_based_on_migration_files_not_legacy_markers():
     assert schema.MIGRATION_VERSION == '001_multi_reviewer_schema'
 
 
+def test_citation_workspace_migration_contains_legacy_adoption_schema():
+    migration = Path(__file__).resolve(
+    ).parents[1] / 'migrations' / '002_citation_workspace_schema.sql'
+    sql = migration.read_text(encoding='utf-8')
+    for table in (
+        'citation_import_batches', 'citation_import_batch_memberships',
+        'citation_import_previews', 'citation_identities',
+    ):
+        assert f'CREATE TABLE IF NOT EXISTS {table}' in sql
+    assert 'REFERENCES citation_import_batches(id)' in sql
+
+
+def test_mapping_decision_migration_is_additive():
+    migration = Path(__file__).resolve(
+    ).parents[1] / 'migrations' / '003_citation_import_preview_mapping_decisions.sql'
+    assert 'ADD COLUMN IF NOT EXISTS mapping_decision JSONB' in migration.read_text(
+        encoding='utf-8',
+    )
+
+
+def test_membership_role_migration_backfills_legacy_owners_and_members():
+    migration = Path(__file__).resolve(
+    ).parents[1] / 'migrations' / '004_systematic_review_memberships.sql'
+    sql = migration.read_text(encoding='utf-8')
+    assert 'CREATE TABLE IF NOT EXISTS systematic_review_memberships' in sql
+    assert "role IN ('owner', 'member')" in sql
+    assert 'jsonb_array_elements_text' in sql
+    assert "'owner'" in sql
+    assert 'systematic_review_membership_audit_events' in sql
+
+
 def test_migration_checksum_is_deterministic():
     sql = 'CREATE TABLE foundation (id integer);'
     assert schema.migration_checksum(sql) == schema.migration_checksum(sql)
     assert len(schema.migration_checksum(sql)) == 64
+
+
+def test_refresh_checksums_updates_existing_migrations_only():
+    class Cursor:
+        rowcount = 1
+
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def close(self):
+            pass
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance = Cursor()
+            self.commits = 0
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    connection = Connection()
+    service = schema.ReviewSchemaService(lambda: connection)
+
+    # The service expects the provider's connection as an attribute, matching
+    # the production postgres provider contract.
+    service.connection_provider = type('Provider', (), {'conn': connection})()
+    result = service.refresh_checksums()
+
+    assert result['refreshed'] == [
+        path.stem for path in schema.migration_files()
+    ]
+    assert connection.commits == 1
 
 
 def test_feature_is_disabled_by_default(monkeypatch):

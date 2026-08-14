@@ -72,7 +72,7 @@ function parseObject(value: any): Record<string, any> | null {
   - Render a workspace (left) that shows the full-text PDF viewer with support for sentence-index scrolling
   - Render a selection sidebar (right) with one section per L2 question:
       - Dropdown containing options from criteriaData.possible_answers
-      - Default selection set to AI answer from the citation row (column name computed via snake_case_column)
+ *       - Default selection set only from the persisted stage-specific human answer
       - "AI" button that calls the backend classify endpoint with screening_step='l2' and updates the AI panel
   - If an AI answer exists for that question, show a collapsible panel containing the parsed LLM JSON
     including confidence, explanation, and evidence_sentences chips that scroll the PDF to the sentence.
@@ -102,12 +102,17 @@ function snakeCaseColumn(name: string) {
 }
 
 /**
- * Human classification column for screening (mirrors llm_ prefix but with human_).
- * Example: question -> llm_question, human_question
+ * Human classification column for screening.
+ * Example: question -> human_question
  */
 function humanScreenColumn(name: string) {
   const base = snakeCaseColumn(name)
   return base.replace(/^llm_/, 'human_')
+}
+
+function stageColumn(name: string, prefix: 'llm' | 'human', stage: 'l1' | 'l2') {
+  const core = snakeCaseColumn(name).replace(/^llm_/, '')
+  return `${prefix}_${stage}_${core}`.slice(0, 64)
 }
 
 /* Types */
@@ -692,10 +697,14 @@ export default function CanSrL2ScreenViewPage() {
     const newHints: Record<number, string> = {}
 
     criteriaData.questions.forEach((q: string, idx: number) => {
-      const llmCol = snakeCaseColumn(q)
-      const humanCol =
+      const sourceStage = sourceFlags[idx] === 'l1' ? 'l1' : 'l2'
+      const llmCol = stageColumn(q, 'llm', 'l2')
+      const humanCol = stageColumn(q, 'human', 'l2')
+      const l1HumanCol = stageColumn(q, 'human', 'l1')
+      const legacyLlmCol = snakeCaseColumn(q)
+      const legacyHumanCol =
         criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
-      const criterionKey = llmCol.replace(/^llm_/, '')
+      const criterionKey = llmCol.replace(/^llm_l2_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
       const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
       const citationFulltextMd5 = String((citation as any)?.fulltext_md5 || '')
@@ -708,7 +717,20 @@ export default function CanSrL2ScreenViewPage() {
       )
 
       const humanRaw = resolveConfiguredValue(citation as any, humanCol)
-      const llmRaw = (citation as any)?.[llmCol]
+      // set-answer mirrors retrospective L1 answers into human_l2_*. The L1
+      // fallback keeps older rows usable and lets this screen display the
+      // copied answer before a reviewer changes it.
+      const copiedL1HumanRaw =
+        sourceStage === 'l1'
+          ? resolveConfiguredValue(citation as any, l1HumanCol)
+          : undefined
+      const legacyHumanRaw =
+        sourceStage === 'l1'
+          ? resolveConfiguredValue(citation as any, legacyHumanCol)
+          : undefined
+      const llmRaw =
+        (citation as any)?.[llmCol] ??
+        (citation as any)?.[legacyLlmCol]
 
       // Parse possible JSON payloads from DB
       let humanParsed = humanRaw
@@ -737,8 +759,27 @@ export default function CanSrL2ScreenViewPage() {
         ((humanParsed as any).pipeline === 'fulltext' ||
           String((humanParsed as any).screening_step || '').toLowerCase() ===
             'l2')
-      if (isFulltextHuman && (humanParsed as any).selected !== undefined) {
+      const copiedHumanParsed =
+        humanRaw === undefined ? copiedL1HumanRaw : humanRaw
+      const parsedCopiedHuman =
+        typeof copiedHumanParsed === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(copiedHumanParsed)
+              } catch {
+                return copiedHumanParsed
+              }
+            })()
+          : copiedHumanParsed
+      if (
+        isFulltextHuman &&
+        (humanParsed as any).selected !== undefined
+      ) {
         newSelections[idx] = (humanParsed as any).selected
+      } else if (extractHumanAnswer(parsedCopiedHuman)) {
+        newSelections[idx] = extractHumanAnswer(parsedCopiedHuman)
+      } else if (extractHumanAnswer(legacyHumanRaw)) {
+        newSelections[idx] = extractHumanAnswer(legacyHumanRaw)
       } else if (sourceFlags[idx] === 'l2' && extractHumanAnswer(humanParsed)) {
         newSelections[idx] = extractHumanAnswer(humanParsed)
       }
@@ -775,18 +816,6 @@ export default function CanSrL2ScreenViewPage() {
         newPanelOpen[idx] = false
       }
 
-      // For L2 questions: if no human selection present, allow llm_* to prefill the dropdown
-      const hasSelection =
-        newSelections[idx] !== undefined && newSelections[idx] !== ''
-      if (sourceFlags[idx] === 'l2' && !hasSelection) {
-        const aiSelected =
-          newAiPanels[idx] && typeof newAiPanels[idx].selected === 'string'
-            ? newAiPanels[idx].selected
-            : null
-        if (aiSelected) {
-          newSelections[idx] = aiSelected
-        }
-      }
     })
 
     setSelections(newSelections)
@@ -1273,9 +1302,6 @@ export default function CanSrL2ScreenViewPage() {
                       )
                       const current = selections[idx] ?? ''
                       const aiData = aiPanels[idx]
-                      const aiSelected =
-                        aiData && aiData.selected ? aiData.selected : undefined
-
                       // Per-question highlight aligned with list/back-end logic.
                       // - Highlight when this criterion triggers review (low confidence OR critical disagreement OR guardrail issue)
                       // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
@@ -1400,7 +1426,7 @@ export default function CanSrL2ScreenViewPage() {
                               ) : null}
 
                               <select
-                                value={current || (aiSelected ?? '')}
+                                value={current}
                                 onChange={(e) =>
                                   onSelectOption(idx, e.target.value)
                                 }

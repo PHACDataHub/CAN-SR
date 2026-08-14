@@ -54,14 +54,17 @@ export const authenticatedFetch = async (
   const token = getAuthToken()
   const tokenType = getTokenType()
 
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  }
+  const headers = new Headers(options.headers)
+  // Let fetch generate the multipart boundary for FormData. Setting an
+  // application/json content type here makes request.formData() fail in
+  // browser-facing upload proxies.
+  const isFormData =
+    typeof FormData !== 'undefined' && options.body instanceof FormData
+  if (!isFormData && !headers.has('Content-Type'))
+    headers.set('Content-Type', 'application/json')
 
   if (token) {
-    ;(headers as Record<string, string>)['Authorization'] =
-      `${tokenType} ${token}`
+    headers.set('Authorization', `${tokenType} ${token}`)
   }
 
   return fetch(url, {
