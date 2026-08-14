@@ -110,6 +110,11 @@ function humanScreenColumn(name: string) {
   return base.replace(/^llm_/, 'human_')
 }
 
+function stageColumn(name: string, prefix: 'llm' | 'human', stage: 'l1' | 'l2') {
+  const core = snakeCaseColumn(name).replace(/^llm_/, '')
+  return `${prefix}_${stage}_${core}`.slice(0, 64)
+}
+
 /* Types */
 type CriteriaData = {
   questions: string[]
@@ -692,10 +697,14 @@ export default function CanSrL2ScreenViewPage() {
     const newHints: Record<number, string> = {}
 
     criteriaData.questions.forEach((q: string, idx: number) => {
-      const llmCol = snakeCaseColumn(q)
-      const humanCol =
+      const sourceStage = sourceFlags[idx] === 'l1' ? 'l1' : 'l2'
+      const llmCol = stageColumn(q, 'llm', 'l2')
+      const humanCol = stageColumn(q, 'human', 'l2')
+      const l1HumanCol = stageColumn(q, 'human', 'l1')
+      const legacyLlmCol = snakeCaseColumn(q)
+      const legacyHumanCol =
         criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
-      const criterionKey = llmCol.replace(/^llm_/, '')
+      const criterionKey = llmCol.replace(/^llm_l2_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
       const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
       const citationFulltextMd5 = String((citation as any)?.fulltext_md5 || '')
@@ -708,7 +717,20 @@ export default function CanSrL2ScreenViewPage() {
       )
 
       const humanRaw = resolveConfiguredValue(citation as any, humanCol)
-      const llmRaw = (citation as any)?.[llmCol]
+      // set-answer mirrors retrospective L1 answers into human_l2_*. The L1
+      // fallback keeps older rows usable and lets this screen display the
+      // copied answer before a reviewer changes it.
+      const copiedL1HumanRaw =
+        sourceStage === 'l1'
+          ? resolveConfiguredValue(citation as any, l1HumanCol)
+          : undefined
+      const legacyHumanRaw =
+        sourceStage === 'l1'
+          ? resolveConfiguredValue(citation as any, legacyHumanCol)
+          : undefined
+      const llmRaw =
+        (citation as any)?.[llmCol] ??
+        (citation as any)?.[legacyLlmCol]
 
       // Parse possible JSON payloads from DB
       let humanParsed = humanRaw
@@ -737,8 +759,27 @@ export default function CanSrL2ScreenViewPage() {
         ((humanParsed as any).pipeline === 'fulltext' ||
           String((humanParsed as any).screening_step || '').toLowerCase() ===
             'l2')
-      if (isFulltextHuman && (humanParsed as any).selected !== undefined) {
+      const copiedHumanParsed =
+        humanRaw === undefined ? copiedL1HumanRaw : humanRaw
+      const parsedCopiedHuman =
+        typeof copiedHumanParsed === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(copiedHumanParsed)
+              } catch {
+                return copiedHumanParsed
+              }
+            })()
+          : copiedHumanParsed
+      if (
+        isFulltextHuman &&
+        (humanParsed as any).selected !== undefined
+      ) {
         newSelections[idx] = (humanParsed as any).selected
+      } else if (extractHumanAnswer(parsedCopiedHuman)) {
+        newSelections[idx] = extractHumanAnswer(parsedCopiedHuman)
+      } else if (extractHumanAnswer(legacyHumanRaw)) {
+        newSelections[idx] = extractHumanAnswer(legacyHumanRaw)
       } else if (sourceFlags[idx] === 'l2' && extractHumanAnswer(humanParsed)) {
         newSelections[idx] = extractHumanAnswer(humanParsed)
       }
