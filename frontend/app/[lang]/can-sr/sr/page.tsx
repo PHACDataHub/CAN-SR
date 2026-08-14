@@ -68,7 +68,7 @@ export default function CanSrLandingPage() {
 
       <SRHeader
         title={dict.cansr.title}
-        srName={loading ? "" : sr.name}
+        srName={loading ? '' : sr.name}
         showSettings={false}
         showExport={true}
         showBack={true}
@@ -109,21 +109,21 @@ export default function CanSrLandingPage() {
 
         <div className="space-y-3">
           <StackingCard
-            title={dict.sr.databaseSearch}
-            description={dict.sr.databaseSearchDesc}
+            title={dict.sr.referencesWorkspace}
+            description={dict.sr.referencesWorkspaceDesc}
             href={
               srId
-                ? `/can-sr/search?sr_id=${encodeURIComponent(srId)}`
-                : '/can-sr/search'
+                ? `/can-sr/references?sr_id=${encodeURIComponent(srId)}`
+                : '/can-sr/references'
             }
           />
           <StackingCard
-            title={dict.sr.importReferences}
-            description={dict.sr.importReferencesDesc}
+            title={dict.sr.protocols}
+            description={dict.sr.protocolsDesc}
             href={
               srId
-                ? `/can-sr/setup?sr_id=${encodeURIComponent(srId)}`
-                : '/can-sr/setup'
+                ? `/can-sr/protocols?sr_id=${encodeURIComponent(srId)}`
+                : '/can-sr/protocols'
             }
           />
 

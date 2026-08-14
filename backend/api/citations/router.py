@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
 import time
@@ -30,7 +31,7 @@ try:
 except Exception:  # pragma: no cover
     rispy = None
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import Response, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -41,6 +42,10 @@ from ..core.security import get_current_active_user
 from ..core.config import settings
 from ..services.cit_db_service import cits_dp_service, snake_case, snake_case_column, parse_dsn
 from ..services.citation_export_service import citation_export_service, ExportValidationError
+from ..services.citation_import_preview_service import CitationImportPreviewService
+from ..services.citation_import_service import citation_import_service
+from ..services.citation_workspace_preferences_service import citation_workspace_preferences_service
+from ..services.storage import storage_service
 from ..criteria.context import resolve_source_value
 from .export_models import CitationExportRequest, CitationExportSchema
 from ..core.cit_utils import load_sr_and_check
@@ -90,6 +95,339 @@ class UploadResult(BaseModel):
     rows_inserted: int
     message: str
     created_at: str
+
+
+class CitationImportPreviewResponse(BaseModel):
+    id: str
+    source_format: str
+    source_sha256: str
+    schema_fingerprint: str
+    proposed_mapping: dict[str, str | None]
+    validation_report: dict[str, Any]
+    staging_expires_at: str
+
+
+class CitationImportPreviewCancelResponse(BaseModel):
+    id: str
+    cancelled: bool
+    staging_cleanup_pending: bool
+
+
+class CitationImportPreviewInspectionResponse(BaseModel):
+    id: str
+    citation_table_name: str | None
+    source_sha256: str
+    schema_fingerprint: str
+    proposed_mapping: dict[str, str | None]
+    validation_report: dict[str, Any]
+    staging_expires_at: str
+    created_at: str
+
+
+class CitationImportPreviewCommitRequest(BaseModel):
+    approved_mapping: dict[str, str | None]
+
+
+class CitationImportPreviewMappingUpdateRequest(BaseModel):
+    approved_mapping: dict[str, str | None]
+    excluded_source_columns: list[str]
+    excluded_ambiguous_row_numbers: list[int] = []
+
+
+class CitationImportPreviewMappingUpdateResponse(BaseModel):
+    id: str
+    proposed_mapping: dict[str, str | None]
+    mapping_decision: dict[str, Any]
+    validation_report: dict[str, Any]
+
+
+class CitationImportPreviewCommitResponse(BaseModel):
+    id: str
+    batch_id: str
+    idempotent: bool
+    inserted_count: int
+    existing_exact_match_count: int
+    invalid_count: int
+
+
+class CitationImportResponse(BaseModel):
+    sr_id: str
+    table_name: str
+    batch_id: str
+    idempotent: bool
+    rows_inserted: int
+    invalid_count: int
+    warnings: list[str] = []
+
+
+class CitationWorkspaceColumnsRequest(BaseModel):
+    columns: list[str]
+
+
+@router.post('/{sr_id}/import-previews', response_model=CitationImportPreviewResponse)
+async def create_citation_import_preview(
+    sr_id: str,
+    file: UploadFile = File(...),
+    commit_key: str = Form(...),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Parse and encrypt-stage an import; this endpoint never mutates citations."""
+    sr, _screening = await load_sr_and_check(
+        sr_id, current_user, srdb_service, require_screening=False,
+    )
+    if not file or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+    try:
+        raw_bytes = await file.read()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Failed to read upload: {exc}',
+        )
+    if len(raw_bytes) > settings.MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail='Uploaded file is too large',
+        )
+    citation_table_name = (sr.get('screening_db') or {}).get('table_name')
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.create(
+            sr_id=sr_id, citation_table_name=citation_table_name, filename=file.filename,
+            raw_bytes=raw_bytes, commit_key=commit_key, actor_id=current_user.get(
+                'email',
+            ) or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to create import preview: {exc}',
+        )
+
+
+@router.post('/{sr_id}/imports', response_model=CitationImportResponse)
+async def import_citations(
+    sr_id: str,
+    file: UploadFile = File(...),
+    commit_key: str = Form(...),
+    title_header: str | None = Form(None),
+    abstract_header: str | None = Form(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Parse and append a citation file immediately, retaining batch provenance."""
+    sr, _screening = await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail='File is required',
+        )
+    try:
+        raw = await file.read()
+        if not raw:
+            raise ValueError('Uploaded file is empty')
+        max_bytes = int(getattr(settings, 'MAX_FILE_SIZE', 0) or 0)
+        if max_bytes and len(raw) > max_bytes:
+            raise ValueError(
+                f'Uploaded file exceeds the {max_bytes} byte limit',
+            )
+        from ..services.citation_import_preview_service import build_preview
+        parsed = build_preview(file.filename, raw)
+        result = await run_in_threadpool(
+            citation_import_service.append_rows_sync,
+            sr_id=sr_id,
+            table_name=(sr.get('screening_db') or {}).get('table_name'),
+            source_format=parsed['source_format'],
+            filename=file.filename,
+            raw_bytes=raw,
+            rows=parsed['normalized_rows'],
+            source_columns=parsed['validation_report']['source_columns'],
+            actor_id=current_user.get('email') or current_user.get('id'),
+            commit_key=commit_key,
+            title_header=title_header,
+            abstract_header=abstract_header,
+        )
+        if not result['idempotent'] and not (sr.get('screening_db') or {}).get('table_name'):
+            await run_in_threadpool(
+                srdb_service.update_screening_db_info, sr_id, {
+                    'table_name': result['table_name'], 'created_at': datetime.utcnow().isoformat(),
+                    'rows': result['rows_inserted'],
+                },
+            )
+        return CitationImportResponse(sr_id=sr_id, **result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to import citations: {exc}',
+        )
+
+
+@router.get('/{sr_id}/import-previews/{preview_id}', response_model=CitationImportPreviewInspectionResponse)
+async def inspect_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return active owned preview metadata without exposing staged file contents."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return service.inspect(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to inspect import preview: {exc}',
+        )
+
+
+@router.put('/{sr_id}/import-previews/{preview_id}/mapping', response_model=CitationImportPreviewMappingUpdateResponse)
+async def update_citation_import_preview_mapping(
+    sr_id: str,
+    preview_id: str,
+    payload: CitationImportPreviewMappingUpdateRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Persist an active owner's mapping decision without mutating citation tables."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.update_mapping(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+            approved_mapping=payload.approved_mapping,
+            excluded_source_columns=payload.excluded_source_columns,
+            excluded_ambiguous_row_numbers=payload.excluded_ambiguous_row_numbers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to update import preview mapping: {exc}',
+        )
+
+
+@router.post('/{sr_id}/import-previews/{preview_id}/commit', response_model=CitationImportPreviewCommitResponse)
+async def commit_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    payload: CitationImportPreviewCommitRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Commit an owned preview through the transactional import-batch workflow."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.commit(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+            approved_mapping=payload.approved_mapping,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to commit import preview: {exc}',
+        )
+
+
+@router.delete('/{sr_id}/import-previews/{preview_id}', response_model=CitationImportPreviewCancelResponse)
+async def cancel_citation_import_preview(
+    sr_id: str,
+    preview_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Cancel an authorized user's uncommitted import preview."""
+    await load_sr_and_check(sr_id, current_user, srdb_service, require_screening=False)
+    try:
+        service = CitationImportPreviewService(
+            storage_service, secret_key=settings.SECRET_KEY,
+            ttl_minutes=settings.CITATION_IMPORT_PREVIEW_TTL_MINUTES,
+        )
+        return await service.cancel(
+            preview_id=preview_id, sr_id=sr_id,
+            actor_id=current_user.get('email') or current_user.get('id'),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to cancel import preview: {exc}',
+        )
 
 
 def _sniff_citations_format(filename: str, raw_bytes: bytes) -> str:
@@ -813,6 +1151,120 @@ async def get_citations_batch(
     return {'citations': rows}
 
 
+@router.get('/{sr_id}/citations/workspace')
+async def list_workspace_citations(
+    sr_id: str,
+    page: int = 1,
+    page_size: int = 25,
+    search: str | None = None,
+    sort: str | None = None,
+    direction: str | None = None,
+    columns: str | None = None,
+    filters: str | None = None,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Return a review-authorized, server-paginated References workspace page."""
+    try:
+        _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to load systematic review or screening: {e}',
+        )
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'citations': [], 'total_count': 0, 'page': max(1, page), 'page_size': min(100, max(1, page_size)), 'columns': ['id']}
+    try:
+        return await run_in_threadpool(
+            cits_dp_service.list_workspace_citations,
+            table_name, page, page_size, search, sort, direction,
+            [
+                column.strip() for column in columns.split(
+                    ',',
+                ) if column.strip()
+            ] if columns else None,
+            json.loads(filters) if filters else None,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
+    except Exception as e:
+        if _is_undefined_table_error(e):
+            return {'citations': [], 'total_count': 0, 'page': max(1, page), 'page_size': min(100, max(1, page_size)), 'columns': ['id']}
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to query screening DB: {e}',
+        )
+
+
+@router.get('/{sr_id}/citations/workspace/preferences')
+async def get_workspace_column_preferences(
+    sr_id: str, current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        return {'columns': None}
+    actor_id = current_user.get('email') or current_user.get('id')
+    columns = await run_in_threadpool(
+        citation_workspace_preferences_service.get_columns, sr_id, table_name, actor_id,
+    )
+    return {'columns': columns}
+
+
+@router.delete('/{sr_id}/citations/workspace')
+async def delete_workspace_citations(
+    sr_id: str,
+    payload: dict[str, Any],
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    citation_ids = [int(value) for value in payload.get('citation_ids', [])]
+    if not table_name or not citation_ids:
+        return {'deleted_count': 0}
+    try:
+        return await run_in_threadpool(
+            cits_dp_service.delete_citations,
+            table_name,
+            citation_ids,
+            sr_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to delete citations: {exc}',
+        )
+
+
+@router.put('/{sr_id}/citations/workspace/preferences')
+async def save_workspace_column_preferences(
+    sr_id: str,
+    payload: CitationWorkspaceColumnsRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Citation dataset is not configured',
+        )
+    actor_id = current_user.get('email') or current_user.get('id')
+    try:
+        columns = await run_in_threadpool(
+            citation_workspace_preferences_service.save_columns, sr_id, table_name, actor_id, payload.columns,
+        )
+        return {'columns': columns}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        )
+
+
 # Helper to get citation row by id - delegated to backend.api.core.postgres.get_citation_by_id
 
 
@@ -1194,12 +1646,14 @@ async def hard_delete_screening_resources(sr_id: str, current_user: dict[str, An
             detail=f"Failed to load systematic review: {e}",
         )
 
-    requester_id = current_user.get('id')
-    if requester_id != sr.get('owner_id'):
+    requester_id = current_user.get('email')
+    try:
+        srdb_service.require_review_owner(sr_id, requester_id)
+    except HTTPException as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail='Only the owner may perform screening cleanup for this systematic review',
-        )
+        ) from exc
 
     if not screening:
         return {'status': 'no_screening_db', 'message': 'No screening table configured for this SR', 'deleted_table': False, 'deleted_files': 0}
