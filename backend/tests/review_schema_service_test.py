@@ -108,3 +108,11 @@ def test_feature_is_disabled_by_default(monkeypatch):
     source = config.read_text(encoding='utf-8')
     assert "ENABLE_MULTI_REVIEWER_SCHEMA', 'false'" in source
     assert "AUTO_MIGRATE', 'false'" in source
+
+
+def test_startup_applies_migrations_independently_of_feature_flag():
+    main = Path(__file__).resolve().parents[1] / 'main.py'
+    source = main.read_text(encoding='utf-8')
+
+    assert 'review_schema_service.migrate' in source
+    assert 'if settings.ENABLE_MULTI_REVIEWER_SCHEMA:' not in source
