@@ -58,9 +58,14 @@ class PdfLinkageNetworkTests(unittest.IsolatedAsyncioTestCase):
         ]
         async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=15)) as client:
             for doi in dois:
-                response = await _request_with_retry(
-                    client, f'{OA_API_BASE_URL}?doi={quote(doi, safe="")}',
-                )
+                try:
+                    response = await _request_with_retry(
+                        client, f'{OA_API_BASE_URL}?doi={quote(doi, safe="")}',
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    self.skipTest(
+                        f'network unavailable for live OA test: {exc}',
+                    )
                 payload = response.json()
                 candidate = _candidate(payload)
                 self.assertTrue(

@@ -24,7 +24,7 @@ DEFAULT_CITATION_FIELDS = ('Title', 'Abstract')
 
 def _with_default_citation_fields(values: list[str]) -> list[str]:
     """Keep the fixed Title and Abstract fields in every criteria document."""
-    return [value for value in dict.fromkeys(values) if value not in DEFAULT_CITATION_FIELDS]
+    return list(dict.fromkeys(values))
 
 
 class Diagnostic(BaseModel):
@@ -111,8 +111,6 @@ class CriteriaConfigurationService:
                     citation_fields['l1_include'] = _with_default_citation_fields(
                         configured,
                     )
-                citation_fields.setdefault('title', 'Title')
-                citation_fields.setdefault('abstract', 'Abstract')
             diagnostics = self._move_question_context_to_answers(normalized)
             return CriteriaLoadResult(
                 criteria=CriteriaConfigV2.model_validate(normalized),
@@ -136,7 +134,36 @@ class CriteriaConfigurationService:
         guidance. Reading is intentionally non-mutating and therefore safe for
         both legacy and current v2 configurations.
         """
-        return []
+        diagnostics: list[Diagnostic] = []
+        for stage in ('l1', 'l2'):
+            items = raw.get(stage) or []
+            if not isinstance(items, list):
+                continue
+            for index, item in enumerate(items):
+                if not isinstance(item, dict) or not item.get('context'):
+                    continue
+                context = str(item['context']).strip()
+                answers = item.get('answers')
+                if not isinstance(answers, list):
+                    continue
+                for answer in answers:
+                    if not isinstance(answer, dict):
+                        continue
+                    answer_context = str(answer.get('context') or '').strip()
+                    if context and not answer_context.startswith(context):
+                        answer['context'] = '\n\n'.join(
+                            part for part in (context, answer_context) if part
+                        )
+                diagnostics.append(
+                    Diagnostic(
+                        severity='info',
+                        code='question_context_moved_to_answers',
+                        source_path=[stage, index, 'context'],
+                        target_path=[stage, index, 'answers'],
+                        message='Question context was copied to each answer for prompt compatibility.',
+                    ),
+                )
+        return diagnostics
 
     def export_yaml(self, criteria: CriteriaConfigV2 | dict[str, Any]) -> str:
         model = criteria if isinstance(

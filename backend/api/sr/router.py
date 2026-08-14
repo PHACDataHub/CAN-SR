@@ -528,14 +528,34 @@ async def save_criteria_config(
             status_code=status.HTTP_409_CONFLICT,
             detail='This SR already has screening data. Pass force=true to confirm criteria invalidation.',
         )
+    previous_criteria = review.get('criteria')
+    stored = None
+    if isinstance(previous_criteria, dict):
+        try:
+            stored = criteria_configuration_service.normalize(
+                previous_criteria,
+            )
+        except (KeyError, ValueError):
+            stored = None
+    if stored:
+        _require_migration_confirmation(stored, payload.migration_fingerprint)
     try:
         available = await run_in_threadpool(discover_citation_fields, review)
         available_names = {
             str(field.get('name'))
             for field in available.get('fields', [])
         }
+        criteria_payload = payload.criteria.model_dump(
+            mode='json', exclude_none=True,
+        )
+        citation_fields = criteria_payload.setdefault('citation_fields', {})
+        citation_fields.setdefault('title', 'Title')
+        citation_fields.setdefault('abstract', 'Abstract')
+        criteria_for_validation = CriteriaConfigV2.model_validate(
+            criteria_payload,
+        )
         required_errors = criteria_configuration_service.required_citation_field_errors(
-            payload.criteria, available_names,
+            criteria_for_validation, available_names,
         )
         if required_errors:
             raise HTTPException(
@@ -543,17 +563,11 @@ async def save_criteria_config(
                     'errors': required_errors,
                 },
             )
-        previous_criteria = review.get('criteria')
-        stored = None
-        if isinstance(previous_criteria, dict):
-            stored = criteria_configuration_service.normalize(
-                previous_criteria,
-            )
     except (KeyError, ValueError):
-        stored = None
-    if stored:
-        _require_migration_confirmation(stored, payload.migration_fingerprint)
-    criteria = payload.criteria.model_dump(mode='json', exclude_none=True)
+        raise
+    criteria = criteria_for_validation.model_dump(
+        mode='json', exclude_none=True,
+    )
     criteria_yaml = criteria_configuration_service.export_yaml(
         payload.criteria,
     )
