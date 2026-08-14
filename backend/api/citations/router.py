@@ -170,6 +170,276 @@ class CitationWorkspaceColumnsRequest(BaseModel):
     columns: list[str]
 
 
+class SetAnswerRequest(BaseModel):
+    item_type: str
+    item_id: str
+    source_column: str
+
+
+def _set_answer_validation_columns(item_type: str) -> tuple[str, str, str]:
+    """Return validation JSONB and legacy summary columns for an answer type."""
+    step = 'parameters' if item_type == 'parameter' else item_type
+    return (
+        f'{step}_validations',
+        f'{step}_validated_by',
+        f'{step}_validated_at',
+    )
+
+
+def _set_answer_validation_list(value: Any) -> list[dict[str, str]]:
+    """Normalize stored validation JSON into the canonical reviewer shape."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return []
+    if not isinstance(value, list):
+        return []
+
+    result: list[dict[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        user = entry.get('user') or entry.get(
+            'email',
+        ) or entry.get('validated_by')
+        if not user:
+            continue
+        timestamp = entry.get('validated_at') or entry.get(
+            'timestamp',
+        ) or entry.get('validatedAt')
+        result.append(
+            {'user': str(user), 'validated_at': str(timestamp or '')},
+        )
+    return result
+
+
+def _set_answer_upsert_validation(
+    existing: Any,
+    user: str,
+    timestamp: str,
+) -> list[dict[str, str]]:
+    """Upsert the current reviewer while retaining other reviewers."""
+    entries = [
+        entry for entry in _set_answer_validation_list(existing)
+        if entry['user'] != user
+    ]
+    entries.append({'user': user, 'validated_at': timestamp})
+    return sorted(entries, key=lambda entry: entry['validated_at'], reverse=True)
+
+
+def _criteria_config_items(sr: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
+    if not isinstance(criteria, dict):
+        return [], []
+
+    def items(stage: str) -> list[dict[str, Any]]:
+        value = criteria.get(stage) or []
+        if isinstance(value, dict):
+            value = value.get('items') or []
+        return [item for item in value if isinstance(item, dict)]
+
+    return items('l1'), items('l2')
+
+
+def _parameter_items(sr: dict[str, Any]) -> list[dict[str, Any]]:
+    criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
+    parameters = criteria.get('parameters') if isinstance(
+        criteria, dict,
+    ) else []
+    if isinstance(parameters, dict):
+        parameters = parameters.get('items') or []
+    return [item for item in (parameters or []) if isinstance(item, dict)]
+
+
+def _set_answer_payload(value: Any, item_type: str, screening_step: str) -> dict[str, Any]:
+    value = str(value).strip()
+    provenance = 'retrospective_validation'
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+    if item_type == 'parameter':
+        return {
+            'found': True,
+            'value': value,
+            'explanation': '',
+            'evidence_sentences': [],
+            'human': True,
+            'reviewer': None,
+            'source': provenance,
+            'timestamp': timestamp,
+        }
+    return {
+        'selected': value,
+        'explanation': '',
+        'confidence': None,
+        'human': True,
+        'reviewer': None,
+        'source': provenance,
+        'timestamp': timestamp,
+        'screening_step': screening_step,
+        'pipeline': 'fulltext' if screening_step == 'l2' else 'title_abstract',
+    }
+
+
+def _set_answer_destinations(item_type: str, core: str) -> list[str]:
+    if item_type == 'parameter':
+        return [f'human_param_{core}']
+    if item_type == 'l1':
+        return [f'human_l1_{core}', f'human_l2_{core}']
+    return [f'human_l2_{core}']
+
+
+@router.post('/{sr_id}/set-answer')
+async def set_answer(
+    sr_id: str,
+    payload: SetAnswerRequest,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Copy a configured retrospective citation field into human answer fields."""
+    item_type = payload.item_type.strip().lower()
+    if item_type not in {'l1', 'l2', 'parameter'}:
+        raise HTTPException(
+            status_code=400, detail='item_type must be l1, l2, or parameter',
+        )
+    source_column = payload.source_column.strip()
+    if not source_column:
+        raise HTTPException(
+            status_code=400, detail='source_column is required',
+        )
+
+    sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    l1_items, l2_items = _criteria_config_items(sr)
+    parameter_items = _parameter_items(sr)
+    if item_type == 'parameter':
+        item = next(
+            (
+                i for i in parameter_items if str(
+                    i.get('id'),
+                ) == payload.item_id
+            ), None,
+        )
+        stage = 'parameter'
+    else:
+        items = l1_items if item_type == 'l1' else l2_items
+        item = next(
+            (
+                i for i in items if str(
+                    i.get('id'),
+                ) == payload.item_id
+            ), None,
+        )
+        stage = item_type
+    if not item:
+        raise HTTPException(
+            status_code=404, detail='Configured item not found',
+        )
+    if item.get('answer_column') != source_column:
+        raise HTTPException(
+            status_code=409, detail='source_column does not match the configured answer column',
+        )
+
+    item_name = item.get(
+        'name',
+    ) if item_type == 'parameter' else item.get('question')
+    core = snake_case(
+        str(item_name or ''),
+        max_len=52 if item_type == 'parameter' else 56,
+    )
+    if not core:
+        raise HTTPException(
+            status_code=400, detail='Configured item has no usable name',
+        )
+    destinations = _set_answer_destinations(item_type, core)
+    validations_col, validated_by_col, validated_at_col = _set_answer_validation_columns(
+        item_type,
+    )
+
+    table_name = (screening or {}).get('table_name') or 'citations'
+    try:
+        columns = await run_in_threadpool(cits_dp_service.get_table_columns, table_name)
+        available_columns = {
+            str(column.get('column_name'))
+            for column in columns
+        }
+        if source_column not in available_columns:
+            raise HTTPException(
+                status_code=400, detail=f"Source citation field '{source_column}' was not found",
+            )
+        await run_in_threadpool(cits_dp_service.create_column, validations_col, 'JSONB', table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validated_by_col, 'TEXT', table_name)
+        await run_in_threadpool(cits_dp_service.create_column, validated_at_col, 'TIMESTAMPTZ', table_name)
+        citation_ids = await run_in_threadpool(cits_dp_service.list_citation_ids, None, table_name)
+        rows = await run_in_threadpool(
+            cits_dp_service.get_citations_by_ids,
+            citation_ids,
+            table_name,
+            [
+                'id', source_column, validations_col,
+                validated_by_col, validated_at_col,
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f'Failed to query screening DB: {exc}',
+        )
+
+    reviewer = str(
+        current_user.get('email')
+        or current_user.get('id') or '',
+    ).strip()
+    processed = copied = blank = 0
+    for row in rows:
+        processed += 1
+        value = row.get(source_column)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            blank += 1
+            continue
+        answer = _set_answer_payload(value, item_type, stage)
+        for destination in destinations:
+            await run_in_threadpool(
+                cits_dp_service.update_jsonb_column, int(
+                    row['id'],
+                ), destination, answer, table_name,
+            )
+        validation_timestamp = str(answer['timestamp'])
+        validations = _set_answer_upsert_validation(
+            row.get(validations_col), reviewer, validation_timestamp,
+        )
+        await run_in_threadpool(
+            cits_dp_service.update_jsonb_column,
+            int(row['id']),
+            validations_col,
+            validations,
+            table_name,
+        )
+        await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            int(row['id']),
+            validated_by_col,
+            reviewer,
+            table_name,
+        )
+        await run_in_threadpool(
+            cits_dp_service.update_text_column,
+            int(row['id']),
+            validated_at_col,
+            validation_timestamp,
+            table_name,
+        )
+        copied += 1
+
+    return {
+        'status': 'success', 'item_type': item_type, 'item_id': payload.item_id,
+        'processed': processed, 'copied': copied, 'blank': blank,
+        'destinations': destinations,
+    }
+
+
 @router.post('/{sr_id}/import-previews', response_model=CitationImportPreviewResponse)
 async def create_citation_import_preview(
     sr_id: str,

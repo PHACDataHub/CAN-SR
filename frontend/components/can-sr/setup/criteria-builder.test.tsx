@@ -9,7 +9,7 @@ const labels = new Proxy({}, { get: (_target, property) => String(property) }) a
 
 function Harness() {
   const [state, dispatch] = useReducer(criteriaDraftReducer, { criteria: emptyCriteria(), revision: 0, dirty: false })
-  return <><CriteriaBuilder state={state} dispatch={dispatch} labels={labels} /><output>{state.dirty ? 'dirty' : 'clean'}</output></>
+  return <><CriteriaBuilder srId="test-review" state={state} dispatch={dispatch} labels={labels} /><output>{state.dirty ? 'dirty' : 'clean'}</output></>
 }
 
 describe('CriteriaBuilder', () => {

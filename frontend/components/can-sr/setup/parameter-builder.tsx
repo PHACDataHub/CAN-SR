@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type Dispatch } from 'react'
+import { authenticatedFetch } from '@/lib/auth'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, ChevronsDown, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, Parameter, ParameterOption, ScreeningQuestion } from './criteria-types'
 import type { CriteriaDiagnostic } from './criteria-validation'
@@ -15,7 +16,8 @@ const questionSource = (stage: 'l1' | 'l2', question: ScreeningQuestion): Trigge
   options: question.answers.map(({ id, label, context }) => ({ id, label, context })),
 })
 
-function ParameterCard({ parameter, index, count, sources, dependants, referencedOptionIds, dispatch, labels, diagnostics, collapsed, onToggle, citationFields }: {
+function ParameterCard({ srId, parameter, index, count, sources, dependants, referencedOptionIds, dispatch, labels, diagnostics, collapsed, onToggle, citationFields }: {
+  srId: string
   parameter: Parameter
   index: number
   count: number
@@ -32,6 +34,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
   const prefix = `parameter-${parameter.id}`
   const [contextOptionId, setContextOptionId] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [setAnswerStatus, setSetAnswerStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const contextOption = parameter.type === 'selection' ? parameter.options.find((option) => option.id === contextOptionId) : undefined
   const typeChangeBlocked = parameter.type === 'selection' && dependants.length > 0
   const update = (field: 'name' | 'description' | 'unit_instructions' | 'calculation', value: string) => dispatch({ type: 'update-parameter', parameterId: parameter.id, field, value })
@@ -69,7 +72,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
       </label>
       {parameter.answer_column ? <>
         <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
-        <select id={`${prefix}-answer-column`} value={parameter.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.value || null })} title={labels.answerColumnTooltip} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm"><option value="">{labels.noAnswerColumn}</option>{!citationFields.fields.some((field) => field.name === parameter.answer_column) ? <option value={parameter.answer_column}>{parameter.answer_column} · {labels.unavailableField}</option> : null}{citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select>
+        <div className="mt-2 flex gap-2"><select id={`${prefix}-answer-column`} value={parameter.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: parameter.id, value: event.target.value || null })} title={labels.answerColumnTooltip} className="min-w-0 flex-1 rounded-md border px-2 py-1.5 text-sm"><option value="">{labels.noAnswerColumn}</option>{!citationFields.fields.some((field) => field.name === parameter.answer_column) ? <option value={parameter.answer_column}>{parameter.answer_column} · {labels.unavailableField}</option> : null}{citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select><button type="button" disabled={setAnswerStatus === 'saving'} onClick={async () => { setSetAnswerStatus('saving'); try { const response = await authenticatedFetch(`/api/can-sr/citations/set-answer?sr_id=${encodeURIComponent(srId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sr_id: srId, item_type: 'parameter', item_id: parameter.id, source_column: parameter.answer_column }) }); if (!response.ok) throw new Error(); setSetAnswerStatus('saved') } catch { setSetAnswerStatus('error') } }} className="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">{setAnswerStatus === 'saving' ? labels.saving : setAnswerStatus === 'saved' ? labels.answerSet : setAnswerStatus === 'error' ? labels.setAnswerFailed : labels.setAnswer}</button></div>
       </> : null}
     </div>
     {typeChangeBlocked ? <p role="alert" className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-900">{labels.typeChangeBlocked}: {dependants.join(', ')}</p> : null}
@@ -111,7 +114,7 @@ function ParameterCard({ parameter, index, count, sources, dependants, reference
   </article>
 }
 
-export default function ParameterBuilder({ state, dispatch, labels, diagnostics = [], citationFields = { fields: [], unavailable_configured_fields: [] } }: { state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[]; citationFields?: CitationFieldContract }) {
+export default function ParameterBuilder({ srId, state, dispatch, labels, diagnostics = [], citationFields = { fields: [], unavailable_configured_fields: [] } }: { srId: string; state: CriteriaDraftState; dispatch: Dispatch<CriteriaDraftAction>; labels: Record<string, string>; diagnostics?: CriteriaDiagnostic[]; citationFields?: CitationFieldContract }) {
   const [sectionCollapsed, setSectionCollapsed] = useState(false)
   const [collapsedParameters, setCollapsedParameters] = useState<Set<string>>(() => new Set())
   const pendingParameterCount = useRef<number | null>(null)
@@ -158,7 +161,7 @@ export default function ParameterBuilder({ state, dispatch, labels, diagnostics 
     {state.criteria.parameters.map((parameter, index) => {
       const earlierParameters: TriggerSource[] = state.criteria.parameters.slice(0, index).filter((item) => item.type === 'selection').map((item) => ({ stage: 'parameters', id: item.id, label: item.name, options: item.options }))
       const dependants = state.criteria.parameters.filter((item) => item.id !== parameter.id && item.trigger.all.some((condition) => condition.source_item_id === parameter.id)).map((item) => itemLabels.get(item.id) || item.id)
-      return <ParameterCard key={parameter.id} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} referencedOptionIds={new Set(allConditions.filter((condition) => condition.source_item_id === parameter.id).map((condition) => condition.option_id))} dispatch={dispatch} labels={labels} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} collapsed={collapsedParameters.has(parameter.id)} onToggle={() => setCollapsedParameters((current) => { const next = new Set(current); if (next.has(parameter.id)) next.delete(parameter.id); else next.add(parameter.id); return next })} />
+      return <ParameterCard key={parameter.id} srId={srId} parameter={parameter} index={index} count={state.criteria.parameters.length} sources={[...screeningSources, ...earlierParameters]} dependants={dependants} referencedOptionIds={new Set(allConditions.filter((condition) => condition.source_item_id === parameter.id).map((condition) => condition.option_id))} dispatch={dispatch} labels={labels} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === parameter.id)} collapsed={collapsedParameters.has(parameter.id)} onToggle={() => setCollapsedParameters((current) => { const next = new Set(current); if (next.has(parameter.id)) next.delete(parameter.id); else next.add(parameter.id); return next })} />
     })}
     <div className="flex justify-end"><button type="button" onClick={addParameter} className="inline-flex items-center gap-2 rounded-md border border-emerald-600 px-3 py-2 text-sm font-medium text-emerald-700"><Plus className="h-4 w-4" />{labels.addParameter}</button></div>
     </div> : null}
