@@ -159,17 +159,16 @@ class Settings(BaseSettings):
     )
     DEBUG: bool = os.getenv('DEBUG', 'false').lower() == 'true'
 
-    # Multi-reviewer foundation. Keep disabled until schema and compatibility
-    # verification has passed in the target environment.
+    # Multi-reviewer foundation feature flag. Database migrations are applied
+    # independently because citation import and deduplication require them.
     ENABLE_MULTI_REVIEWER_SCHEMA: bool = os.getenv(
         'ENABLE_MULTI_REVIEWER_SCHEMA', 'false',
     ).lower().strip() == 'true'
     MULTI_REVIEWER_SHADOW_MODE: bool = os.getenv(
         'MULTI_REVIEWER_SHADOW_MODE', 'false',
     ).lower().strip() == 'true'
-    # Schema-changing work is performed by the deployment migration command.
-    # This is intentionally false in production; it is available for local
-    # development when an explicit startup bootstrap is desired.
+    # Retained for compatibility with existing environment files. Startup
+    # migrations are now always applied before the API serves requests.
     AUTO_MIGRATE: bool = os.getenv(
         'AUTO_MIGRATE', 'false',
     ).lower().strip() == 'true'

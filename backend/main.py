@@ -41,25 +41,20 @@ async def startup_event():
     )
 
     print('🚀 Starting CAN-SR Backend...', flush=True)
-    if settings.ENABLE_MULTI_REVIEWER_SCHEMA:
-        try:
-            from api.services.review_schema_service import review_schema_service
-            print('👥 Verifying multi-reviewer database schema...', flush=True)
-            if settings.AUTO_MIGRATE:
-                print(
-                    '⚠️ AUTO_MIGRATE is enabled; applying pending migrations', flush=True,
-                )
-                result = await run_in_threadpool(review_schema_service.migrate, settings.VERSION)
-            else:
-                result = await run_in_threadpool(review_schema_service.verify_schema)
-            print(
-                f"✓ Multi-reviewer schema verified ({result['version']})", flush=True,
-            )
-        except Exception as e:
-            # Opt-in foundation bootstrap must fail loudly when enabled; the
-            # default-disabled path remains identical to the current app.
-            print(f'❌ Multi-reviewer schema bootstrap failed: {e}', flush=True)
-            raise
+    # Citation import and deduplication use the shared workspace tables, so
+    # their migrations must not depend on the multi-reviewer feature flag.
+    # Apply all pending migrations before serving requests. The migration
+    # runner is idempotent and records checksums in review_schema_migrations.
+    try:
+        from api.services.review_schema_service import review_schema_service
+        print('🧱 Applying database migrations...', flush=True)
+        result = await run_in_threadpool(review_schema_service.migrate, settings.VERSION)
+        print(
+            f"✓ Database schema verified ({result['version']})", flush=True,
+        )
+    except Exception as e:
+        print(f'❌ Database migration failed: {e}', flush=True)
+        raise
     print('📚 Initializing systematic review database...', flush=True)
     # Ensure systematic review table exists in PostgreSQL
     try:
