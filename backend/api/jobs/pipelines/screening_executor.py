@@ -155,7 +155,7 @@ async def _run_l1_for_citation(
             skip_existing_human=skip_existing_human,
         ):
             continue
-        col = snake_case_column(q)
+        col = f'llm_l1_{snake_case(q, max_len=56)}'
         existing = row.get(col)
         if _should_skip_ai_output(
             existing, force=force, skip_existing_ai=skip_existing_ai,
@@ -487,7 +487,7 @@ async def _run_l2_for_citation(
             skip_existing_human=skip_existing_human,
         ):
             continue
-        col = snake_case_column(q)
+        col = f'llm_l2_{snake_case(q, max_len=56)}'
         existing = row.get(col)
         if _should_skip_ai_output(
             existing, force=force, skip_existing_ai=skip_existing_ai,

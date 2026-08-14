@@ -37,3 +37,26 @@ def test_adopt_legacy_passes_validated_arguments_to_service(monkeypatch, capsys)
         (('sr-1', 'sr_1_citations', 'owner@example.test'), {'dry_run': True}),
     ]
     assert "'dry_run': True" in capsys.readouterr().out
+
+
+def test_cleanup_set_answer_validation_is_scoped_and_dry_run_by_default(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys, 'argv', [
+            'can-sr-migrations', 'cleanup-set-answer-validation',
+            '--table-name', 'sr_1_citations', '--step', 'l1',
+        ],
+    )
+    calls = []
+    monkeypatch.setattr(
+        cli.cits_dp_service, 'cleanup_set_answer_validation_metadata',
+        lambda *args, **kwargs: calls.append(
+            (args, kwargs),
+        ) or {'dry_run': True},
+    )
+
+    cli.main()
+
+    assert calls == [
+        (('sr_1_citations', 'l1'), {'execute': False}),
+    ]
+    assert "'dry_run': True" in capsys.readouterr().out

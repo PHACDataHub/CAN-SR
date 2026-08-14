@@ -112,6 +112,36 @@ class ReviewSchemaService:
                 cur.close()
         return {'applied': applied, **self.verify_schema(connection=conn)}
 
+    def refresh_checksums(self) -> dict[str, Any]:
+        """Rebaseline recorded checksums to the checked-in migration files.
+
+        This is an explicit repair operation for databases affected by a
+        formatter that modified migration files. Normal migration execution
+        continues to reject checksum drift.
+        """
+        conn = self._provider().conn
+        refreshed: list[str] = []
+        cur = conn.cursor()
+        try:
+            self._ensure_migration_table(cur)
+            for path in migration_files():
+                version = path.stem
+                checksum = migration_checksum(path.read_text(encoding='utf-8'))
+                cur.execute(
+                    f'''UPDATE {MIGRATION_TABLE}
+                        SET checksum = %s WHERE version = %s''',
+                    (checksum, version),
+                )
+                if cur.rowcount:
+                    refreshed.append(version)
+            conn.commit()
+            return {'refreshed': refreshed}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
     # Backward-compatible name for callers of the original opt-in bootstrap.
     def ensure_schema(self, app_version: str | None = None) -> dict[str, Any]:
         return self.migrate(app_version)

@@ -330,15 +330,22 @@ it('clears all selected citations with the None selection option', async () => {
   )
 
   await user.click(
-    screen.getByRole('button', { name: 'Choose citation selection' }),
+    screen.getByRole('checkbox', {
+      name: 'Select all citations on this page',
+    }),
   )
+  expect(
+    screen.queryByRole('button', { name: 'Choose citation selection' }),
+  ).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'All' }))
   expect(
     screen.getByLabelText('Select all citations on this page'),
   ).toHaveAttribute('data-state', 'checked')
 
   await user.click(
-    screen.getByRole('button', { name: 'Choose citation selection' }),
+    screen.getByRole('checkbox', {
+      name: 'Select all citations on this page',
+    }),
   )
   await user.click(screen.getByRole('button', { name: 'None' }))
   expect(
@@ -600,7 +607,9 @@ it('allows selecting either duplicate survivor, minimizing review, and shows an 
 
   await screen.findByRole('heading', { name: 'Duplicate group review' })
   await user.click(
-    screen.getByRole('button', { name: 'Choose citation selection' }),
+    screen.getByRole('checkbox', {
+      name: 'Select all citations on this page',
+    }),
   )
   await user.click(screen.getByRole('button', { name: 'Suggested duplicates' }))
   expect(
@@ -694,6 +703,7 @@ it('allows selecting either duplicate survivor, minimizing review, and shows an 
 })
 
 it('ignores a stale saved survivor and keeps one current member selected', async () => {
+  const user = userEvent.setup()
   authenticatedFetch.mockImplementation(async (url: string) => {
     if (url.includes('/workspace/duplicate-reviews')) {
       return {
@@ -749,6 +759,11 @@ it('ignores a stale saved survivor and keeps one current member selected', async
   render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
 
   await screen.findByRole('heading', { name: 'Duplicate group review' })
+  await user.click(
+    screen.getByRole('button', {
+      name: 'Restore Duplicate group review',
+    }),
+  )
   expect(
     screen.getByRole('radio', { name: 'Suggested survivor' }),
   ).toBeChecked()

@@ -64,11 +64,10 @@ class CriteriaContextTests(unittest.TestCase):
                 {'selected': 'Yes', 'source': 'llm', 'autofilled': True},
             ),
         )
-        self.assertEqual(
+        self.assertIsNone(
             _parse_selected_from_human_payload(
                 {'selected': 'Yes', 'source': 'csv_upload', 'autofilled': True},
             ),
-            'Yes',
         )
         self.assertEqual(
             _parse_selected_from_human_payload(

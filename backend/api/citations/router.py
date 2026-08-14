@@ -176,60 +176,6 @@ class SetAnswerRequest(BaseModel):
     source_column: str
 
 
-def _set_answer_validation_columns(item_type: str) -> tuple[str, str, str]:
-    """Return validation JSONB and legacy summary columns for an answer type."""
-    step = 'parameters' if item_type == 'parameter' else item_type
-    return (
-        f'{step}_validations',
-        f'{step}_validated_by',
-        f'{step}_validated_at',
-    )
-
-
-def _set_answer_validation_list(value: Any) -> list[dict[str, str]]:
-    """Normalize stored validation JSON into the canonical reviewer shape."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return []
-    if not isinstance(value, list):
-        return []
-
-    result: list[dict[str, str]] = []
-    for entry in value:
-        if not isinstance(entry, dict):
-            continue
-        user = entry.get('user') or entry.get(
-            'email',
-        ) or entry.get('validated_by')
-        if not user:
-            continue
-        timestamp = entry.get('validated_at') or entry.get(
-            'timestamp',
-        ) or entry.get('validatedAt')
-        result.append(
-            {'user': str(user), 'validated_at': str(timestamp or '')},
-        )
-    return result
-
-
-def _set_answer_upsert_validation(
-    existing: Any,
-    user: str,
-    timestamp: str,
-) -> list[dict[str, str]]:
-    """Upsert the current reviewer while retaining other reviewers."""
-    entries = [
-        entry for entry in _set_answer_validation_list(existing)
-        if entry['user'] != user
-    ]
-    entries.append({'user': user, 'validated_at': timestamp})
-    return sorted(entries, key=lambda entry: entry['validated_at'], reverse=True)
-
-
 def _criteria_config_items(sr: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
     if not isinstance(criteria, dict):
@@ -351,9 +297,6 @@ async def set_answer(
             status_code=400, detail='Configured item has no usable name',
         )
     destinations = _set_answer_destinations(item_type, core)
-    validations_col, validated_by_col, validated_at_col = _set_answer_validation_columns(
-        item_type,
-    )
 
     table_name = (screening or {}).get('table_name') or 'citations'
     try:
@@ -366,17 +309,13 @@ async def set_answer(
             raise HTTPException(
                 status_code=400, detail=f"Source citation field '{source_column}' was not found",
             )
-        await run_in_threadpool(cits_dp_service.create_column, validations_col, 'JSONB', table_name)
-        await run_in_threadpool(cits_dp_service.create_column, validated_by_col, 'TEXT', table_name)
-        await run_in_threadpool(cits_dp_service.create_column, validated_at_col, 'TIMESTAMPTZ', table_name)
         citation_ids = await run_in_threadpool(cits_dp_service.list_citation_ids, None, table_name)
         rows = await run_in_threadpool(
             cits_dp_service.get_citations_by_ids,
             citation_ids,
             table_name,
             [
-                'id', source_column, validations_col,
-                validated_by_col, validated_at_col,
+                'id', source_column,
             ],
         )
     except ValueError as exc:
@@ -388,10 +327,6 @@ async def set_answer(
             status_code=500, detail=f'Failed to query screening DB: {exc}',
         )
 
-    reviewer = str(
-        current_user.get('email')
-        or current_user.get('id') or '',
-    ).strip()
     processed = copied = blank = 0
     for row in rows:
         processed += 1
@@ -406,31 +341,6 @@ async def set_answer(
                     row['id'],
                 ), destination, answer, table_name,
             )
-        validation_timestamp = str(answer['timestamp'])
-        validations = _set_answer_upsert_validation(
-            row.get(validations_col), reviewer, validation_timestamp,
-        )
-        await run_in_threadpool(
-            cits_dp_service.update_jsonb_column,
-            int(row['id']),
-            validations_col,
-            validations,
-            table_name,
-        )
-        await run_in_threadpool(
-            cits_dp_service.update_text_column,
-            int(row['id']),
-            validated_by_col,
-            reviewer,
-            table_name,
-        )
-        await run_in_threadpool(
-            cits_dp_service.update_text_column,
-            int(row['id']),
-            validated_at_col,
-            validation_timestamp,
-            table_name,
-        )
         copied += 1
 
     return {
@@ -1077,9 +987,8 @@ def _populate_human_answers_from_csv(
     This function:
     1. Extracts criteria questions from SR
     2. Matches CSV columns to criteria questions
-    3. For each matched column, populates the corresponding human_* column
-    4. Updates validation metadata (l1_validated_by, l1_validated_at)
-    5. Backfills human decision columns
+    3. For each matched column, populates the corresponding human_l1_* column
+    4. Backfills human decision columns
     """
     if not sr or not normalized_rows or not include_columns:
         return
@@ -1137,8 +1046,8 @@ def _populate_human_answers_from_csv(
             # Convert to JSONB format
             human_jsonb = _parse_human_answer_to_jsonb(answer_value)
 
-            # Create human_* column name
-            human_col = f"human_{criterion_key}"
+            # Uploaded retrospective answers are L1 source answers.
+            human_col = f"human_l1_{criterion_key}"
 
             # Update the JSONB column
             try:
@@ -1261,18 +1170,8 @@ async def _upload_screening_citations_impl(
             detail=f"Failed to create table or insert rows: {e}",
         )
 
-    # Populate human answers from CSV if criteria config exists
-    try:
-        await run_in_threadpool(
-            _populate_human_answers_from_csv,
-            table_name,
-            normalized_rows,
-            include_columns,
-            sr,
-        )
-    except Exception:
-        # Best-effort; human answer population should not block the upload
-        pass
+    # CSV values remain citation metadata. Human screening answers must come
+    # from an explicit set-answer or human-classify action, never from import.
 
     # Save DB connection metadata into SR Mongo doc
     try:

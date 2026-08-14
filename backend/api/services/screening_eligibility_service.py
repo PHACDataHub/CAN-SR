@@ -25,8 +25,8 @@ def _answer_object(value: Any) -> dict[str, Any]:
     return {}
 
 
-def selected_answer(row: dict[str, Any], question: str) -> str | None:
-    """Return the effective answer using human-over-main-AI precedence.
+def selected_answer(row: dict[str, Any], question: str, stage: str) -> str | None:
+    """Return the human answer, falling back to the stage's LLM answer.
 
     The critical agent is advisory: disagreements are routed to human review
     but do not change the main screening agent's progression decision.
@@ -34,17 +34,20 @@ def selected_answer(row: dict[str, Any], question: str) -> str | None:
     core = snake_case(question, max_len=56)
     if not core:
         return None
-    for column in (f'human_{core}', f'llm_{core}'):
+    columns = (
+        f'human_{stage}_{core}',
+        f'llm_{stage}_{core}',
+        f'llm_{core}',
+    )
+    for column in columns:
         selected = _answer_object(row.get(column)).get('selected')
-        if isinstance(selected, str):
-            selected = selected.strip()
-        if selected is not None and selected != '':
-            return str(selected)
+        if isinstance(selected, str) and selected.strip():
+            return selected.strip()
     return None
 
 
 def compute_stage_decision(
-    row: dict[str, Any], questions: list[str],
+    row: dict[str, Any], questions: list[str], stage: str,
 ) -> str:
     """Compute include/exclude for one stage from current criterion answers.
 
@@ -57,7 +60,7 @@ def compute_stage_decision(
     if not valid_questions:
         return 'undecided'
     for question in valid_questions:
-        selected = selected_answer(row, question)
+        selected = selected_answer(row, question, stage)
         if selected is None or 'exclude' in selected.lower():
             return 'exclude'
     return 'include'
@@ -76,10 +79,22 @@ def compute_screening_decisions(
     l2_questions = l2.get('questions') if isinstance(
         l2.get('questions'), list,
     ) else []
-    return (
-        compute_stage_decision(row, l1_questions),
-        compute_stage_decision(row, list(l1_questions) + list(l2_questions)),
-    )
+    l1_decision = compute_stage_decision(row, l1_questions, 'l1')
+    l2_decision = 'undecided'
+    if l1_questions or l2_questions:
+        l2_decision = 'include'
+        for question, question_stage in [
+            *((q, 'l1') for q in l1_questions),
+            *((q, 'l2') for q in l2_questions),
+        ]:
+            selected = selected_answer(row, question, question_stage)
+            if selected is None:
+                l2_decision = 'exclude'
+                break
+            if 'exclude' in selected.lower():
+                l2_decision = 'exclude'
+                break
+    return l1_decision, l2_decision
 
 
 class ScreeningEligibilityService:
