@@ -83,7 +83,7 @@ const copy = {
   selectAll: 'Select all citations on this page',
   selectCitation: 'Select citation {id}',
   columns: 'Columns',
-  columnsTitle: 'Choose visible columns',
+  columnsTitle: 'Choose Duplication Field',
   columnsDescription: 'Choose fields.',
   saveColumns: 'Save columns',
   moveColumnUp: 'Move {column} up',
@@ -125,6 +125,9 @@ const copy = {
   duplicateMatchingFields: 'Duplicate matching fields',
   duplicateFieldsDescription:
     'Visible fields are added automatically. Hidden fields remain configured.',
+  deduplicationSettings: 'Deduplication Settings',
+  selectDeduplicationFields: 'Select Deduplication Fields',
+  selectAllDeduplicationColumns: 'Select All Columns',
   clearFilter: 'Clear',
   applyFilter: 'Apply',
   resizeColumn: 'Resize column',
@@ -479,7 +482,6 @@ it('saves selected workspace columns and reloads the grid with them', async () =
 
   await user.click(await screen.findByRole('button', { name: 'Columns' }))
   await user.click(screen.getByRole('checkbox', { name: 'abstract' }))
-  await user.click(screen.getByRole('button', { name: 'Save columns' }))
   await waitFor(() =>
     expect(authenticatedFetch).toHaveBeenCalledWith(
       expect.stringContaining('/workspace/preferences?sr_id=review-1'),
@@ -494,6 +496,249 @@ it('saves selected workspace columns and reloads the grid with them', async () =
       expect.stringContaining('columns=id%2Ctitle'),
     ),
   )
+})
+
+it('shares selected imported columns with visible columns and duplicate matching', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockImplementation(
+    async (url: string, options?: RequestInit) => {
+      if (url.includes('/citations/import?')) {
+        return {
+          ok: true,
+          json: async () => ({ rows_inserted: 1, duplicates_skipped: 0 }),
+        }
+      }
+      if (url.includes('/workspace/preferences')) {
+        return {
+          ok: true,
+          json: async () => ({ columns: ['id', 'Title', 'Abstract'] }),
+        }
+      }
+      if (url.includes('/deduplication-preferences')) {
+        return {
+          ok: true,
+          json: async () => ({ fields: ['Title', 'Abstract'], threshold: 0.7 }),
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          citations: [],
+          total_count: 0,
+          columns: ['id'],
+          available_columns: ['id', 'Title', 'Abstract', 'Author'],
+        }),
+      }
+    },
+  )
+
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+  await user.click(screen.getByRole('button', { name: 'Add references' }))
+  await user.upload(
+    screen.getByLabelText('Reference file'),
+    new File(
+      ['Title,Abstract,Author\nA study,Summary,An author'],
+      'references.csv',
+      { type: 'text/csv' },
+    ),
+  )
+
+  expect(await screen.findByRole('checkbox', { name: 'Title' })).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Abstract' })).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Author' })).toBeChecked()
+  await user.click(screen.getByRole('checkbox', { name: 'Author' }))
+  await user.click(screen.getByRole('button', { name: 'Import references' }))
+
+  await waitFor(() =>
+    expect(authenticatedFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/workspace/preferences?sr_id=review-1'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ columns: ['id', 'Title', 'Abstract'] }),
+      }),
+    ),
+  )
+  expect(authenticatedFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/deduplication-preferences?sr_id=review-1'),
+    expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ fields: ['Title', 'Abstract'], threshold: 0.7 }),
+    }),
+  )
+})
+
+it('toggles all imported deduplication columns on and off', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      citations: [],
+      total_count: 0,
+      columns: ['id'],
+    }),
+  })
+
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+  await user.click(screen.getByRole('button', { name: 'Add references' }))
+  await user.upload(
+    screen.getByLabelText('Reference file'),
+    new File(['Title,Abstract,Author\nA,B,C'], 'references.csv', {
+      type: 'text/csv',
+    }),
+  )
+
+  const selectAll = await screen.findByRole('checkbox', {
+    name: 'Select All Columns',
+  })
+  expect(selectAll).toBeChecked()
+  await user.click(selectAll)
+  expect(selectAll).not.toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Title' })).not.toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Abstract' })).not.toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Author' })).not.toBeChecked()
+
+  await user.click(selectAll)
+  expect(selectAll).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Title' })).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Abstract' })).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Author' })).toBeChecked()
+})
+
+it('loads and persists the selected duplicate matching threshold', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockImplementation(
+    async (url: string, options?: RequestInit) => {
+      if (url.includes('/deduplication-preferences')) {
+        if (options?.method === 'PUT')
+          return {
+            ok: true,
+            json: async () => ({ fields: ['title'], threshold: 0.8 }),
+          }
+        return {
+          ok: true,
+          json: async () => ({ fields: ['title'], threshold: 0.8 }),
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          citations: [{ id: 1, title: 'A study' }],
+          total_count: 1,
+          columns: ['id', 'title'],
+          available_columns: ['id', 'title', 'abstract'],
+        }),
+      }
+    },
+  )
+
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+  await user.click(
+    await screen.findByRole('button', {
+      name: 'Configure duplicate matching fields',
+    }),
+  )
+  expect(
+    screen.getByRole('radiogroup', { name: 'Matching Strength' }),
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole('heading', { name: 'Deduplication Settings' }),
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole('heading', { name: 'Select Deduplication Fields' }),
+  ).toBeInTheDocument()
+  await user.click(
+    screen.getByRole('button', {
+      name: 'Configure duplicate matching fields',
+    }),
+  )
+  expect(screen.queryByText('Deduplication Settings')).not.toBeInTheDocument()
+  await user.click(
+    screen.getByRole('button', {
+      name: 'Configure duplicate matching fields',
+    }),
+  )
+  expect(screen.getByRole('radio', { name: 'Strict' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  )
+  await user.click(screen.getByRole('radio', { name: 'Permissive' }))
+
+  await waitFor(() =>
+    expect(authenticatedFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/deduplication-preferences?sr_id=review-1'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ fields: ['title'], threshold: 0.5 }),
+      }),
+    ),
+  )
+})
+
+it('shows the refresh icon for fresh duplicate results and amber play for stale results', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockImplementation(
+    async (url: string, options?: RequestInit) => {
+      if (
+        url.includes('/deduplication-preferences') &&
+        options?.method === 'PUT'
+      )
+        return { ok: true, json: async () => ({}) }
+      return {
+        ok: true,
+        json: async () => ({
+          citations: [{ id: 1, title: 'A study' }],
+          total_count: 1,
+          columns: ['id', 'title'],
+          available_columns: ['id', 'title', 'abstract'],
+          duplicate_run: { status: 'succeeded' },
+        }),
+      }
+    },
+  )
+
+  const { container } = render(
+    <ReferencesWorkspace srId="review-1" hasDataset copy={copy} />,
+  )
+  const rerunButton = await screen.findByRole('button', {
+    name: 'Rerun duplicate calculation',
+  })
+  expect(rerunButton.querySelector('.lucide-refresh-cw')).toBeInTheDocument()
+
+  await user.click(
+    await screen.findByRole('button', {
+      name: 'Configure duplicate matching fields',
+    }),
+  )
+  await user.click(screen.getByRole('checkbox', { name: 'abstract' }))
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Rerun duplicate calculation' }),
+    ).toHaveClass('text-amber-600'),
+  )
+  expect(container.querySelector('.lucide-play')).toBeInTheDocument()
+})
+
+it('dismisses duplicate matching fields when clicking outside its popover', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      citations: [{ id: 1, title: 'A study' }],
+      total_count: 1,
+      columns: ['id', 'title'],
+      available_columns: ['id', 'title'],
+    }),
+  })
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+
+  await user.click(
+    await screen.findByRole('button', {
+      name: 'Configure duplicate matching fields',
+    }),
+  )
+  expect(screen.getByText('Deduplication Settings')).toBeInTheDocument()
+  await user.click(document.body)
+  expect(screen.queryByText('Deduplication Settings')).not.toBeInTheDocument()
 })
 
 it('does not render a filter control for the ID column', async () => {
@@ -520,6 +765,37 @@ it('does not render a filter control for the ID column', async () => {
   expect(
     screen.getByRole('button', { name: 'Filter by title' }),
   ).toBeInTheDocument()
+})
+
+it('closes a column filter when its icon is clicked again', async () => {
+  const user = userEvent.setup()
+  authenticatedFetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      citations: [{ id: 1, title: 'A study', abstract: 'Summary' }],
+      total_count: 1,
+      page: 1,
+      page_size: 25,
+      columns: ['id', 'title', 'abstract'],
+      available_columns: ['id', 'title', 'abstract'],
+      sort: 'id',
+      direction: 'asc',
+      query_fingerprint: 'sha256:workspace',
+    }),
+  })
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+
+  await screen.findByText('A study')
+  const filterButton = screen.getByRole('button', { name: 'Filter by title' })
+  await user.click(filterButton)
+  expect(
+    screen.getByRole('textbox', { name: 'Filter by title' }),
+  ).toBeInTheDocument()
+
+  await user.click(filterButton)
+  expect(
+    screen.queryByRole('textbox', { name: 'Filter by title' }),
+  ).not.toBeInTheDocument()
 })
 
 it('allows selecting either duplicate survivor, minimizing review, and shows an X marker', async () => {
@@ -859,12 +1135,12 @@ it('binds workspace column boundaries to explicit resizable widths', async () =>
   await screen.findByText('A study')
   const table = screen.getByRole('table')
   expect(table.querySelectorAll('col')[3]).toHaveStyle({ width: '160px' })
-  expect(table.querySelectorAll('col')).toHaveLength(7)
+  expect(table.querySelectorAll('col')).toHaveLength(8)
   expect(
     screen.getByRole('button', { name: 'Resize column title' }),
   ).toBeInTheDocument()
   expect(screen.getAllByRole('button', { name: 'Columns' })).toHaveLength(1)
-  expect(screen.queryByText('Choose visible columns')).not.toBeInTheDocument()
+  expect(screen.queryByText('Choose Duplication Field')).not.toBeInTheDocument()
 })
 
 it('opens the column chooser from the trailing plus column', async () => {
@@ -898,7 +1174,10 @@ it('opens the column chooser from the trailing plus column', async () => {
   )
   expect(panel).toHaveClass('w-[min(28rem,calc(100vw-2rem))]')
   expect(screen.queryByTestId('dialog-overlay')).not.toBeInTheDocument()
-  expect(screen.getByText('Choose visible columns')).toBeInTheDocument()
+  expect(screen.getByText('Choose Duplication Field')).toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: 'Columns' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
 
 it('warns about missing required columns without importing', async () => {

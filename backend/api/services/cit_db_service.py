@@ -1136,6 +1136,7 @@ class CitsDPService:
         duplicate_status: str | None = None,
         cached_duplicate_data: dict[str, Any] | None = None,
         calculate_duplicates: bool = True,
+        duplicate_threshold: float = 0.70,
     ) -> dict[str, Any]:
         """Return all stable, searchable user-facing citation data.
 
@@ -1317,7 +1318,7 @@ class CitsDPService:
             duplicate_data = cached_duplicate_data
             if duplicate_data is None and calculate_duplicates:
                 duplicate_data = calculate_duplicate_statuses(
-                    all_rows or [], configured_match_fields,
+                    all_rows or [], configured_match_fields, duplicate_threshold,
                 )
             if duplicate_data is None:
                 duplicate_data = {
@@ -1358,7 +1359,7 @@ class CitsDPService:
                 all_rows = rows
                 duplicate_data = calculate_duplicate_statuses(
                     all_rows,
-                    configured_match_fields,
+                    configured_match_fields, duplicate_threshold,
                 )
                 duplicate_by_id = {
                     row.get('id', index): duplicate
@@ -1434,7 +1435,7 @@ class CitsDPService:
             if conn:
                 pass
 
-    def load_duplicate_rows(self, table_name: str, fields: list[str]) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    def load_duplicate_rows(self, table_name: str, fields: list[str], threshold: float = 0.70) -> tuple[tuple[Any, ...], dict[str, Any]]:
         """Load the complete dataset in the dedicated deduplication order."""
         table_name = _validate_ident(table_name, kind='table_name')
         columns = [
@@ -1460,7 +1461,7 @@ class CitsDPService:
                     for field in fields
                 ) + (str(row.get('id', '')),),
             )
-            result = calculate_duplicate_statuses(rows, fields)
+            result = calculate_duplicate_statuses(rows, fields, threshold)
             result['rows'] = [
                 {**item, 'citation_id': rows[index].get('id', index)}
                 for index, item in enumerate(result['rows'])
