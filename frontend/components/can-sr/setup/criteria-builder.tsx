@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type Dispatch } from 'react'
+import { authenticatedFetch } from '@/lib/auth'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, ChevronsDown, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CriteriaDraftAction, CriteriaDraftState, ScreeningQuestion } from './criteria-types'
 import ParameterBuilder from './parameter-builder'
@@ -11,6 +12,7 @@ import ContextEditorDialog from './context-editor-dialog'
 type SourceOption = { stage: 'l1' | 'l2'; question: ScreeningQuestion }
 
 type Props = {
+  srId: string
   state: CriteriaDraftState
   dispatch: Dispatch<CriteriaDraftAction>
   labels: Record<string, string>
@@ -19,6 +21,7 @@ type Props = {
 }
 
 function QuestionCard({
+  srId,
   question,
   index,
   count,
@@ -33,6 +36,7 @@ function QuestionCard({
   onToggle,
   citationFields,
 }: {
+  srId: string
   question: ScreeningQuestion
   index: number
   count: number
@@ -49,6 +53,7 @@ function QuestionCard({
 }) {
   const prefix = `${stage}-${question.id}`
   const [contextAnswerId, setContextAnswerId] = useState<string | null>(null)
+  const [setAnswerStatus, setSetAnswerStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const contextAnswer = question.answers.find((answer) => answer.id === contextAnswerId)
   return (
     <article id={`criteria-item-${question.id}`} className={`rounded-lg border bg-white p-4 ${diagnostics.length ? 'border-red-400' : 'border-gray-200'}`} aria-labelledby={`${prefix}-title`}>
@@ -83,11 +88,11 @@ function QuestionCard({
         </label>
         {question.answer_column ? <>
           <p className="mt-1 text-xs text-gray-600">{labels.answerColumnTooltip}</p>
-          <select id={`${prefix}-answer-column`} value={question.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.value || null })} className="mt-2 w-full rounded-md border px-2 py-1.5 text-sm" title={labels.answerColumnTooltip}>
+          <div className="mt-2 flex gap-2"><select id={`${prefix}-answer-column`} value={question.answer_column} onChange={(event) => dispatch({ type: 'set-answer-column', itemId: question.id, value: event.target.value || null })} className="min-w-0 flex-1 rounded-md border px-2 py-1.5 text-sm" title={labels.answerColumnTooltip}>
             {!citationFields.fields.some((field) => field.name === question.answer_column) ? <option value={question.answer_column}>{question.answer_column} · {labels.unavailableField}</option> : null}
             <option value="">{labels.noAnswerColumn}</option>
             {citationFields.fields.map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}
-          </select>
+          </select><button type="button" disabled={setAnswerStatus === 'saving'} onClick={async () => { setSetAnswerStatus('saving'); try { const response = await authenticatedFetch(`/api/can-sr/citations/set-answer?sr_id=${encodeURIComponent(srId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sr_id: srId, item_type: stage, item_id: question.id, source_column: question.answer_column }) }); if (!response.ok) throw new Error(); setSetAnswerStatus('saved') } catch { setSetAnswerStatus('error') } }} className="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">{setAnswerStatus === 'saving' ? labels.saving : setAnswerStatus === 'saved' ? labels.answerSet : setAnswerStatus === 'error' ? labels.setAnswerFailed : labels.setAnswer}</button></div>
         </> : null}
       </div>
       <fieldset className="mt-4 space-y-3">
@@ -171,7 +176,7 @@ function QuestionCard({
   )
 }
 
-export default function CriteriaBuilder({ state, dispatch, labels, diagnostics = [], citationFields = { fields: [], unavailable_configured_fields: [] } }: Props) {
+export default function CriteriaBuilder({ srId, state, dispatch, labels, diagnostics = [], citationFields = { fields: [], unavailable_configured_fields: [] } }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Record<'l1' | 'l2', boolean>>({ l1: false, l2: false })
   const [collapsedQuestions, setCollapsedQuestions] = useState<Set<string>>(() => new Set())
   const pendingQuestion = useRef<{ stage: 'l1' | 'l2'; previousCount: number } | null>(null)
@@ -243,13 +248,13 @@ export default function CriteriaBuilder({ state, dispatch, labels, diagnostics =
           {state.criteria[stage].length === 0 ? <p className="rounded-md border border-dashed p-4 text-sm text-gray-500">{labels.noQuestions}</p> : null}
           {state.criteria[stage].map((question, index) => {
             const position = ordered.findIndex((item) => item.question.id === question.id)
-            return <QuestionCard key={question.id} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} sourceReferenced={conditions.some((condition) => condition.source_item_id === question.id)} referencedAnswerIds={new Set(conditions.filter((condition) => condition.source_item_id === question.id).map((condition) => condition.option_id))} collapsed={collapsedQuestions.has(question.id)} onToggle={() => setCollapsedQuestions((current) => { const next = new Set(current); if (next.has(question.id)) next.delete(question.id); else next.add(question.id); return next })} />
+            return <QuestionCard key={question.id} srId={srId} question={question} index={index} count={state.criteria[stage].length} stage={stage} dispatch={dispatch} labels={labels} sources={ordered.slice(0, position)} citationFields={citationFields} diagnostics={diagnostics.filter((item) => item.itemId === question.id)} sourceReferenced={conditions.some((condition) => condition.source_item_id === question.id)} referencedAnswerIds={new Set(conditions.filter((condition) => condition.source_item_id === question.id).map((condition) => condition.option_id))} collapsed={collapsedQuestions.has(question.id)} onToggle={() => setCollapsedQuestions((current) => { const next = new Set(current); if (next.has(question.id)) next.delete(question.id); else next.add(question.id); return next })} />
           })}
           <div className="flex justify-end"><button type="button" onClick={() => addQuestion(stage)} className="inline-flex items-center gap-2 rounded-md border border-emerald-600 px-3 py-2 text-sm font-medium text-emerald-700"><Plus className="h-4 w-4" />{labels.addQuestion}</button></div>
           </div> : null}
         </section>
       ))}
-      <ParameterBuilder state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} />
+      <ParameterBuilder srId={srId} state={state} dispatch={dispatch} labels={labels} diagnostics={diagnostics} citationFields={citationFields} />
     </div>
   )
 }

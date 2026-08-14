@@ -365,6 +365,7 @@ export default function CriteriaEditor({
       ) : null}
       <div className="mt-6">
         <CriteriaBuilder
+          srId={srId}
           state={state}
           dispatch={dispatch}
           labels={labels}
