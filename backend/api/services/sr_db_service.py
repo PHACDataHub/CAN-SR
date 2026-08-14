@@ -122,6 +122,223 @@ class SRDBService:
             if conn:
                 pass
 
+    @staticmethod
+    def _legacy_member_id(doc: dict[str, Any]) -> str | None:
+        return doc.get('owner_email') or doc.get('owner_id')
+
+    def _membership_table_exists(self, cur) -> bool:
+        cur.execute(
+            "SELECT to_regclass('public.systematic_review_memberships')",
+        )
+        return bool(cur.fetchone()[0])
+
+    def get_member_role(self, sr_id: str, member_id: str) -> str | None:
+        """Return a normalized role, falling back for unmigrated legacy reviews."""
+        if not member_id:
+            return None
+        conn = postgres_server.conn
+        cur = conn.cursor()
+        try:
+            if self._membership_table_exists(cur):
+                cur.execute(
+                    'SELECT role FROM systematic_review_memberships WHERE sr_id = %s AND member_id = %s',
+                    (sr_id, member_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+            doc = self.get_systematic_review(sr_id, ignore_visibility=True)
+            if not doc:
+                return None
+            if member_id == self._legacy_member_id(doc) or member_id == doc.get('owner_id'):
+                return 'owner'
+            return 'member' if member_id in (doc.get('users') or []) else None
+        finally:
+            cur.close()
+
+    def user_is_sr_owner(self, sr_id: str, user_id: str) -> bool:
+        return self.get_member_role(sr_id, user_id) == 'owner'
+
+    def require_review_role(self, sr_id: str, member_id: str, allowed_roles: set[str]) -> str:
+        """Require one of the supplied normalized roles, with legacy fallback."""
+        role = self.get_member_role(sr_id, member_id)
+        if role not in allowed_roles:
+            required = ' or '.join(sorted(allowed_roles))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f'Requires review role: {required}',
+            )
+        return role
+
+    def require_review_owner(self, sr_id: str, member_id: str) -> None:
+        """Require an owner or co-owner for a review-scoped owner action."""
+        self.require_review_role(sr_id, member_id, {'owner'})
+
+    def list_members(self, sr_id: str) -> list[dict[str, Any]]:
+        conn = postgres_server.conn
+        cur = conn.cursor()
+        try:
+            if self._membership_table_exists(cur):
+                cur.execute(
+                    """SELECT member_id, role, added_by, created_at, updated_at
+                       FROM systematic_review_memberships WHERE sr_id = %s
+                       ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, member_id""", (sr_id,),
+                )
+                return [{
+                    'member_id': row[0], 'role': row[1], 'added_by': row[2],
+                    'created_at': row[3].isoformat() if hasattr(row[3], 'isoformat') else str(row[3]),
+                    'updated_at': row[4].isoformat() if hasattr(row[4], 'isoformat') else str(row[4]),
+                }
+                    for row in cur.fetchall()]
+            doc = self.get_systematic_review(sr_id, ignore_visibility=True)
+            if not doc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
+                )
+            owner = self._legacy_member_id(doc)
+            return [{
+                'member_id': value, 'role': 'owner' if value == owner else 'member',
+                'added_by': owner, 'created_at': None, 'updated_at': None,
+            }
+                for value in sorted(set(doc.get('users') or []) | ({owner} if owner else set()))]
+        finally:
+            cur.close()
+
+    def _require_owner(self, sr_id: str, requester_id: str) -> None:
+        try:
+            self.require_review_owner(sr_id, requester_id)
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Only an owner may manage review members',
+            ) from exc
+
+    def _sync_legacy_users(self, cur, sr_id: str) -> None:
+        cur.execute(
+            'SELECT member_id FROM systematic_review_memberships WHERE sr_id = %s ORDER BY member_id', (
+                sr_id,
+            ),
+        )
+        users = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            'UPDATE systematic_reviews SET users = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s',
+            (json.dumps(users), sr_id),
+        )
+
+    def _audit_membership(
+        self, cur, sr_id: str, member_id: str, event_type: str,
+        actor_id: str, old_role: str | None = None, new_role: str | None = None,
+    ) -> None:
+        cur.execute(
+            """INSERT INTO systematic_review_membership_audit_events
+               (id, sr_id, member_id, event_type, actor_id, old_role, new_role)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (
+                str(uuid.uuid4()), sr_id, member_id,
+                event_type, actor_id, old_role, new_role,
+            ),
+        )
+
+    def set_member_role(self, sr_id: str, member_id: str, role: str, requester_id: str) -> dict[str, Any]:
+        """Add/promote/demote a member in one owner-authorized transaction."""
+        if role not in ('owner', 'member') or not member_id:
+            raise ValueError(
+                'member_id and role (owner or member) are required',
+            )
+        self._require_owner(sr_id, requester_id)
+        conn = postgres_server.conn
+        cur = conn.cursor()
+        try:
+            if not self._membership_table_exists(cur):
+                raise RuntimeError(
+                    'Review membership schema has not been migrated',
+                )
+            cur.execute(
+                'SELECT role FROM systematic_review_memberships WHERE sr_id = %s AND member_id = %s FOR UPDATE',
+                (sr_id, member_id),
+            )
+            existing = cur.fetchone()
+            old_role = existing[0] if existing else None
+            if old_role == role:
+                conn.commit()
+                return {'member_id': member_id, 'role': role, 'changed': False}
+            if old_role == 'owner' and role == 'member':
+                cur.execute(
+                    "SELECT COUNT(*) FROM systematic_review_memberships WHERE sr_id = %s AND role = 'owner'", (sr_id,),
+                )
+                if int(cur.fetchone()[0]) <= 1:
+                    raise ValueError(
+                        'At least one owner must remain on the systematic review',
+                    )
+            if existing:
+                cur.execute(
+                    'UPDATE systematic_review_memberships SET role = %s, updated_at = CURRENT_TIMESTAMP WHERE sr_id = %s AND member_id = %s',
+                    (role, sr_id, member_id),
+                )
+                event = 'role_changed'
+            else:
+                cur.execute(
+                    """INSERT INTO systematic_review_memberships (sr_id, member_id, role, added_by)
+                               VALUES (%s, %s, %s, %s)""", (sr_id, member_id, role, requester_id),
+                )
+                event = 'member_added'
+            self._sync_legacy_users(cur, sr_id)
+            self._audit_membership(
+                cur, sr_id, member_id,
+                event, requester_id, old_role, role,
+            )
+            conn.commit()
+            return {'member_id': member_id, 'role': role, 'changed': True}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    def remove_member(self, sr_id: str, member_id: str, requester_id: str) -> dict[str, Any]:
+        """Remove a member while rejecting removal of the final owner."""
+        self._require_owner(sr_id, requester_id)
+        conn = postgres_server.conn
+        cur = conn.cursor()
+        try:
+            if not self._membership_table_exists(cur):
+                raise RuntimeError(
+                    'Review membership schema has not been migrated',
+                )
+            cur.execute(
+                'SELECT role FROM systematic_review_memberships WHERE sr_id = %s AND member_id = %s FOR UPDATE',
+                (sr_id, member_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.commit()
+                return {'member_id': member_id, 'removed': False}
+            if row[0] == 'owner':
+                cur.execute(
+                    "SELECT COUNT(*) FROM systematic_review_memberships WHERE sr_id = %s AND role = 'owner'", (sr_id,),
+                )
+                if int(cur.fetchone()[0]) <= 1:
+                    raise ValueError(
+                        'At least one owner must remain on the systematic review',
+                    )
+            cur.execute(
+                'DELETE FROM systematic_review_memberships WHERE sr_id = %s AND member_id = %s', (
+                    sr_id, member_id,
+                ),
+            )
+            self._sync_legacy_users(cur, sr_id)
+            self._audit_membership(
+                cur, sr_id, member_id,
+                'member_removed', requester_id, row[0], None,
+            )
+            conn.commit()
+            return {'member_id': member_id, 'removed': True}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
     def build_criteria_parsed(self, criteria_obj: dict[str, Any] | None) -> dict[str, Any]:
         """
         Port of the _build_criteria_parsed helper - returns a mapping containing
@@ -279,6 +496,13 @@ class SRDBService:
                     now,
                 ),
             )
+            if self._membership_table_exists(cur):
+                member_id = owner_email or owner_id
+                cur.execute(
+                    """INSERT INTO systematic_review_memberships (sr_id, member_id, role, added_by)
+                       VALUES (%s, %s, 'owner', %s) ON CONFLICT (sr_id, member_id) DO NOTHING""",
+                    (sr_id, member_id, member_id),
+                )
 
             conn.commit()
 
@@ -338,74 +562,10 @@ class SRDBService:
         Returns a dict with update result metadata.
         """
 
-        sr = self.get_systematic_review(sr_id)
-        if not sr or not sr.get('visible', True):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
-            )
-
-        # Check permission
-        has_perm = self.user_has_sr_permission(sr_id, requester_id)
-        if not has_perm:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail='Not authorized to modify this systematic review',
-            )
-
-        conn = None
-        try:
-            conn = postgres_server.conn
-            cur = conn.cursor()
-
-            # Get current users array
-            cur.execute(
-                'SELECT users FROM systematic_reviews WHERE id = %s', (sr_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
-                )
-
-            users = row[0] if row[0] else []
-            if isinstance(users, str):
-                users = json.loads(users)
-
-            # Add user if not already present
-            if target_user_id not in users:
-                users.append(target_user_id)
-
-            # Update
-            now = datetime.utcnow().isoformat()
-            cur.execute(
-                'UPDATE systematic_reviews SET users = %s, updated_at = %s WHERE id = %s',
-                (json.dumps(users), now, sr_id),
-            )
-            modified_count = cur.rowcount
-            conn.commit()
-
-            return {'matched_count': 1, 'modified_count': modified_count, 'added_user_id': target_user_id}
-
-        except HTTPException:
-            try:
-                if conn:
-                    conn.rollback()
-            except Exception:
-                pass
-            raise
-        except Exception as e:
-            try:
-                if conn:
-                    conn.rollback()
-            except Exception:
-                pass
-            logger.exception(f"Failed to add user to SR: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add user: {e}",
-            )
-        finally:
-            if conn:
-                pass
+        result = self.set_member_role(
+            sr_id, target_user_id, 'member', requester_id,
+        )
+        return {'matched_count': 1, 'modified_count': int(result['changed']), 'added_user_id': target_user_id}
 
     def remove_user(self, sr_id: str, target_user_id: str, requester_id: str) -> dict[str, Any]:
         """
@@ -413,80 +573,8 @@ class SRDBService:
         Enforces requester permissions (must be a member or owner).
         """
 
-        sr = self.get_systematic_review(sr_id)
-        if not sr or not sr.get('visible', True):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
-            )
-
-        # Check permission
-        has_perm = self.user_has_sr_permission(sr_id, requester_id)
-        if not has_perm:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail='Not authorized to modify this systematic review',
-            )
-
-        if target_user_id == sr.get('owner_id'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail='Cannot remove the owner from the systematic review',
-            )
-
-        conn = None
-        try:
-            conn = postgres_server.conn
-            cur = conn.cursor()
-
-            # Get current users array
-            cur.execute(
-                'SELECT users FROM systematic_reviews WHERE id = %s', (sr_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
-                )
-
-            users = row[0] if row[0] else []
-            if isinstance(users, str):
-                users = json.loads(users)
-
-            # Remove user if present
-            if target_user_id in users:
-                users.remove(target_user_id)
-
-            # Update
-            now = datetime.utcnow().isoformat()
-            cur.execute(
-                'UPDATE systematic_reviews SET users = %s, updated_at = %s WHERE id = %s',
-                (json.dumps(users), now, sr_id),
-            )
-            modified_count = cur.rowcount
-            conn.commit()
-
-            return {'matched_count': 1, 'modified_count': modified_count, 'removed_user_id': target_user_id}
-
-        except HTTPException:
-            try:
-                if conn:
-                    conn.rollback()
-            except Exception:
-                pass
-            raise
-        except Exception as e:
-            try:
-                if conn:
-                    conn.rollback()
-            except Exception:
-                pass
-            logger.exception(f"Failed to remove user from SR: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to remove user: {e}",
-            )
-        finally:
-            if conn:
-                pass
+        result = self.remove_member(sr_id, target_user_id, requester_id)
+        return {'matched_count': 1, 'modified_count': int(result['removed']), 'removed_user_id': target_user_id}
 
     def user_has_sr_permission(self, sr_id: str, user_id: str) -> bool:
         """
@@ -500,10 +588,7 @@ class SRDBService:
         if not doc:
             return False
 
-        users = doc.get('users', [])
-        if user_id in users or user_id == doc.get('owner_id'):
-            return True
-        return False
+        return self.get_member_role(sr_id, user_id) is not None
 
     def update_criteria(self, sr_id: str, criteria_obj: dict[str, Any], criteria_str: str, requester_id: str) -> dict[str, Any]:
         """
@@ -788,11 +873,7 @@ class SRDBService:
                 status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
             )
 
-        if requester_id != sr.get('owner_id'):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail='Only the owner may change visibility of this systematic review',
-            )
+        self.require_review_owner(sr_id, requester_id)
 
         conn = None
         try:
@@ -848,11 +929,7 @@ class SRDBService:
                 status_code=status.HTTP_404_NOT_FOUND, detail='Systematic review not found',
             )
 
-        if requester_id != sr.get('owner_id'):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail='Only the owner may hard-delete this systematic review',
-            )
+        self.require_review_owner(sr_id, requester_id)
 
         conn = None
         try:

@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # File upload settings
     MAX_FILE_SIZE: int = Field(default=52428800)  # 50MB in bytes
     ALLOWED_FILE_TYPES: list[str] = ['.pdf', '.txt', '.docx', '.doc']
+    CITATION_IMPORT_PREVIEW_TTL_MINUTES: int = int(
+        os.getenv('CITATION_IMPORT_PREVIEW_TTL_MINUTES', '1440'),
+    )
 
     @field_validator('MAX_FILE_SIZE', mode='before')
     @classmethod
@@ -168,7 +171,7 @@ class Settings(BaseSettings):
     # This is intentionally false in production; it is available for local
     # development when an explicit startup bootstrap is desired.
     AUTO_MIGRATE: bool = os.getenv(
-        'AUTO_MIGRATE', 'true',
+        'AUTO_MIGRATE', 'false',
     ).lower().strip() == 'true'
 
     # -------------------------------------------------------------------------

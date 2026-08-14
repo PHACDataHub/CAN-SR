@@ -1047,6 +1047,191 @@ class CitsDPService:
             if conn:
                 pass
 
+    def list_workspace_citations(
+        self,
+        table_name: str,
+        page: int = 1,
+        page_size: int = 25,
+        search: str | None = None,
+        sort: str | None = None,
+        direction: str | None = None,
+        columns: list[str] | None = None,
+        filters: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Return one stable, searchable page of user-facing citation data.
+
+        Dynamic citation tables have different source schemas.  The display and
+        search fields are therefore derived from PostgreSQL metadata instead of
+        accepting client-provided identifiers.  This keeps interpolation limited
+        to validated, server-owned identifiers.
+        """
+        table_name = _validate_ident(table_name, kind='table_name')
+        self._require_psycopg2()
+        page = max(1, int(page))
+        page_size = min(100, max(1, int(page_size)))
+        excluded = {
+            'id', 'created_at', 'updated_at', 'fulltext_url', 'fulltext',
+            'fulltext_content', 'screening_decision',
+        }
+        scalar_types = {
+            'character varying', 'character', 'text', 'integer', 'bigint',
+            'smallint', 'numeric', 'real', 'double precision', 'date',
+            'timestamp without time zone', 'timestamp with time zone',
+        }
+        conn = None
+        try:
+            conn = postgres_server.conn
+            try:
+                cur = conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor,
+                )
+            except Exception:
+                cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = %s
+                ORDER BY ordinal_position
+                """,
+                (table_name,),
+            )
+            metadata = cur.fetchall() or []
+            if metadata and not isinstance(metadata[0], dict):
+                metadata = [
+                    {'column_name': row[0], 'data_type': row[1]}
+                    for row in metadata
+                ]
+            searchable = [
+                _validate_ident(str(column['column_name']), kind='column_name')
+                for column in metadata
+                if str(column.get('data_type')) in scalar_types
+                and str(column.get('column_name')) not in excluded
+                and not str(column.get('column_name')).startswith(('llm_', 'human_', 'fulltext_'))
+            ]
+            preferred = [
+                'title', 'abstract', 'authors',
+                'author', 'doi', 'year', 'publication_year',
+            ]
+            default_display = [
+                'id', 'provenance',
+            ] if 'provenance' in searchable else ['id']
+            default_display += [
+                name for name in preferred if name in searchable and name not in default_display
+            ]
+            if len(default_display) == 1:
+                default_display.extend(searchable[:4])
+            requested_columns = columns or default_display
+            # The request is presentation state only; metadata-derived searchable
+            # fields are the allowlist for every interpolated identifier.
+            display = []
+            for column in requested_columns:
+                if column in {'id', *searchable} and column not in display:
+                    display.append(column)
+            if 'id' not in display:
+                display.insert(0, 'id')
+            if len(display) == 1 and default_display != ['id']:
+                display = default_display
+            requested_sort = str(sort or 'id').strip()
+            sort_column = requested_sort if requested_sort in display else 'id'
+            sort_direction = str(direction or 'asc').strip().lower()
+            if sort_direction not in {'asc', 'desc'}:
+                sort_direction = 'asc'
+
+            where_sql = ''
+            params: list[Any] = []
+            search_value = str(search or '').strip()
+            if search_value and searchable:
+                escaped = search_value.replace('\\', '\\\\').replace(
+                    '%', '\\%',
+                ).replace('_', '\\_')
+                predicates = [
+                    f'CAST("{column}" AS TEXT) ILIKE %s ESCAPE \'\\\'' for column in searchable
+                ]
+                where_sql = ' WHERE ' + ' OR '.join(predicates)
+                params.extend([f'%{escaped}%'] * len(predicates))
+            for column, value in (filters or {}).items():
+                if column in searchable and str(value).strip():
+                    escaped = str(value).strip().replace(
+                        '\\', '\\\\',
+                    ).replace('%', '\\%').replace('_', '\\_')
+                    where_sql += (' AND ' if where_sql else ' WHERE ') + \
+                        f'CAST("{column}" AS TEXT) ILIKE %s ESCAPE \'\\\''
+                    params.append(f'%{escaped}%')
+
+            cur.execute(
+                f'SELECT COUNT(*) FROM "{table_name}"{where_sql}',
+                tuple(params),
+            )
+            count_row = cur.fetchone()
+            total_count = int(
+                count_row['count'] if isinstance(
+                    count_row, dict,
+                ) else count_row[0],
+            )
+            cur.execute(
+                f'SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(xmin::text::bigint), 0) '
+                f'FROM "{table_name}"',
+            )
+            revision_row = cur.fetchone()
+            dataset_revision = (
+                tuple(revision_row.values()) if isinstance(
+                    revision_row, dict,
+                ) else tuple(revision_row)
+            )
+            schema_version = hashlib.sha256(
+                json.dumps(
+                    [
+                        (column['column_name'], column['data_type'])
+                        for column in metadata
+                    ],
+                    separators=(',', ':'),
+                ).encode(),
+            ).hexdigest()
+            query_fingerprint = 'sha256:' + hashlib.sha256(
+                json.dumps(
+                    {
+                        'table_name': table_name,
+                        'schema_version': schema_version,
+                        'dataset_revision': dataset_revision,
+                        'search': search_value.casefold(),
+                        'sort': sort_column,
+                        'direction': sort_direction,
+                    }, sort_keys=True, separators=(',', ':'), default=str,
+                ).encode(),
+            ).hexdigest()
+            select_sql = ', '.join(f'"{column}"' for column in display)
+            order_sql = (
+                f'ORDER BY "id" {sort_direction.upper()}'
+                if sort_column == 'id'
+                else f'ORDER BY "{sort_column}" {sort_direction.upper()} NULLS LAST, "id" ASC'
+            )
+            cur.execute(
+                f'SELECT {select_sql} FROM "{table_name}"{where_sql} '
+                f'{order_sql} LIMIT %s OFFSET %s',
+                tuple(params + [page_size, (page - 1) * page_size]),
+            )
+            rows = cur.fetchall() or []
+            if rows and not isinstance(rows[0], dict):
+                rows = [dict(zip(display, row)) for row in rows]
+            return {
+                'citations': rows,
+                'total_count': total_count,
+                'page': page,
+                'page_size': page_size,
+                'columns': display,
+                'available_columns': ['id'] + searchable,
+                'sort': sort_column,
+                'direction': sort_direction,
+                'query_fingerprint': query_fingerprint,
+            }
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
     def clear_columns(self, citation_id: int, columns: list[str], table_name: str = 'citations') -> int:
         """Set provided columns to NULL for a citation. Ignores unknown columns."""
         table_name = _validate_ident(table_name, kind='table_name')
@@ -1082,6 +1267,33 @@ class CitsDPService:
         finally:
             if conn:
                 pass
+
+    def delete_citations(self, table_name: str, citation_ids: list[int], sr_id: str | None = None) -> dict[str, int]:
+        """Physically delete the selected citation rows without a confirmation guard."""
+        table_name = _validate_ident(table_name, kind='table_name')
+        ids = sorted({int(value) for value in citation_ids})
+        if not ids:
+            return {'deleted_count': 0}
+        conn = postgres_server.conn
+        cur = conn.cursor()
+        try:
+            placeholders = ', '.join(['%s'] * len(ids))
+            cur.execute(
+                f'DELETE FROM "{table_name}" WHERE id IN ({placeholders})', tuple(
+                    ids,
+                ),
+            )
+            deleted = cur.rowcount or 0
+            if sr_id:
+                cur.execute(
+                    f'DELETE FROM citation_identities WHERE sr_id = %s AND citation_table_name = %s AND citation_id IN ({placeholders})',
+                    (sr_id, table_name, *ids),
+                )
+            conn.commit()
+            return {'deleted_count': deleted}
+        except Exception:
+            _safe_rollback(conn)
+            raise
 
     def clear_columns_by_prefix(self, citation_id: int, prefixes: list[str], table_name: str = 'citations') -> int:
         """Set all columns matching any prefix to NULL for a citation."""
