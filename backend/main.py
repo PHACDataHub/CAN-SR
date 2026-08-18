@@ -7,7 +7,6 @@ import uvicorn
 from api.core.config import settings
 from api.router import api_router
 from api.services.cit_db_service import cits_dp_service
-from api.services.llm_cost_tracker import llm_cost_tracker
 from api.services.sr_db_service import srdb_service
 from api.services.user_db import user_db_service
 from dotenv import load_dotenv
@@ -73,15 +72,6 @@ async def startup_event():
     except Exception as e:
         # Do not fail startup; allow deployments without Postgres / in degraded mode.
         print(f"⚠️ Failed to ensure agentic screening tables: {e}", flush=True)
-
-    try:
-        print('💰 Ensuring LLM cost tracking table...', flush=True)
-        await llm_cost_tracker.ensure_table()
-        print('✓ LLM cost tracking table initialized', flush=True)
-    except Exception as e:
-        print(
-            f"⚠️ Failed to ensure LLM cost tracking table exists: {e}", flush=True,
-        )
 
     if user_db_service:
         await user_db_service.ensure_table_exists()

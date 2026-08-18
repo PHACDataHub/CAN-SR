@@ -123,6 +123,22 @@ def _derive_agent_run_cost_usd(run: dict[str, Any]) -> float | None:
         return None
 
 
+def _screening_run_area(pipeline: Any, stage: Any) -> str:
+    pipeline_norm = str(pipeline or '').strip().lower()
+    stage_norm = str(stage or '').strip().lower()
+
+    if pipeline_norm == 'title_abstract':
+        prefix = 'l1'
+    elif pipeline_norm == 'fulltext':
+        prefix = 'l2'
+    else:
+        prefix = 'other'
+
+    if not stage_norm:
+        return prefix
+    return f'{prefix}_{stage_norm}'
+
+
 # -----------------------
 # Basic column helpers
 # -----------------------
@@ -727,6 +743,85 @@ class CitsDPService:
         finally:
             if conn:
                 pass
+
+    def summarize_costs_for_sr(self, sr_id: str) -> dict[str, Any]:
+        self._require_psycopg2()
+        self.ensure_screening_agent_runs_table()
+
+        sr_id = str(sr_id or '').strip()
+        if not sr_id:
+            return {
+                'sr_id': '',
+                'currency': 'USD',
+                'totals': {
+                    'l1': 0.0,
+                    'l2': 0.0,
+                    'other': 0.0,
+                    'grand_total': 0.0,
+                },
+                'breakdown': {},
+            }
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                """
+                SELECT
+                    pipeline,
+                    stage,
+                    COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+                FROM screening_agent_runs
+                WHERE sr_id = %s
+                  AND cost_usd IS NOT NULL
+                GROUP BY pipeline, stage
+                ORDER BY pipeline, stage
+                """,
+                (sr_id,),
+            )
+            rows = cur.fetchall() or []
+
+            breakdown: dict[str, Decimal] = {}
+            totals = {
+                'l1': Decimal('0'),
+                'l2': Decimal('0'),
+                'other': Decimal('0'),
+            }
+            grand_total = Decimal('0')
+
+            for row in rows:
+                area = _screening_run_area(
+                    row.get('pipeline'), row.get('stage'),
+                )
+                total = row.get('total_cost_usd') or Decimal('0')
+                if not isinstance(total, Decimal):
+                    total = Decimal(str(total))
+
+                breakdown[area] = breakdown.get(area, Decimal('0')) + total
+                grand_total += total
+
+                if area.startswith('l1'):
+                    totals['l1'] += total
+                elif area.startswith('l2'):
+                    totals['l2'] += total
+                else:
+                    totals['other'] += total
+
+            return {
+                'sr_id': sr_id,
+                'currency': 'USD',
+                'totals': {
+                    'l1': round(float(totals['l1']), 4),
+                    'l2': round(float(totals['l2']), 4),
+                    'other': round(float(totals['other']), 4),
+                    'grand_total': round(float(grand_total), 4),
+                },
+                'breakdown': {k: round(float(v), 4) for k, v in breakdown.items()},
+            }
+        except Exception:
+            _safe_rollback(conn)
+            raise
 
     def confidence_histogram_for_criterion(
         self,

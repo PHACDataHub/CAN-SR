@@ -39,8 +39,6 @@ from azure.identity import DefaultAzureCredential
 from azure.identity import get_bearer_token_provider
 from openai import AzureOpenAI
 
-from .llm_cost_tracker import llm_cost_tracker
-
 # Async client exists in modern openai SDKs (v1+ / v2+). If unavailable, we
 # will safely offload sync calls to a threadpool to avoid blocking the event loop.
 try:  # pragma: no cover
@@ -720,7 +718,8 @@ class AzureOpenAIClient:
     ) -> dict[str, Any]:
         track = dict(tracking or {})
         model = self.normalize_model_key(
-            track.get('model') or fallback_model or self.default_model)
+            track.get('model') or fallback_model or self.default_model,
+        )
 
         return {
             'user_id': str(track.get('user_id') or '').strip() or 'unknown',
@@ -742,7 +741,8 @@ class AzureOpenAIClient:
     ) -> Decimal:
         normalized_model = self.normalize_model_key(model) or 'default'
         rates = self.MODEL_PRICING_CAD.get(
-            normalized_model, self.MODEL_PRICING_CAD['default'])
+            normalized_model, self.MODEL_PRICING_CAD['default'],
+        )
 
         prompt_cost = (
             Decimal(prompt_tokens) / Decimal('1000')
@@ -756,10 +756,7 @@ class AzureOpenAIClient:
         return total_cost.quantize(Decimal('0.000001'))
 
     async def _record_usage(self, **kwargs) -> None:
-        try:
-            await llm_cost_tracker.record_attempt(**kwargs)
-        except Exception as e:
-            logger.exception('Failed to record LLM usage: %s', e)
+        return None
 
     async def chat_completion(
         self,
@@ -794,7 +791,8 @@ class AzureOpenAIClient:
         deployment = config['deployment']
 
         track = self._normalize_tracking_context(
-            tracking, fallback_model=model)
+            tracking, fallback_model=model,
+        )
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
@@ -871,7 +869,8 @@ class AzureOpenAIClient:
 
         except Exception as e:
             raise Exception(
-                f"Failed to get response from Azure OpenAI: {str(e)}")
+                f"Failed to get response from Azure OpenAI: {str(e)}",
+            )
 
     async def simple_chat(
         self,

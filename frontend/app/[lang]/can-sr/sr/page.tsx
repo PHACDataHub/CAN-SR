@@ -23,10 +23,11 @@ interface SRCostSummary {
 
 const COST_POLL_INTERVAL_MS = 15000
 
-function formatCAD(amount: number): string {
+function formatCurrency(amount: number, currency?: string): string {
+  const normalizedCurrency = String(currency || 'USD').trim().toUpperCase() || 'USD'
   return new Intl.NumberFormat('en-CA', {
     style: 'currency',
-    currency: 'CAD',
+    currency: normalizedCurrency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount)
@@ -157,7 +158,7 @@ export default function CanSrLandingPage() {
 
     return (
       <p className="text-sm text-emerald-800">
-        Total Cost: <span className="font-medium">{formatCAD(amount || 0)}</span>
+        Total Cost: <span className="font-medium">{formatCurrency(amount || 0, costs?.currency)}</span>
       </p>
     )
   }
