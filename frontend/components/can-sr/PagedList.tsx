@@ -674,7 +674,7 @@ export default function PagedList({
               {screeningStep !== 'l1' ? (
                 <>
                   <button
-                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                     onClick={() => onChooseFile(data.id)}
                     disabled={pdfLinkageActive}
                     title={pdfLinkageActive ? 'Upload is disabled while PDF linkage is active' : undefined}
