@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import {
   humanAnswerStatus,
+  resolveDisplayedAnswer,
   resolveConfiguredValue,
   ScreeningCitationContext,
 } from './screening-citation-context'
@@ -19,6 +20,13 @@ describe('screening citation context helpers', () => {
     expect(
       humanAnswerStatus(undefined, 'Screening answer', ['Include', 'Exclude']),
     ).toBe('missing')
+  })
+
+  it('prefers a human answer and otherwise displays the AI answer without copying it', () => {
+    expect(resolveDisplayedAnswer({ selected: 'Include' }, { selected: 'Exclude' })).toBe('Include')
+    expect(resolveDisplayedAnswer(null, { selected: 'Exclude' })).toBe('Exclude')
+    expect(resolveDisplayedAnswer('', JSON.stringify({ selected: 'Include' }))).toBe('Include')
+    expect(resolveDisplayedAnswer(null, null)).toBe('')
   })
 })
 

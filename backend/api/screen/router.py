@@ -636,6 +636,61 @@ class ValidateStepRequest(BaseModel):
     )
 
 
+def _screening_items_for_step(sr: dict[str, Any], step: str) -> list[dict[str, Any]]:
+    criteria = sr.get('criteria') or sr.get('criteria_parsed') or {}
+    if not isinstance(criteria, dict):
+        return []
+    value = criteria.get(step) or []
+    if isinstance(value, dict):
+        value = value.get('items') or []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _selected_answer(value: Any) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return value.strip()
+    if isinstance(value, dict):
+        return str(value.get('selected') or value.get('value') or '').strip()
+    return str(value).strip()
+
+
+def _copy_ai_answers_to_human(
+    sr: dict[str, Any], row: dict[str, Any], step: str,
+    citation_id: int, table_name: str,
+) -> int:
+    """Copy missing AI selections into human fields during validation only."""
+    copied = 0
+    for item in _screening_items_for_step(sr, step):
+        question = str(item.get('question') or '').strip()
+        core = snake_case(question, max_len=56) if question else ''
+        if not core:
+            continue
+        human_column = f'human_{step}_{core}'
+        llm_column = f'llm_{step}_{core}'
+        if _selected_answer(row.get(human_column)):
+            continue
+        selected = _selected_answer(row.get(llm_column))
+        if not selected:
+            continue
+        payload = {
+            'selected': selected, 'explanation': '', 'confidence': None,
+            'human': True, 'source': 'validated_ai_answer',
+            'screening_step': step,
+            'pipeline': 'fulltext' if step == 'l2' else 'title_abstract',
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+        }
+        if cits_dp_service.update_jsonb_column(
+            citation_id, human_column, payload, table_name,
+        ):
+            copied += 1
+    return copied
+
+
 def _as_validation_list(v: Any) -> list[dict[str, str]]:
     """Normalize DB values into a list of {user, validated_at} dicts."""
 
@@ -1676,6 +1731,13 @@ async def validate_screening_step(
                 status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
             )
 
+        copied_ai_answers = 0
+        if checked and step in {'l1', 'l2'}:
+            copied_ai_answers = await run_in_threadpool(
+                _copy_ai_answers_to_human,
+                _sr, row, step, citation_id, table_name,
+            )
+
         existing = _as_validation_list(row.get(validations_col))
 
         if checked:
@@ -1773,6 +1835,7 @@ async def validate_screening_step(
         'validations': normalized,
         'summary_validated_by': summary_by,
         'summary_validated_at': summary_at,
+        'ai_answers_copied': copied_ai_answers,
     }
 
 

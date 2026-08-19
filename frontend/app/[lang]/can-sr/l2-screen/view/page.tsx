@@ -16,6 +16,7 @@ import {
   extractHumanAnswer,
   humanAnswerStatus,
   resolveConfiguredValue,
+  resolveDisplayedAnswer,
 } from '@/components/can-sr/screening-citation-context'
 
 type ValidationEntry = { user: string; validated_at: string }
@@ -793,28 +794,37 @@ export default function CanSrL2ScreenViewPage() {
           newHints[idx] = String(titleAbstractRun.answer)
       }
 
-      // A Full Text AI panel must only exist when there is a persisted fulltext
-      // screening run. Never display a shared/legacy L1 llm_* value as L2 output.
-      if (fulltextRun && isCurrentFulltextRun) {
+      // A Full Text AI panel must only use a persisted fulltext payload or a
+      // current fulltext run. Never display a shared/legacy L1 llm_* value as
+      // L2 output.
+      const persistedFulltext =
+        llmParsed &&
+        typeof llmParsed === 'object' &&
+        ((llmParsed as any).pipeline === 'fulltext' ||
+          !(llmParsed as any).pipeline) &&
+        (!(llmParsed as any).fulltext_md5 ||
+          (llmParsed as any).fulltext_md5 === citationFulltextMd5)
+      if (persistedFulltext || (fulltextRun && isCurrentFulltextRun)) {
         // The latest agent-run endpoint returns the audit answer, while the
         // persisted llm_* payload contains the evidence arrays. Do not discard
         // that payload merely because answer normalization changed the value.
-        const persistedFulltext =
-          llmParsed &&
-          typeof llmParsed === 'object' &&
-          ((llmParsed as any).pipeline === 'fulltext' ||
-            !(llmParsed as any).pipeline) &&
-          (!(llmParsed as any).fulltext_md5 ||
-            (llmParsed as any).fulltext_md5 === citationFulltextMd5)
         newAiPanels[idx] = {
           ...(persistedFulltext ? llmParsed : {}),
-          selected: fulltextRun.answer ?? '',
-          confidence: fulltextRun.confidence,
-          explanation: fulltextRun.rationale ?? '',
+          selected: fulltextRun?.answer ?? (llmParsed as any)?.selected ?? '',
+          confidence: fulltextRun?.confidence ?? (llmParsed as any)?.confidence,
+          explanation: fulltextRun?.rationale ?? (llmParsed as any)?.explanation ?? '',
           pipeline: 'fulltext',
         }
         newPanelOpen[idx] = false
       }
+
+      // The control is display-only AI fallback. A later user change still
+      // goes through human_classify and therefore creates a human answer.
+      const displayed = resolveDisplayedAnswer(
+        newSelections[idx] ?? parsedCopiedHuman ?? legacyHumanRaw,
+        newAiPanels[idx],
+      )
+      if (displayed) newSelections[idx] = displayed
 
     })
 

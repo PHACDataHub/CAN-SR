@@ -45,6 +45,13 @@ export function extractHumanAnswer(value: any): string {
   return String(value)
 }
 
+/** Return the answer shown in a screening control, without changing persistence. */
+export function resolveDisplayedAnswer(humanValue: any, aiValue: any): string {
+  const human = extractHumanAnswer(humanValue).trim()
+  if (human) return human
+  return extractHumanAnswer(aiValue).trim()
+}
+
 export function humanAnswerStatus(
   row: Record<string, any> | null | undefined,
   answerColumn: string | null | undefined,
