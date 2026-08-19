@@ -128,17 +128,8 @@ class CachedTokenProvider:
 
 class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
-    # Pricing per 1k tokens
-    MODEL_PRICING_CAD = {
-        'default': {
-            'prompt': Decimal('1000'),
-            'completion': Decimal('20000'),
-        },
-        'GPT-5.4-Mini': {
-            'prompt': Decimal('0.0001'),
-            'completion': Decimal('0.0002'),
-        },
-    }
+
+    model_pricing_usd: dict[str, dict[str, Decimal]]
 
     def __init__(self):
         self._config_error: str | None = None
@@ -171,6 +162,9 @@ class AzureOpenAIClient:
             self._models_yaml,
         )
         self.model_configs = self._load_model_configs(self._models_yaml)
+        self.model_pricing_usd = self._load_model_pricing_usd(
+            self._models_yaml,
+        )
         self.default_model = self._resolve_default_model(self.default_model)
         self._rate_limiters: dict[str, DeploymentRateLimiter] = {}
 
@@ -288,6 +282,72 @@ class AzureOpenAIClient:
             return cfg
 
         return {}
+
+    def _zero_pricing_usd(self) -> dict[str, Decimal]:
+        return {
+            'prompt': Decimal('0'),
+            'completion': Decimal('0'),
+        }
+
+    def _load_model_pricing_usd(
+        self,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, Decimal]]:
+        source = data or {}
+        models = self._extract_models_mapping(source)
+        pricing: dict[str, dict[str, Decimal]] = {
+            'default': self._zero_pricing_usd(),
+        }
+
+        parsed_default = self._parse_pricing_entry(
+            source.get('default_pricing_usd'),
+            'default',
+        )
+        if parsed_default is not None:
+            pricing['default'] = parsed_default
+
+        for display_name, meta in models.items():
+            if not isinstance(meta, dict):
+                continue
+            parsed = self._parse_pricing_entry(
+                meta.get('pricing_usd'),
+                str(display_name),
+            )
+            if parsed is not None:
+                pricing[str(display_name)] = parsed
+
+        return pricing
+
+    def _parse_pricing_entry(
+        self,
+        entry: Any,
+        model_name: str,
+    ) -> dict[str, Decimal] | None:
+        if not isinstance(entry, dict):
+            return None
+        try:
+            prompt = Decimal(str(entry['prompt']).strip())
+            completion = Decimal(str(entry['completion']).strip())
+        except (KeyError, ArithmeticError, TypeError, ValueError):
+            logger.warning(
+                'Ignoring invalid pricing_usd for model %s', model_name,
+            )
+            return None
+        return {
+            'prompt': prompt,
+            'completion': completion,
+        }
+
+    def get_model_pricing_usd(
+        self,
+        model: str | None,
+    ) -> dict[str, Decimal]:
+        normalized_model = self.normalize_model_key(model) or 'default'
+        pricing = getattr(self, 'model_pricing_usd', None)
+        if not isinstance(pricing, dict):
+            pricing = {'default': self._zero_pricing_usd()}
+        default_pricing = pricing.get('default') or self._zero_pricing_usd()
+        return pricing.get(normalized_model, default_pricing)
 
     def _resolve_default_model(self, desired: str) -> str:
         yaml_default = (self._catalog_default_model or '').strip()
@@ -732,17 +792,14 @@ class AzureOpenAIClient:
             'created_at': track.get('created_at') or None,
         }
 
-    def _calculate_cost_cad(
+    def _calculate_cost_usd(
         self,
         model: str | None,
         prompt_tokens: int,
         completion_tokens: int,
         total_tokens: int,
     ) -> Decimal:
-        normalized_model = self.normalize_model_key(model) or 'default'
-        rates = self.MODEL_PRICING_CAD.get(
-            normalized_model, self.MODEL_PRICING_CAD['default'],
-        )
+        rates = self.get_model_pricing_usd(model)
 
         prompt_cost = (
             Decimal(prompt_tokens) / Decimal('1000')
@@ -823,7 +880,7 @@ class AzureOpenAIClient:
             prompt_tokens = usage.prompt_tokens if usage else 0
             total_tokens = usage.total_tokens if usage else 0
 
-            cost_cad = self._calculate_cost_cad(
+            cost_usd = self._calculate_cost_usd(
                 model=track['model'],
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -838,7 +895,7 @@ class AzureOpenAIClient:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
-                cost_cad=cost_cad,
+                cost_usd=cost_usd,
                 created_at=track['created_at'],
             )
 

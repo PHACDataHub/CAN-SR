@@ -56,9 +56,6 @@ except Exception:
     azure_openai_client = None
 
 
-_CAD_TO_USD_FALLBACK = Decimal('0.74')
-
-
 def _safe_rollback(conn) -> None:
     """Best-effort rollback.
 
@@ -100,24 +97,15 @@ def _derive_agent_run_cost_usd(run: dict[str, Any]) -> float | None:
     raw_model = run.get('model')
     model = raw_model if isinstance(raw_model, str) else None
     try:
-        normalized_model = azure_openai_client.normalize_model_key(
-            model,
-        ) or 'default'
-        rates = azure_openai_client.MODEL_PRICING_CAD.get(
-            normalized_model,
-            azure_openai_client.MODEL_PRICING_CAD['default'],
-        )
-        prompt_cost_cad = (
+        rates = azure_openai_client.get_model_pricing_usd(model)
+        prompt_cost_usd = (
             Decimal(prompt_tokens) /
             Decimal('1000')
         ) * rates['prompt']
-        completion_cost_cad = (
+        completion_cost_usd = (
             Decimal(completion_tokens) / Decimal('1000')
         ) * rates['completion']
-        total_cost_usd = (
-            prompt_cost_cad +
-            completion_cost_cad
-        ) * _CAD_TO_USD_FALLBACK
+        total_cost_usd = prompt_cost_usd + completion_cost_usd
         return float(total_cost_usd.quantize(Decimal('0.000001')))
     except Exception:
         return None
