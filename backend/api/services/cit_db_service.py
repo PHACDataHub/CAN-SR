@@ -688,39 +688,85 @@ class CitsDPService:
             conn = postgres_server.conn
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-            # DISTINCT ON picks the first row per group according to ORDER BY.
             cur.execute(
                 """
-                SELECT DISTINCT ON (citation_id, criterion_key, stage)
-                    id,
-                    sr_id,
-                    table_name,
-                    citation_id,
-                    pipeline,
-                    criterion_key,
-                    stage,
-                    answer,
-                    confidence,
-                    rationale,
-                    guardrails,
-                    model,
-                    prompt_version,
-                    temperature,
-                    top_p,
-                    seed,
-                    latency_ms,
-                    input_tokens,
-                    output_tokens,
-                    cost_usd,
-                    created_at
-                FROM screening_agent_runs
-                WHERE sr_id = %s
-                  AND table_name = %s
-                  AND pipeline = %s
-                  AND citation_id = ANY(%s)
-                ORDER BY citation_id, criterion_key, stage, created_at DESC
+                WITH latest_runs AS (
+                    SELECT DISTINCT ON (citation_id, criterion_key, stage)
+                        id,
+                        sr_id,
+                        table_name,
+                        citation_id,
+                        pipeline,
+                        criterion_key,
+                        stage,
+                        answer,
+                        confidence,
+                        rationale,
+                        guardrails,
+                        model,
+                        prompt_version,
+                        temperature,
+                        top_p,
+                        seed,
+                        latency_ms,
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                        created_at
+                    FROM screening_agent_runs
+                    WHERE sr_id = %s
+                      AND table_name = %s
+                      AND pipeline = %s
+                      AND citation_id = ANY(%s)
+                    ORDER BY citation_id, criterion_key, stage, created_at DESC
+                ),
+                aggregated_costs AS (
+                    SELECT
+                        citation_id,
+                        criterion_key,
+                        stage,
+                        COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+                    FROM screening_agent_runs
+                    WHERE sr_id = %s
+                      AND table_name = %s
+                      AND pipeline = %s
+                      AND citation_id = ANY(%s)
+                    GROUP BY citation_id, criterion_key, stage
+                )
+                SELECT
+                    latest_runs.id,
+                    latest_runs.sr_id,
+                    latest_runs.table_name,
+                    latest_runs.citation_id,
+                    latest_runs.pipeline,
+                    latest_runs.criterion_key,
+                    latest_runs.stage,
+                    latest_runs.answer,
+                    latest_runs.confidence,
+                    latest_runs.rationale,
+                    latest_runs.guardrails,
+                    latest_runs.model,
+                    latest_runs.prompt_version,
+                    latest_runs.temperature,
+                    latest_runs.top_p,
+                    latest_runs.seed,
+                    latest_runs.latency_ms,
+                    latest_runs.input_tokens,
+                    latest_runs.output_tokens,
+                    latest_runs.cost_usd,
+                    aggregated_costs.total_cost_usd,
+                    latest_runs.created_at
+                FROM latest_runs
+                LEFT JOIN aggregated_costs
+                  ON aggregated_costs.citation_id = latest_runs.citation_id
+                 AND aggregated_costs.criterion_key = latest_runs.criterion_key
+                 AND aggregated_costs.stage = latest_runs.stage
+                ORDER BY latest_runs.citation_id, latest_runs.criterion_key, latest_runs.stage
                 """,
-                (sr_id, table_name, pipeline, ids),
+                (
+                    sr_id, table_name, pipeline, ids,
+                    sr_id, table_name, pipeline, ids,
+                ),
             )
 
             rows = cur.fetchall() or []

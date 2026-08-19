@@ -42,6 +42,7 @@ type LatestAgentRun = {
   created_at?: string
   guardrails?: any
   cost_usd?: number | null
+  total_cost_usd?: number | null
 }
 
 function formatUSDCost(value: number): string {
@@ -51,7 +52,10 @@ function formatUSDCost(value: number): string {
 }
 
 function sumCitationCosts(runs: LatestAgentRun[]): number {
-  return runs.reduce((total, run) => total + (run.cost_usd || 0), 0)
+  return runs.reduce(
+    (total, run) => total + (run.total_cost_usd ?? run.cost_usd ?? 0),
+    0,
+  )
 }
 
 function hasGuardrailIssue(g: any): boolean {
@@ -648,7 +652,7 @@ export default function PagedList({
                 if (!hasRuns) return null
 
                 return (
-                  <SimpleTooltip content="Estimated cost from latest screening runs for this citation">
+                  <SimpleTooltip content="Estimated total cost from all screening runs for this citation">
                     <span className="inline-flex rounded border border-gray-200 bg-white px-2 text-xs font-medium text-gray-600 shadow-sm">
                       {`${formatUSDCost(citationCost)} USD`}
                     </span>
