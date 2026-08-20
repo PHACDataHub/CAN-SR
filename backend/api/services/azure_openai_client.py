@@ -770,51 +770,6 @@ class AzureOpenAIClient:
 
                 raise
 
-    def _normalize_tracking_context(
-        self,
-        tracking: dict[str, Any] | None,
-        *,
-        fallback_model: str | None = None,
-    ) -> dict[str, Any]:
-        track = dict(tracking or {})
-        model = self.normalize_model_key(
-            track.get('model') or fallback_model or self.default_model,
-        )
-
-        return {
-            'user_id': str(track.get('user_id') or '').strip() or 'unknown',
-            'sr_id': str(track.get('sr_id') or '').strip() or None,
-            'area': str(track.get('area') or '').strip() or None,
-            'model': model,
-            'prompt_tokens': int(track.get('prompt_tokens') or 0),
-            'completion_tokens': int(track.get('completion_tokens') or 0),
-            'total_tokens': int(track.get('total_tokens') or 0),
-            'created_at': track.get('created_at') or None,
-        }
-
-    def _calculate_cost_usd(
-        self,
-        model: str | None,
-        prompt_tokens: int,
-        completion_tokens: int,
-        total_tokens: int,
-    ) -> Decimal:
-        rates = self.get_model_pricing_usd(model)
-
-        prompt_cost = (
-            Decimal(prompt_tokens) / Decimal('1000')
-        ) * rates['prompt']
-        completion_cost = (
-            Decimal(completion_tokens) / Decimal('1000')
-        ) * rates['completion']
-
-        total_cost = prompt_cost + completion_cost
-
-        return total_cost.quantize(Decimal('0.000001'))
-
-    async def _record_usage(self, **kwargs) -> None:
-        return None
-
     async def chat_completion(
         self,
         messages: list[dict[str, Any]],
@@ -825,7 +780,6 @@ class AzureOpenAIClient:
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         stream: bool = False,
-        tracking: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Create a chat completion using Azure OpenAI official client
@@ -847,9 +801,6 @@ class AzureOpenAIClient:
         config = self._get_model_config(model)
         deployment = config['deployment']
 
-        track = self._normalize_tracking_context(
-            tracking, fallback_model=model,
-        )
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
@@ -879,25 +830,6 @@ class AzureOpenAIClient:
             completion_tokens = usage.completion_tokens if usage else 0
             prompt_tokens = usage.prompt_tokens if usage else 0
             total_tokens = usage.total_tokens if usage else 0
-
-            cost_usd = self._calculate_cost_usd(
-                model=track['model'],
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-            )
-
-            await self._record_usage(
-                user_id=track['user_id'],
-                sr_id=track['sr_id'],
-                area=track['area'],
-                model=track['model'],
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                cost_usd=cost_usd,
-                created_at=track['created_at'],
-            )
 
             logger.info(
                 'Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s',
@@ -936,7 +868,6 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.7,
-        tracking: dict[str, Any] | None = None,
     ) -> str:
         """Simple chat interface that returns just the response text"""
         try:
@@ -946,7 +877,6 @@ class AzureOpenAIClient:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                tracking=tracking,
             )
             return response['choices'][0]['message']['content']
         except Exception as e:
@@ -961,7 +891,6 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.0,
-        tracking: dict[str, Any] | None = None,
     ) -> str:
         """Send a single user message with multiple attached images.
 
@@ -990,7 +919,6 @@ class AzureOpenAIClient:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                tracking=tracking,
             )
             return response['choices'][0]['message']['content']
         except Exception as e:
@@ -1089,7 +1017,6 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1500,
         temperature: float = 0.7,
-        tracking: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Chat with document context for RAG applications
@@ -1148,7 +1075,6 @@ Guidelines:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                tracking=tracking,
             )
 
             if 'choices' in response and len(response['choices']) > 0:
