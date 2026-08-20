@@ -86,6 +86,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [importColumns, setImportColumns] = useState<string[]>([])
+  const [titleImportColumn, setTitleImportColumn] = useState('')
+  const [abstractImportColumn, setAbstractImportColumn] = useState('')
   const [selectedImportColumns, setSelectedImportColumns] = useState<string[]>(
     [],
   )
@@ -286,6 +288,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     setOpen(false)
     setFile(null)
     setImportColumns([])
+    setTitleImportColumn('')
+    setAbstractImportColumn('')
     setSelectedImportColumns([])
     setIncludeDuplicates(false)
     setHasDuplicates(false)
@@ -382,17 +386,20 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     )
 
   const parseImportColumns = async (selectedFile: File | null) => {
-    if (!selectedFile || !selectedFile.name.toLowerCase().endsWith('.csv')) {
+    if (!selectedFile) {
       setImportColumns([])
       setSelectedImportColumns([])
       return
     }
-    const headerLine = (await selectedFile.text()).split(/\r?\n/, 1)[0] || ''
-    const headers = headerLine
-      .split(',')
-      .map((value) => value.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean)
+    const headers = selectedFile.name.toLowerCase().endsWith('.csv')
+      ? ((await selectedFile.text()).split(/\r?\n/, 1)[0] || '')
+          .split(',')
+          .map((value) => value.trim().replace(/^"|"$/g, ''))
+          .filter(Boolean)
+      : ['Title', 'Abstract', 'Keywords', 'Journal', 'Year', 'Authors', 'DOI', 'Type', 'URL']
     setImportColumns(headers)
+    setTitleImportColumn('')
+    setAbstractImportColumn('')
     setSelectedImportColumns((current) =>
       current.length
         ? current.filter((column) => headers.includes(column))
@@ -408,39 +415,13 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
     form.append('file', file)
     form.append('commit_key', crypto.randomUUID())
     form.append('include_duplicates', String(includeDuplicates))
-    const text = await file.text()
-    const headerLine = text.split(/\r?\n/, 1)[0] || ''
-    const headers = file.name.toLowerCase().endsWith('.csv')
-      ? headerLine
-          .split(',')
-          .map((value) => value.trim().replace(/^"|"$/g, ''))
-          .filter(Boolean)
-      : []
-    const normalized = headers.map((value) =>
-      value.toLowerCase().replace(/[^a-z0-9]+/g, ''),
-    )
-    const localWarnings: string[] = []
-    if (!normalized.includes('title'))
-      localWarnings.push(
-        copy.missingTitle || 'The file is missing a Title column.',
-      )
-    if (!normalized.includes('abstract'))
-      localWarnings.push(
-        copy.missingAbstract || 'The file is missing an Abstract column.',
-      )
-    const extras = headers.filter(
-      (_, index) => !['title', 'abstract'].includes(normalized[index]),
-    )
-    if (extras.length) {
-      localWarnings.push(
-        `${copy.additionalColumns || 'Additional source columns will be preserved as text'}: ${extras.join(', ')}`,
-      )
-    }
-    setWarnings(localWarnings)
-    if (!normalized.includes('title') || !normalized.includes('abstract')) {
+    if (!titleImportColumn || !abstractImportColumn) {
+      setMessage('Select the source columns to use for Title and Abstract before importing.')
       setBusy(false)
       return
     }
+    form.append('title_header', titleImportColumn)
+    form.append('abstract_header', abstractImportColumn)
     const response = await authenticatedFetch(
       `/api/can-sr/citations/import?sr_id=${encodeURIComponent(srId)}`,
       { method: 'POST', body: form },
@@ -1834,10 +1815,41 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                       setFile(null)
                       setImportColumns([])
                       setSelectedImportColumns([])
+                      setTitleImportColumn('')
+                      setAbstractImportColumn('')
                     }}
                   >
                     {copy.removeFile}
                   </button>
+                </div>
+              ) : null}
+              {file && importColumns.length ? (
+                <div className="space-y-3 rounded-md border p-3">
+                  <p className="text-sm text-gray-600">
+                    Select which source fields contain the title and abstract. The file is not assumed to use either name.
+                  </p>
+                  <label className="block text-sm font-medium">
+                    Title source field
+                    <select
+                      value={titleImportColumn}
+                      onChange={(event) => setTitleImportColumn(event.target.value)}
+                      className="mt-1 w-full rounded-md border px-3 py-2"
+                    >
+                      <option value="">Select a title field</option>
+                      {importColumns.map((column) => <option key={`title-${column}`} value={column}>{column}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Abstract source field
+                    <select
+                      value={abstractImportColumn}
+                      onChange={(event) => setAbstractImportColumn(event.target.value)}
+                      className="mt-1 w-full rounded-md border px-3 py-2"
+                    >
+                      <option value="">Select an abstract field</option>
+                      {importColumns.map((column) => <option key={`abstract-${column}`} value={column}>{column}</option>)}
+                    </select>
+                  </label>
                 </div>
               ) : null}
               {file && importColumns.length ? (
