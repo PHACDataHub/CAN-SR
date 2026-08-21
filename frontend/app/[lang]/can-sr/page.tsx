@@ -1,10 +1,12 @@
 'use client'
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import CostMeta from '@/components/can-sr/cost-meta'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import StackingCard from '@/components/can-sr/stacking-card'
 import { getAuthToken, getTokenType, type User } from '@/lib/auth'
+import { useReviewCosts } from '@/hooks/use-review-costs'
 import { useDictionary } from '../DictionaryProvider'
 
 type SRItem = {
@@ -54,6 +56,11 @@ export default function CanSrIndexPage() {
 
   // Get current language to keep language when navigating
   const { lang } = useParams<{ lang: string }>()
+  const reviewIds = useMemo(
+    () => reviews.map((review) => review.sr_id || review.id || '').filter(Boolean),
+    [reviews],
+  )
+  const { costsById, loadingById, errorById } = useReviewCosts(reviewIds)
 
   const fetchReviews = useCallback(async () => {
     setLoading(true)
@@ -218,8 +225,26 @@ export default function CanSrIndexPage() {
               // Link to SR page: use sr_id or id if present, else fallback to '#'
               const id = r.sr_id || r.id
               const href = id ? `/can-sr/sr?sr_id=${encodeURIComponent(id)}` : '/can-sr/sr'
+              const cost = id ? costsById[id] : undefined
+              const costLoading = id ? loadingById[id] ?? false : false
+              const costError = id ? errorById[id] : null
               return (
-                <StackingCard key={id || idx} title={title} description={desc} href={href} />
+                <StackingCard
+                  key={id || idx}
+                  title={title}
+                  description={desc}
+                  href={href}
+                  expandedMeta={
+                    id ? (
+                      <CostMeta
+                        loading={costLoading}
+                        error={costError}
+                        amount={cost?.totals?.grand_total}
+                        currency={cost?.currency}
+                      />
+                    ) : null
+                  }
+                />
               )
             })}
           </div>
