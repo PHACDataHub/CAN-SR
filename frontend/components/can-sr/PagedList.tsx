@@ -1,5 +1,7 @@
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { formatCurrency } from '@/components/can-sr/cost-meta'
+import { useExtractionCitationCosts } from '@/hooks/use-review-costs'
 import { Bot, Check } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
@@ -43,12 +45,6 @@ type LatestAgentRun = {
   guardrails?: any
   cost_usd?: number | null
   total_cost_usd?: number | null
-}
-
-function formatUSDCost(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '$0.00'
-  if (value < 0.01) return `$${value.toFixed(4)}`
-  return `$${value.toFixed(2)}`
 }
 
 function sumCitationCosts(runs: LatestAgentRun[]): number {
@@ -136,6 +132,8 @@ export default function PagedList({
   const filterMode = filterModeProp || filterModeLocal
 
   const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
+  const extractionCitationIds = screeningStep === 'extract' ? citationIds : []
+  const { costsByCitationId: extractionCostsByCitation } = useExtractionCitationCosts(srId, extractionCitationIds)
 
   // Request cancellation + dedupe (prevents slower responses from overwriting newer filter/page state)
   const batchAbortRef = useRef<AbortController | null>(null)
@@ -146,9 +144,13 @@ export default function PagedList({
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   const getCitationCost = (citationId: number): number => {
+    if (screeningStep === 'extract') {
+      return extractionCostsByCitation[citationId]?.total_cost_usd ?? 0
+    }
     const runs = latestRunsByCitation[citationId] || []
     return sumCitationCosts(runs)
   }
+
 
   // --- paging ---
   useEffect(() => {
@@ -647,14 +649,16 @@ export default function PagedList({
             <div className="flex flex-col items-center self-start">
               {(() => {
                 const citationCost = getCitationCost(Number(data.id))
-                const hasRuns = (latestRunsByCitation[Number(data.id)] || []).length > 0
+                const hasRuns = screeningStep === 'extract'
+                  ? extractionCostsByCitation[Number(data.id)] !== undefined
+                  : (latestRunsByCitation[Number(data.id)] || []).length > 0
 
                 if (!hasRuns) return null
 
                 return (
-                  <SimpleTooltip content="Estimated total cost from all screening runs for this citation">
+                  <SimpleTooltip content={screeningStep === 'extract' ? 'Estimated total cost from all parameter extraction runs for this citation' : 'Estimated total cost from all screening runs for this citation'}>
                     <span className="inline-flex rounded border border-gray-200 bg-white px-2 text-xs font-medium text-gray-600 shadow-sm">
-                      {`${formatUSDCost(citationCost)} USD`}
+                      {formatCurrency(citationCost, screeningStep === 'extract' ? extractionCostsByCitation[Number(data.id)]?.currency : 'USD')}
                     </span>
                   </SimpleTooltip>
                 )

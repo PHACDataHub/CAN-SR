@@ -16,6 +16,19 @@ interface ReviewCostsState {
   errorById: Record<string, string>
 }
 
+export interface ExtractionCitationCostSummary {
+  citation_id: number
+  currency?: string
+  total_cost_usd?: number | null
+  parameters?: Record<string, number>
+}
+
+interface ExtractionCitationCostsState {
+  costsByCitationId: Record<number, ExtractionCitationCostSummary>
+  loadingByCitationId: Record<number, boolean>
+  errorByCitationId: Record<number, string>
+}
+
 async function fetchReviewCost(srId: string): Promise<SRCostSummary> {
   const res = await authenticatedFetch(
     `/api/can-sr/reviews/costs?sr_id=${encodeURIComponent(srId)}`,
@@ -27,6 +40,38 @@ async function fetchReviewCost(srId: string): Promise<SRCostSummary> {
       errBody?.detail ||
         errBody?.error ||
         `Failed to fetch costs (${res.status})`,
+    )
+  }
+
+  return await res.json().catch(() => ({}))
+}
+
+async function fetchExtractionCitationCosts(
+  srId: string,
+  citationIds: number[],
+): Promise<{ costs: ExtractionCitationCostSummary[] }> {
+  const normalizedCitationIds = Array.from(
+    new Set(
+      citationIds
+        .map((citationId) => Number(citationId))
+        .filter((citationId) => Number.isFinite(citationId) && citationId > 0),
+    ),
+  )
+
+  if (normalizedCitationIds.length === 0) {
+    return { costs: [] }
+  }
+
+  const res = await authenticatedFetch(
+    `/api/can-sr/extract?action=costs&sr_id=${encodeURIComponent(srId)}&ids=${encodeURIComponent(normalizedCitationIds.join(','))}`,
+  )
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}))
+    throw new Error(
+      errBody?.detail ||
+        errBody?.error ||
+        `Failed to fetch extraction costs (${res.status})`,
     )
   }
 
@@ -97,6 +142,7 @@ export function useReviewCosts(reviewIds: string[]): ReviewCostsState {
     () => reviewIds.map((reviewId) => String(reviewId || '').trim()).filter(Boolean),
     [reviewIds],
   )
+  const normalizedIdsKey = useMemo(() => normalizedIds.join('|'), [normalizedIds])
 
   const [costsById, setCostsById] = useState<Record<string, SRCostSummary>>({})
   const [loadingById, setLoadingById] = useState<Record<string, boolean>>({})
@@ -165,7 +211,101 @@ export function useReviewCosts(reviewIds: string[]): ReviewCostsState {
     return () => {
       cancelled = true
     }
-  }, [normalizedIds])
+  }, [normalizedIdsKey])
 
   return { costsById, loadingById, errorById }
+}
+
+export function useExtractionCitationCosts(
+  srId: string | null | undefined,
+  citationIds: number[],
+): ExtractionCitationCostsState {
+  const normalizedSrId = String(srId || '').trim()
+  const normalizedCitationIds = useMemo(
+    () => Array.from(new Set(citationIds.map((citationId) => Number(citationId)).filter(Number.isFinite))),
+    [citationIds],
+  )
+  const normalizedCitationIdsKey = useMemo(() => normalizedCitationIds.join('|'), [normalizedCitationIds])
+
+  const [costsByCitationId, setCostsByCitationId] = useState<Record<number, ExtractionCitationCostSummary>>({})
+  const [loadingByCitationId, setLoadingByCitationId] = useState<Record<number, boolean>>({})
+  const [errorByCitationId, setErrorByCitationId] = useState<Record<number, string>>({})
+
+  useEffect(() => {
+    if (!normalizedSrId || normalizedCitationIds.length === 0) {
+      setCostsByCitationId({})
+      setLoadingByCitationId({})
+      setErrorByCitationId({})
+      return
+    }
+
+    let cancelled = false
+
+    setLoadingByCitationId(
+      normalizedCitationIds.reduce<Record<number, boolean>>((acc, citationId) => {
+        acc[citationId] = true
+        return acc
+      }, {}),
+    )
+    setErrorByCitationId({})
+
+    const load = async () => {
+      let results: Array<{ citationId: number; data: ExtractionCitationCostSummary | null; error: string | null }> = []
+
+      try {
+        const response = await fetchExtractionCitationCosts(normalizedSrId, normalizedCitationIds)
+        const responseByCitationId = new Map<number, ExtractionCitationCostSummary>(
+          (response.costs || []).map((item) => [Number(item.citation_id), item]),
+        )
+
+        results = normalizedCitationIds.map((citationId) => ({
+          citationId,
+          data: responseByCitationId.get(citationId) || {
+            citation_id: citationId,
+            currency: 'USD',
+            total_cost_usd: 0,
+            parameters: {},
+          },
+          error: null,
+        }))
+      } catch (err: any) {
+        console.error('Error fetching extraction costs batch:', err)
+        results = normalizedCitationIds.map((citationId) => ({
+          citationId,
+          data: null,
+          error: err?.message || 'Unable to load extraction costs',
+        }))
+      }
+
+      if (cancelled) {
+        return
+      }
+
+      const nextCostsByCitationId: Record<number, ExtractionCitationCostSummary> = {}
+      const nextLoadingByCitationId: Record<number, boolean> = {}
+      const nextErrorByCitationId: Record<number, string> = {}
+
+      for (const result of results) {
+        nextLoadingByCitationId[result.citationId] = false
+        if (result.data) {
+          nextCostsByCitationId[result.citationId] = result.data
+        }
+        if (result.error) {
+          nextErrorByCitationId[result.citationId] = result.error
+        }
+      }
+
+      setCostsByCitationId(nextCostsByCitationId)
+      setLoadingByCitationId(nextLoadingByCitationId)
+      setErrorByCitationId(nextErrorByCitationId)
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [normalizedCitationIdsKey, normalizedSrId])
+
+  return { costsByCitationId, loadingByCitationId, errorByCitationId }
 }

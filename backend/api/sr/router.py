@@ -123,6 +123,7 @@ class SystematicReviewRead(BaseModel):
 class SRCostTotalsRead(BaseModel):
     l1: float
     l2: float
+    extraction: float
     other: float
     grand_total: float
 

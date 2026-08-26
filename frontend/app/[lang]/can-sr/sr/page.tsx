@@ -162,6 +162,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/extract?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/extract'
             }
+            expandedMeta={<CostMeta loading={costsLoading} error={costsError} amount={cost?.totals?.extraction} currency={cost?.currency} />}
           />
         </div>
       </main>

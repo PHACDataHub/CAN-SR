@@ -4,6 +4,7 @@ export interface SRCostSummary {
   totals: {
     l1: number
     l2: number
+    extraction?: number
     other: number
     grand_total: number
   }

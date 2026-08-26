@@ -464,6 +464,66 @@ class CitsDPService:
         """
         self.ensure_screening_agent_runs_table()
 
+    def ensure_parameter_extraction_runs_table(self) -> None:
+        """Ensure the normalized parameter-extraction run storage table exists."""
+        conn = None
+        try:
+            self._require_psycopg2()
+            conn = postgres_server.conn
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS parameter_extraction_runs (
+                    id TEXT PRIMARY KEY,
+                    sr_id TEXT NOT NULL,
+                    table_name TEXT NOT NULL,
+                    citation_id INT NOT NULL,
+                    parameter_key TEXT NOT NULL,
+                    parameter_name TEXT NOT NULL,
+                    found BOOLEAN,
+                    value TEXT,
+                    explanation TEXT,
+                    evidence_sentences JSONB,
+                    evidence_tables JSONB,
+                    evidence_figures JSONB,
+                    raw_response TEXT,
+                    model TEXT,
+                    prompt_version TEXT,
+                    temperature DOUBLE PRECISION,
+                    top_p DOUBLE PRECISION,
+                    seed INT,
+                    latency_ms INT,
+                    input_tokens INT,
+                    output_tokens INT,
+                    cost_usd DOUBLE PRECISION,
+                    guardrails JSONB,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """,
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_parameter_extraction_runs_citation
+                ON parameter_extraction_runs (sr_id, table_name, citation_id)
+                """,
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_parameter_extraction_runs_parameter
+                ON parameter_extraction_runs (sr_id, table_name, parameter_key)
+                """,
+            )
+
+            conn.commit()
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
     # -----------------------
     # Agent-run persistence
     # -----------------------
@@ -524,6 +584,84 @@ class CitsDPService:
                     run.get('answer'),
                     run.get('confidence'),
                     run.get('rationale'),
+                    run.get('raw_response'),
+                    run.get('model'),
+                    run.get('prompt_version'),
+                    run.get('temperature'),
+                    run.get('top_p'),
+                    run.get('seed'),
+                    run.get('latency_ms'),
+                    run.get('input_tokens'),
+                    run.get('output_tokens'),
+                    derived_cost_usd,
+                    json.dumps(run.get('guardrails')) if run.get(
+                        'guardrails',
+                    ) is not None else None,
+                    run.get('created_at') or datetime.utcnow().isoformat() + 'Z',
+                ),
+            )
+            conn.commit()
+            return run_id
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        finally:
+            if conn:
+                pass
+
+    def insert_parameter_extraction_run(self, run: dict[str, Any]) -> str:
+        """Insert a single parameter_extraction_runs row."""
+        self._require_psycopg2()
+        self.ensure_parameter_extraction_runs_table()
+
+        run_id = str(run.get('id') or uuid.uuid4())
+        sr_id = str(run.get('sr_id') or '')
+        table_name = str(run.get('table_name') or '')
+        citation_id = int(run.get('citation_id') or 0)
+        parameter_key = str(run.get('parameter_key') or '')
+        parameter_name = str(run.get('parameter_name') or '')
+
+        if not (sr_id and table_name and citation_id and parameter_key and parameter_name):
+            raise ValueError(
+                'insert_parameter_extraction_run missing required fields',
+            )
+
+        conn = None
+        try:
+            derived_cost_usd = _derive_agent_run_cost_usd(run)
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO parameter_extraction_runs (
+                    id, sr_id, table_name, citation_id, parameter_key, parameter_name,
+                    found, value, explanation,
+                    evidence_sentences, evidence_tables, evidence_figures,
+                    raw_response,
+                    model, prompt_version, temperature, top_p, seed,
+                    latency_ms, input_tokens, output_tokens, cost_usd, guardrails, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    run_id,
+                    sr_id,
+                    table_name,
+                    citation_id,
+                    parameter_key,
+                    parameter_name,
+                    run.get('found'),
+                    run.get('value'),
+                    run.get('explanation'),
+                    json.dumps(run.get('evidence_sentences') or []),
+                    json.dumps(run.get('evidence_tables') or []),
+                    json.dumps(run.get('evidence_figures') or []),
                     run.get('raw_response'),
                     run.get('model'),
                     run.get('prompt_version'),
@@ -781,6 +919,7 @@ class CitsDPService:
     def summarize_costs_for_sr(self, sr_id: str) -> dict[str, Any]:
         self._require_psycopg2()
         self.ensure_screening_agent_runs_table()
+        self.ensure_parameter_extraction_runs_table()
 
         sr_id = str(sr_id or '').strip()
         if not sr_id:
@@ -790,6 +929,7 @@ class CitsDPService:
                 'totals': {
                     'l1': 0.0,
                     'l2': 0.0,
+                    'extraction': 0.0,
                     'other': 0.0,
                     'grand_total': 0.0,
                 },
@@ -820,6 +960,7 @@ class CitsDPService:
             totals = {
                 'l1': Decimal('0'),
                 'l2': Decimal('0'),
+                'extraction': Decimal('0'),
                 'other': Decimal('0'),
             }
             grand_total = Decimal('0')
@@ -842,16 +983,149 @@ class CitsDPService:
                 else:
                     totals['other'] += total
 
+            cur.execute(
+                """
+                SELECT
+                    parameter_key,
+                    COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+                FROM parameter_extraction_runs
+                WHERE sr_id = %s
+                  AND cost_usd IS NOT NULL
+                GROUP BY parameter_key
+                ORDER BY parameter_key
+                """,
+                (sr_id,),
+            )
+            extraction_rows = cur.fetchall() or []
+            for row in extraction_rows:
+                parameter_key = str(row.get('parameter_key') or '').strip()
+                if not parameter_key:
+                    continue
+                total = row.get('total_cost_usd') or Decimal('0')
+                if not isinstance(total, Decimal):
+                    total = Decimal(str(total))
+                breakdown[f'extraction.{parameter_key}'] = total
+                totals['extraction'] += total
+                grand_total += total
+
             return {
                 'sr_id': sr_id,
                 'currency': 'USD',
                 'totals': {
                     'l1': round(float(totals['l1']), 4),
                     'l2': round(float(totals['l2']), 4),
+                    'extraction': round(float(totals['extraction']), 4),
                     'other': round(float(totals['other']), 4),
                     'grand_total': round(float(grand_total), 4),
                 },
                 'breakdown': {k: round(float(v), 4) for k, v in breakdown.items()},
+            }
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
+    def summarize_parameter_extraction_costs(
+        self,
+        *,
+        sr_id: str,
+        table_name: str,
+        citation_ids: list[int],
+    ) -> dict[str, Any]:
+        self._require_psycopg2()
+        self.ensure_parameter_extraction_runs_table()
+
+        sr_id = str(sr_id or '').strip()
+        table_name = str(table_name or '').strip()
+
+        normalized_citation_ids: list[int] = []
+        seen_citation_ids: set[int] = set()
+        for citation_id in citation_ids or []:
+            try:
+                parsed_citation_id = int(citation_id)
+            except Exception:
+                continue
+            if parsed_citation_id <= 0 or parsed_citation_id in seen_citation_ids:
+                continue
+            seen_citation_ids.add(parsed_citation_id)
+            normalized_citation_ids.append(parsed_citation_id)
+
+        if not (sr_id and table_name and normalized_citation_ids):
+            return {
+                'sr_id': sr_id,
+                'table_name': table_name,
+                'currency': 'USD',
+                'costs': [],
+            }
+
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                """
+                SELECT
+                    citation_id,
+                    parameter_key,
+                    COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+                FROM parameter_extraction_runs
+                WHERE sr_id = %s
+                  AND table_name = %s
+                  AND citation_id = ANY(%s)
+                  AND cost_usd IS NOT NULL
+                GROUP BY citation_id, parameter_key
+                ORDER BY citation_id, parameter_key
+                """,
+                (sr_id, table_name, normalized_citation_ids),
+            )
+            rows = cur.fetchall() or []
+
+            costs_by_citation_id: dict[int, dict[str, Any]] = {
+                citation_id: {
+                    'sr_id': sr_id,
+                    'table_name': table_name,
+                    'citation_id': citation_id,
+                    'currency': 'USD',
+                    'total_cost_usd': 0.0,
+                    'parameters': {},
+                }
+                for citation_id in normalized_citation_ids
+            }
+
+            totals_by_citation_id: dict[int, Decimal] = {
+                citation_id: Decimal('0') for citation_id in normalized_citation_ids
+            }
+
+            for row in rows:
+                try:
+                    citation_id = int(row.get('citation_id') or 0)
+                except Exception:
+                    continue
+                if citation_id not in costs_by_citation_id:
+                    continue
+
+                parameter_key = str(row.get('parameter_key') or '').strip()
+                if not parameter_key:
+                    continue
+
+                amount = row.get('total_cost_usd') or Decimal('0')
+                if not isinstance(amount, Decimal):
+                    amount = Decimal(str(amount))
+
+                totals_by_citation_id[citation_id] += amount
+                costs_by_citation_id[citation_id]['parameters'][parameter_key] = round(
+                    float(amount), 4,
+                )
+
+            for citation_id, total_cost in totals_by_citation_id.items():
+                costs_by_citation_id[citation_id]['total_cost_usd'] = round(
+                    float(total_cost), 4,
+                )
+
+            return {
+                'sr_id': sr_id,
+                'table_name': table_name,
+                'currency': 'USD',
+                'costs': [costs_by_citation_id[citation_id] for citation_id in normalized_citation_ids],
             }
         except Exception:
             _safe_rollback(conn)
