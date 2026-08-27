@@ -65,7 +65,9 @@
     "go": "Go",
     "downloading": "Downloading...",
     "uploadWillReset": "Uploading a different PDF will clear Full Text screening and Extraction answers for this citation.",
-    "continue": "Continue"
+    "continue": "Continue",
+    "totalCost": "Total cost",
+    "totalCostUnavailable": "Total cost is unavailable."
   },
   "login": {
     "formTitle": "Access the Government of Canada AI Assistant Portal",
@@ -499,7 +501,8 @@
     "citation": "Citation",
     "done": "Done",
     "running": "Running",
-    "ran": "Ran"
+    "ran": "Ran",
+    "costScreeningTooltip": "Estimated total cost from all screening runs for this citation."
   },
   "extract": {
     "parameters": "Parameters",
@@ -518,7 +521,8 @@
     "enterValue": "Enter value (free text)",
     "noParameters": "No parameters found for this review or failed to load criteria.",
     "hideDescription": "Hide description",
-    "showDescription": "Show description"
+    "showDescription": "Show description",
+    "costExtractionTooltip": "Estimated total cost from all parameter extraction runs for this citation."
   },
   "pdf": {
     "fullText": "Full text",

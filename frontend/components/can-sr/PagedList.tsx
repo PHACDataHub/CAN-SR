@@ -651,12 +651,12 @@ export default function PagedList({
                 const citationCost = getCitationCost(Number(data.id))
                 const hasRuns = screeningStep === 'extract'
                   ? extractionCostsByCitation[Number(data.id)] !== undefined
-                  : (latestRunsByCitation[Number(data.id)] || []).length > 0
+                  : (latestRunsByCitation[Number(data.id)] || []).length >= 0
 
                 if (!hasRuns) return null
 
                 return (
-                  <SimpleTooltip content={screeningStep === 'extract' ? 'Estimated total cost from all parameter extraction runs for this citation' : 'Estimated total cost from all screening runs for this citation'}>
+                  <SimpleTooltip content={screeningStep === 'extract' ? dict.extract.costExtractionTooltip : dict.screening.costScreeningTooltip}>
                     <span className="inline-flex rounded border border-gray-200 bg-white px-2 text-xs font-medium text-gray-600 shadow-sm">
                       {formatCurrency(citationCost, screeningStep === 'extract' ? extractionCostsByCitation[Number(data.id)]?.currency : 'USD')}
                     </span>
