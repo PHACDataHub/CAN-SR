@@ -8,7 +8,7 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
-import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue } from '@/components/can-sr/screening-citation-context'
+import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue, resolveDisplayedAnswer } from '@/components/can-sr/screening-citation-context'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -450,7 +450,9 @@ export default function CanSrL1ScreenPage() {
       const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
 
       const humanRaw = resolveConfiguredValue(citation as any, humanCol)
-      const llmRaw = (citation as any)?.[llmCol]
+      const llmRaw =
+        (citation as any)?.[`llm_l1_${llmCol.replace(/^llm_/, '')}`] ??
+        (citation as any)?.[llmCol]
 
       const parseMaybeJson = (v: any) => {
         if (v === undefined || v === null) return null
@@ -468,12 +470,6 @@ export default function CanSrL1ScreenPage() {
       const llmParsed = parseMaybeJson(llmRaw)
 
       // 1) Prefer human_* for dropdown
-      if (humanParsed && typeof humanParsed === 'object' && (humanParsed as any).selected !== undefined) {
-        newSelections[idx] = (humanParsed as any).selected
-      } else if (extractHumanAnswer(humanParsed)) {
-        newSelections[idx] = extractHumanAnswer(humanParsed)
-      }
-
       // 2) Always populate AI panel from llm_* when available
       if (llmParsed && typeof llmParsed === 'object') {
         newAiPanels[idx] = llmParsed
@@ -482,6 +478,9 @@ export default function CanSrL1ScreenPage() {
         newAiPanels[idx] = { selected: llmParsed }
         newPanelOpen[idx] = false
       }
+
+      const displayed = resolveDisplayedAnswer(humanParsed, newAiPanels[idx])
+      if (displayed) newSelections[idx] = displayed
 
     })
 

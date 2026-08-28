@@ -546,6 +546,8 @@ it('shares selected imported columns with visible columns and duplicate matching
   expect(await screen.findByRole('checkbox', { name: 'Title' })).toBeChecked()
   expect(screen.getByRole('checkbox', { name: 'Abstract' })).toBeChecked()
   expect(screen.getByRole('checkbox', { name: 'Author' })).toBeChecked()
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Title source field' }), 'Title')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Abstract source field' }), 'Abstract')
   await user.click(screen.getByRole('checkbox', { name: 'Author' }))
   await user.click(screen.getByRole('button', { name: 'Import references' }))
 
@@ -1180,7 +1182,7 @@ it('opens the column chooser from the trailing plus column', async () => {
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
 
-it('warns about missing required columns without importing', async () => {
+it('requires explicit title and abstract selections without importing', async () => {
   const user = userEvent.setup()
   render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
   await user.click(screen.getByRole('button', { name: 'Add references' }))
@@ -1189,7 +1191,11 @@ it('warns about missing required columns without importing', async () => {
     new File(['Title\nA'], 'invalid.csv', { type: 'text/csv' }),
   )
   await user.click(screen.getByRole('button', { name: 'Import references' }))
-  expect(await screen.findByText('Missing Abstract column')).toBeInTheDocument()
+  expect(
+    await screen.findByText(
+      'Select the source columns to use for Title and Abstract before importing.',
+    ),
+  ).toBeInTheDocument()
   expect(authenticatedFetch).not.toHaveBeenCalledWith(
     expect.stringContaining('/citations/import?'),
     expect.anything(),
@@ -1217,6 +1223,8 @@ it('reports an import API failure', async () => {
     screen.getByLabelText('Reference file'),
     new File(['Title,Abstract\nA,B'], 'append.csv', { type: 'text/csv' }),
   )
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Title source field' }), 'Title')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Abstract source field' }), 'Abstract')
   await user.click(screen.getByRole('button', { name: 'Import references' }))
   expect(await screen.findByRole('status')).toHaveTextContent(
     'Server rejected import',
@@ -1257,6 +1265,8 @@ it('allows duplicate imports to be explicitly overridden', async () => {
     ),
   ).toBeInTheDocument()
   await user.click(screen.getByRole('checkbox', { name: 'Import Duplicates' }))
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Title source field' }), 'Title')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Abstract source field' }), 'Abstract')
   await user.click(screen.getByRole('button', { name: 'Import references' }))
   expect(await screen.findByRole('status')).toHaveTextContent('Imported: 2')
 })
