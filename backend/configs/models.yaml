@@ -1,7 +1,7 @@
 default_model: GPT-5.4-Mini
 default_pricing_usd:
-  prompt: 0.74
-  completion: 14.8
+  prompt: 0.00075
+  completion: 0.0045
 
 models:
   GPT-5.4-Nano:
@@ -10,8 +10,8 @@ models:
     requests_per_minute: 1000
     tokens_per_minute: 1000000
     pricing_usd:
-      prompt: 0.74
-      completion: 14.8
+      prompt: 0.0002
+      completion: 0.00125
 
   GPT-5.4-Mini:
     deployment: gpt-5.4-mini
@@ -19,5 +19,5 @@ models:
     requests_per_minute: 1000
     tokens_per_minute: 1000000
     pricing_usd:
-      prompt: 0.000074
-      completion: 0.000148
+      prompt: 0.00075
+      completion: 0.0045

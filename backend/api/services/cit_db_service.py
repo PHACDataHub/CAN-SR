@@ -1112,13 +1112,13 @@ class CitsDPService:
                     amount = Decimal(str(amount))
 
                 totals_by_citation_id[citation_id] += amount
-                costs_by_citation_id[citation_id]['parameters'][parameter_key] = round(
-                    float(amount), 4,
+                costs_by_citation_id[citation_id]['parameters'][parameter_key] = float(
+                    amount,
                 )
 
             for citation_id, total_cost in totals_by_citation_id.items():
-                costs_by_citation_id[citation_id]['total_cost_usd'] = round(
-                    float(total_cost), 4,
+                costs_by_citation_id[citation_id]['total_cost_usd'] = float(
+                    total_cost,
                 )
 
             return {
