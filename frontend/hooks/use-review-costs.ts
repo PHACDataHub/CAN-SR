@@ -32,6 +32,7 @@ interface ExtractionCitationCostsState {
 async function fetchReviewCost(srId: string): Promise<SRCostSummary> {
   const res = await authenticatedFetch(
     `/api/can-sr/reviews/costs?sr_id=${encodeURIComponent(srId)}`,
+    { cache: 'no-store' },
   )
 
   if (!res.ok) {

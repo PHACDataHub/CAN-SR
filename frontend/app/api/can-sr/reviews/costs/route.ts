@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
             headers: {
                 Authorization: authHeader,
             },
+            cache: 'no-store',
         })
 
         const data = await res.json().catch(() => ({}))
