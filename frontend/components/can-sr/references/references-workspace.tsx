@@ -59,9 +59,12 @@ type WorkspacePage = {
   dataset_revision?: unknown
   duplicate_run?: {
     run_id?: string | null
-    status?: 'succeeded' | 'not_run'
+    status?: 'running' | 'succeeded' | 'failed' | 'not_run'
+    error?: string | null
   }
 }
+
+type DedupRunState = 'not_run' | 'running' | 'succeeded' | 'failed' | 'stale'
 
 type DuplicateReview = {
   group_id: string
@@ -129,9 +132,8 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
   const [matchingThreshold, setMatchingThreshold] = useState(0.7)
   const [draftDedupFields, setDraftDedupFields] = useState<string[]>([])
   const [dedupRunning, setDedupRunning] = useState(false)
-  const [dedupRunStatus, setDedupRunStatus] = useState<
-    'not_run' | 'succeeded' | 'stale'
-  >('not_run')
+  const [dedupRunStatus, setDedupRunStatus] = useState<DedupRunState>('not_run')
+  const [activeDedupRunId, setActiveDedupRunId] = useState<string | null>(null)
   const [reviewGroupIndex, setReviewGroupIndex] = useState(0)
   const [reviews, setReviews] = useState<DuplicateReview[]>([])
   const [selectedSurvivors, setSelectedSurvivors] = useState<
@@ -189,14 +191,55 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       return
     }
     setWorkspace(data)
-    setDedupRunStatus((current) =>
-      current === 'stale'
-        ? 'stale'
-        : data?.duplicate_run?.status === 'succeeded'
-          ? 'succeeded'
-          : 'not_run',
-    )
+    setActiveDedupRunId(data?.duplicate_run?.run_id || null)
+    setDedupRunStatus((current) => {
+      if (current === 'stale') return 'stale'
+      if (data?.duplicate_run?.status === 'running') return 'running'
+      if (data?.duplicate_run?.status === 'succeeded') return 'succeeded'
+      if (data?.duplicate_run?.status === 'failed') return 'failed'
+      return 'not_run'
+    })
+    if (data?.duplicate_run?.status === 'failed' && data?.duplicate_run?.error) {
+      setWorkspaceError(data.duplicate_run.error)
+    }
   }
+
+  useEffect(() => {
+    if (!activeDedupRunId || dedupRunStatus !== 'running') return
+    let canceled = false
+    const poll = async () => {
+      while (!canceled) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        if (canceled) return
+        const response = await authenticatedFetch(
+          `/api/can-sr/citations/workspace/duplicate-runs?sr_id=${encodeURIComponent(srId)}&run_id=${encodeURIComponent(activeDedupRunId)}`,
+        )
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          setDedupRunning(false)
+          setDedupRunStatus('failed')
+          setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
+          return
+        }
+        if (data?.status === 'running') {
+          continue
+        }
+        setDedupRunning(false)
+        if (data?.status === 'succeeded') {
+          setDedupRunStatus('succeeded')
+          await loadWorkspace()
+          return
+        }
+        setDedupRunStatus('failed')
+        setWorkspaceError(data?.error || copy.gridFailed)
+        return
+      }
+    }
+    void poll()
+    return () => {
+      canceled = true
+    }
+  }, [activeDedupRunId, dedupRunStatus, srId])
 
   useEffect(() => {
     void loadWorkspace()
@@ -673,13 +716,18 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
       { method: 'POST' },
     )
     const data = await response.json().catch(() => ({}))
-    setDedupRunning(false)
     if (!response.ok) {
+      setDedupRunning(false)
+      setDedupRunStatus('failed')
       setWorkspaceError(data?.error || data?.detail || copy.gridFailed)
       return
     }
-    setDedupRunStatus('succeeded')
-    await loadWorkspace()
+    setActiveDedupRunId(data?.run_id || null)
+    setDedupRunStatus(data?.status === 'succeeded' ? 'succeeded' : 'running')
+    if (data?.status === 'succeeded') {
+      setDedupRunning(false)
+      await loadWorkspace()
+    }
   }
   const openDuplicateFilter = () => {
     setDraftDuplicateStatus(duplicateStatus)
@@ -1257,12 +1305,14 @@ export default function ReferencesWorkspace({ srId, hasDataset, copy }: Props) {
                               type="button"
                               onClick={() => void runDeduplication()}
                               disabled={dedupRunning}
-                              className={`rounded p-1 hover:bg-gray-200 ${dedupRunning ? 'text-emerald-700' : dedupRunStatus === 'stale' ? 'text-amber-600' : 'text-emerald-700'}`}
+                              className={`rounded p-1 hover:bg-gray-200 ${dedupRunning ? 'text-emerald-700' : dedupRunStatus === 'stale' ? 'text-amber-600' : dedupRunStatus === 'failed' ? 'text-red-600' : 'text-emerald-700'}`}
                               aria-label={
                                 dedupRunning
                                   ? copy.runningDuplicateCalculation
                                   : dedupRunStatus === 'succeeded'
                                     ? copy.rerunDuplicateCalculation
+                                    : dedupRunStatus === 'failed'
+                                      ? copy.runDuplicateCalculation
                                     : dedupRunStatus === 'stale'
                                       ? copy.rerunDuplicateCalculation
                                       : copy.runDuplicateCalculation

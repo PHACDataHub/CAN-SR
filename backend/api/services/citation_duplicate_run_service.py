@@ -23,7 +23,7 @@ class CitationDuplicateRunService:
     def _key(self, revision: Any, fields: list[str]) -> tuple[str, str]:
         return json.dumps(revision, sort_keys=True, default=str), json.dumps(fields, separators=(',', ':'))
 
-    def get_cached(self, sr_id: str, table_name: str, revision: Any, fields: list[str]) -> dict[str, Any] | None:
+    def get_latest(self, sr_id: str, table_name: str, revision: Any, fields: list[str]) -> dict[str, Any] | None:
         revision_json, fields_json = self._key(revision, fields)
         cur = postgres_server.conn.cursor()
         try:
@@ -33,8 +33,8 @@ class CitationDuplicateRunService:
                        FROM citation_duplicate_runs
                        WHERE sr_id=%s AND citation_table_name=%s
                          AND dataset_revision=%s::jsonb AND fields=%s::jsonb
-                         AND status='succeeded'
-                       ORDER BY completed_at DESC LIMIT 1''',
+                       ORDER BY started_at DESC NULLS LAST, completed_at DESC NULLS LAST
+                       LIMIT 1''',
                     (sr_id, table_name, revision_json, fields_json),
                 )
             except Exception:
@@ -49,6 +49,45 @@ class CitationDuplicateRunService:
                 'status': row[1] if not isinstance(row, dict) else row.get('status'),
                 'result': json.loads(result) if isinstance(result, str) else result,
                 'error': row[3] if not isinstance(row, dict) else row.get('error'),
+                'started_at': row[4] if not isinstance(row, dict) else row.get('started_at'),
+                'completed_at': row[5] if not isinstance(row, dict) else row.get('completed_at'),
+            }
+        finally:
+            cur.close()
+
+    def get_cached(self, sr_id: str, table_name: str, revision: Any, fields: list[str]) -> dict[str, Any] | None:
+        latest = self.get_latest(sr_id, table_name, revision, fields)
+        if not latest or latest.get('status') != 'succeeded':
+            return None
+        return latest
+
+    def get_by_id(self, run_id: str) -> dict[str, Any] | None:
+        cur = postgres_server.conn.cursor()
+        try:
+            cur.execute(
+                '''SELECT id, status, result, error, started_at, completed_at,
+                          sr_id, citation_table_name, dataset_revision, fields
+                   FROM citation_duplicate_runs
+                   WHERE id=%s''',
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = row[2] if not isinstance(row, dict) else row.get('result')
+            dataset_revision = row[8] if not isinstance(row, dict) else row.get('dataset_revision')
+            fields = row[9] if not isinstance(row, dict) else row.get('fields')
+            return {
+                'run_id': str(row[0] if not isinstance(row, dict) else row.get('id')),
+                'status': row[1] if not isinstance(row, dict) else row.get('status'),
+                'result': json.loads(result) if isinstance(result, str) else result,
+                'error': row[3] if not isinstance(row, dict) else row.get('error'),
+                'started_at': row[4] if not isinstance(row, dict) else row.get('started_at'),
+                'completed_at': row[5] if not isinstance(row, dict) else row.get('completed_at'),
+                'sr_id': row[6] if not isinstance(row, dict) else row.get('sr_id'),
+                'citation_table_name': row[7] if not isinstance(row, dict) else row.get('citation_table_name'),
+                'dataset_revision': json.loads(dataset_revision) if isinstance(dataset_revision, str) else dataset_revision,
+                'fields': json.loads(fields) if isinstance(fields, str) else fields,
             }
         finally:
             cur.close()

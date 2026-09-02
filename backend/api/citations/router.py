@@ -20,6 +20,7 @@ import json
 import os
 import re
 import time
+import asyncio
 from datetime import datetime
 from typing import Any
 from typing import Dict
@@ -49,6 +50,9 @@ from ..services.citation_deduplication_preferences_service import citation_dedup
 from ..services.citation_deduplication_service import recompute_affected_duplicate_groups
 from ..services.citation_duplicate_review_service import citation_duplicate_review_service
 from ..services.citation_duplicate_run_service import citation_duplicate_run_service
+from ..jobs.citation_dedup_tasks import run_citation_deduplication
+from ..jobs.citation_dedup_tasks import run_citation_deduplication_sync
+from ..jobs.procrastinate_app import jobs_enabled
 from ..services.storage import storage_service
 from ..criteria.context import resolve_source_value
 from .export_models import CitationExportRequest, CitationExportSchema
@@ -1498,9 +1502,17 @@ async def list_workspace_citations(
             if column not in {'id', 'provenance'}
         ]
         response['deduplication_fields'] = configured_fields
+        latest_run = await run_in_threadpool(
+            citation_duplicate_run_service.get_latest,
+            sr_id,
+            table_name,
+            response.get('dataset_revision'),
+            configured_fields,
+        )
         response['duplicate_run'] = {
-            'run_id': (cached or {}).get('run_id'),
-            'status': 'succeeded' if cached else 'not_run',
+            'run_id': (latest_run or {}).get('run_id'),
+            'status': (latest_run or {}).get('status') or 'not_run',
+            'error': (latest_run or {}).get('error'),
         }
         return response
     except RuntimeError as rexc:
@@ -1803,20 +1815,81 @@ async def run_workspace_deduplication(
         item['column_name'] for item in await run_in_threadpool(cits_dp_service.get_table_columns, table_name)
         if item['column_name'] not in {'id', 'provenance'}
     ]
-    cached = await run_in_threadpool(
-        citation_duplicate_run_service.get_cached, sr_id, table_name, (), configured,
+    revision, _existing_result = await run_in_threadpool(
+        cits_dp_service.load_duplicate_rows,
+        table_name,
+        configured,
+        1.0,
     )
+    existing = await run_in_threadpool(
+        citation_duplicate_run_service.get_latest,
+        sr_id,
+        table_name,
+        revision,
+        configured,
+    )
+    if existing and existing.get('status') in {'running', 'succeeded'}:
+        return {
+            'run_id': existing.get('run_id'),
+            'status': existing.get('status'),
+            'dataset_revision': revision,
+            'fields': configured,
+            'existing': True,
+        }
     try:
-        revision, result = await run_in_threadpool(cits_dp_service.load_duplicate_rows, table_name, configured, await run_in_threadpool(citation_deduplication_preferences_service.get_threshold, sr_id, table_name, actor_id))
         run_id = await run_in_threadpool(
             citation_duplicate_run_service.start, sr_id, table_name, revision, configured, actor_id,
         )
-        await run_in_threadpool(citation_duplicate_run_service.finish, run_id, result, None)
-        return {'run_id': run_id, 'status': 'succeeded', 'dataset_revision': revision, 'fields': configured}
+        if jobs_enabled():
+            await run_citation_deduplication.defer_async(
+                sr_id=sr_id,
+                table_name=table_name,
+                actor_id=actor_id,
+                fields=configured,
+                dataset_revision=revision,
+                run_id=run_id,
+            )
+        else:
+            asyncio.create_task(
+                asyncio.to_thread(
+                    run_citation_deduplication_sync,
+                    sr_id=sr_id,
+                    table_name=table_name,
+                    actor_id=actor_id,
+                    fields=configured,
+                    dataset_revision=revision,
+                    run_id=run_id,
+                ),
+            )
+        return {'run_id': run_id, 'status': 'running', 'dataset_revision': revision, 'fields': configured}
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f'Duplicate calculation failed: {exc}',
         )
+
+
+@router.get('/{sr_id}/citations/workspace/duplicate-runs/{run_id}')
+async def get_workspace_deduplication_run(
+    sr_id: str,
+    run_id: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    table_name = (screening or {}).get('table_name')
+    if not table_name:
+        raise HTTPException(
+            status_code=400, detail='Citation dataset is not configured',
+        )
+    run = await run_in_threadpool(citation_duplicate_run_service.get_by_id, run_id)
+    if not run or run.get('sr_id') != sr_id or run.get('citation_table_name') != table_name:
+        raise HTTPException(status_code=404, detail='Duplicate run not found')
+    return {
+        'run_id': run.get('run_id'),
+        'status': run.get('status'),
+        'error': run.get('error'),
+        'fields': run.get('fields'),
+        'dataset_revision': run.get('dataset_revision'),
+    }
 
 
 @router.put('/{sr_id}/citations/workspace/deduplication-preferences')
