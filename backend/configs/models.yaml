@@ -1,4 +1,8 @@
 default_model: GPT-5.4-Mini
+# Prices from Azure OpenAI Pricing
+default_pricing_usd:
+  prompt: 0.00075
+  completion: 0.0045
 
 models:
   GPT-5.4-Nano:
@@ -6,9 +10,15 @@ models:
     api_version: 2025-04-01-preview
     requests_per_minute: 1000
     tokens_per_minute: 1000000
+    pricing_usd:
+      prompt: 0.0002
+      completion: 0.00125
 
   GPT-5.4-Mini:
     deployment: gpt-5.4-mini
     api_version: 2025-04-01-preview
     requests_per_minute: 1000
     tokens_per_minute: 1000000
+    pricing_usd:
+      prompt: 0.00075
+      completion: 0.0045

@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections import deque
-import json
 import logging
 import re
 import time
+from collections import deque
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -129,6 +129,8 @@ class CachedTokenProvider:
 class AzureOpenAIClient:
     """Client for Azure OpenAI chat completions"""
 
+    model_pricing_usd: dict[str, dict[str, Decimal]]
+
     def __init__(self):
         self._config_error: str | None = None
         self.default_model = settings.DEFAULT_CHAT_MODEL
@@ -160,6 +162,9 @@ class AzureOpenAIClient:
             self._models_yaml,
         )
         self.model_configs = self._load_model_configs(self._models_yaml)
+        self.model_pricing_usd = self._load_model_pricing_usd(
+            self._models_yaml,
+        )
         self.default_model = self._resolve_default_model(self.default_model)
         self._rate_limiters: dict[str, DeploymentRateLimiter] = {}
 
@@ -277,6 +282,72 @@ class AzureOpenAIClient:
             return cfg
 
         return {}
+
+    def _zero_pricing_usd(self) -> dict[str, Decimal]:
+        return {
+            'prompt': Decimal('0'),
+            'completion': Decimal('0'),
+        }
+
+    def _load_model_pricing_usd(
+        self,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, Decimal]]:
+        source = data or {}
+        models = self._extract_models_mapping(source)
+        pricing: dict[str, dict[str, Decimal]] = {
+            'default': self._zero_pricing_usd(),
+        }
+
+        parsed_default = self._parse_pricing_entry(
+            source.get('default_pricing_usd'),
+            'default',
+        )
+        if parsed_default is not None:
+            pricing['default'] = parsed_default
+
+        for display_name, meta in models.items():
+            if not isinstance(meta, dict):
+                continue
+            parsed = self._parse_pricing_entry(
+                meta.get('pricing_usd'),
+                str(display_name),
+            )
+            if parsed is not None:
+                pricing[str(display_name)] = parsed
+
+        return pricing
+
+    def _parse_pricing_entry(
+        self,
+        entry: Any,
+        model_name: str,
+    ) -> dict[str, Decimal] | None:
+        if not isinstance(entry, dict):
+            return None
+        try:
+            prompt = Decimal(str(entry['prompt']).strip())
+            completion = Decimal(str(entry['completion']).strip())
+        except (KeyError, ArithmeticError, TypeError, ValueError):
+            logger.warning(
+                'Ignoring invalid pricing_usd for model %s', model_name,
+            )
+            return None
+        return {
+            'prompt': prompt,
+            'completion': completion,
+        }
+
+    def get_model_pricing_usd(
+        self,
+        model: str | None,
+    ) -> dict[str, Decimal]:
+        normalized_model = self.normalize_model_key(model) or 'default'
+        pricing = getattr(self, 'model_pricing_usd', None)
+        if not isinstance(pricing, dict):
+            pricing = {'default': self._zero_pricing_usd()}
+        default_pricing = pricing.get('default') or self._zero_pricing_usd()
+        return pricing.get(normalized_model, default_pricing)
 
     def _resolve_default_model(self, desired: str) -> str:
         yaml_default = (self._catalog_default_model or '').strip()
@@ -537,7 +608,9 @@ class AzureOpenAIClient:
         if not dep or dep in self._disabled_deployments:
             return
         self._disabled_deployments.add(dep)
-        logger.warning('Disabling Azure OpenAI deployment %s after failure: %s', dep, reason)
+        logger.warning(
+            'Disabling Azure OpenAI deployment %s after failure: %s', dep, reason,
+        )
 
     def _get_retry_model_key(self, current_deployment: str) -> str | None:
         preferred_keys: list[str] = []
@@ -566,7 +639,9 @@ class AzureOpenAIClient:
         chars = 0
         image_count = 0
         for message in request_kwargs.get('messages') or []:
-            content = message.get('content', '') if isinstance(message, dict) else ''
+            content = message.get('content', '') if isinstance(
+                message, dict,
+            ) else ''
             if isinstance(content, str):
                 chars += len(content)
             elif isinstance(content, list):
@@ -580,7 +655,7 @@ class AzureOpenAIClient:
         output_tokens = int(
             request_kwargs.get('max_completion_tokens')
             or request_kwargs.get('max_tokens')
-            or 0
+            or 0,
         )
         return max(1, (chars + 3) // 4 + image_count * 1000 + output_tokens)
 
@@ -675,8 +750,12 @@ class AzureOpenAIClient:
                     self._disable_deployment(deployment, e)
                     retry_model = self._get_retry_model_key(deployment)
                     if retry_model:
-                        retry_config = self.model_configs.get(retry_model) or {}
-                        retry_deployment = str(retry_config.get('deployment') or '').strip()
+                        retry_config = self.model_configs.get(
+                            retry_model,
+                        ) or {}
+                        retry_deployment = str(
+                            retry_config.get('deployment') or '',
+                        ).strip()
                         if retry_deployment and retry_deployment not in attempted_deployments:
                             logger.warning(
                                 'Retrying Azure OpenAI request with fallback deployment %s after %s was not found',
@@ -684,7 +763,9 @@ class AzureOpenAIClient:
                                 deployment,
                             )
                             current_model = retry_model
-                            current_request = {**current_request, 'model': retry_deployment}
+                            current_request = {
+                                **current_request, 'model': retry_deployment,
+                            }
                             continue
 
                 raise
@@ -720,6 +801,10 @@ class AzureOpenAIClient:
         config = self._get_model_config(model)
         deployment = config['deployment']
 
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
         try:
             # Prefer true async client when available; otherwise offload the sync
             # network call to a threadpool to avoid blocking the event loop.
@@ -740,39 +825,38 @@ class AzureOpenAIClient:
 
             if stream:
                 return response
-            else:
-                usage = response.usage
-                completion_tokens = usage.completion_tokens if usage else 0
-                prompt_tokens = usage.prompt_tokens if usage else 0
-                total_tokens = usage.total_tokens if usage else 0
 
-                logger.info(
-                    'Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s',
-                    model,
-                    deployment,
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                )
-                return {
-                    'choices': [
-                        {
-                            'message': {
-                                'content': response.choices[0].message.content,
-                                'role': response.choices[0].message.role,
-                            },
-                            'finish_reason': response.choices[0].finish_reason,
+            usage = response.usage
+            completion_tokens = usage.completion_tokens if usage else 0
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            total_tokens = usage.total_tokens if usage else 0
+
+            logger.info(
+                'Azure OpenAI usage model=%s deployment=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s',
+                model,
+                deployment,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            )
+            return {
+                'choices': [
+                    {
+                        'message': {
+                            'content': response.choices[0].message.content,
+                            'role': response.choices[0].message.role,
                         },
-                    ],
-                    'usage': {
-                        'completion_tokens': completion_tokens,
-                        'prompt_tokens': prompt_tokens,
-                        'total_tokens': total_tokens,
+                        'finish_reason': response.choices[0].finish_reason,
                     },
-                }
+                ],
+                'usage': {
+                    'completion_tokens': completion_tokens,
+                    'prompt_tokens': prompt_tokens,
+                    'total_tokens': total_tokens,
+                },
+            }
 
         except Exception as e:
-            print(f"Error calling Azure OpenAI: {e}")
             raise Exception(
                 f"Failed to get response from Azure OpenAI: {str(e)}",
             )

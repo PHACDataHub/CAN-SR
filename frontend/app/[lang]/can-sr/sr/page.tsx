@@ -3,11 +3,15 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { authenticatedFetch, getAuthToken, getTokenType } from '@/lib/auth'
+import CostMeta from '@/components/can-sr/cost-meta'
 import StackingCard from '@/components/can-sr/stacking-card'
 import GCHeader, { SRHeader } from '@/components/can-sr/headers'
 import ManageUsersPopup from '@/components/can-sr/setup/manage-users-popup'
+import { useReviewCost } from '@/hooks/use-review-costs'
 import { Settings } from 'lucide-react'
 import { useDictionary } from '../../DictionaryProvider'
+
+const COST_POLL_INTERVAL_MS = 15000
 
 export default function CanSrLandingPage() {
   const router = useRouter()
@@ -24,6 +28,7 @@ export default function CanSrLandingPage() {
   const [sr, setSr] = useState<any>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const { cost, loading: costsLoading, error: costsError } = useReviewCost(srId, COST_POLL_INTERVAL_MS)
 
   useEffect(() => {
     if (!srId) {
@@ -135,6 +140,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/l1-screen?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/l1-screen'
             }
+            expandedMeta={<CostMeta loading={costsLoading} error={costsError} amount={cost?.totals?.l1} currency={cost?.currency} />}
           />
 
           <StackingCard
@@ -145,6 +151,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/l2-screen?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/l2-screen'
             }
+            expandedMeta={<CostMeta loading={costsLoading} error={costsError} amount={cost?.totals?.l2} currency={cost?.currency} />}
           />
 
           <StackingCard
@@ -155,6 +162,7 @@ export default function CanSrLandingPage() {
                 ? `/can-sr/extract?sr_id=${encodeURIComponent(srId)}`
                 : '/can-sr/extract'
             }
+            expandedMeta={<CostMeta loading={costsLoading} error={costsError} amount={cost?.totals?.extraction} currency={cost?.currency} />}
           />
         </div>
       </main>

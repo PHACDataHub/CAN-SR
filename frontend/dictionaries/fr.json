@@ -65,7 +65,9 @@
     "go": "Aller",
     "downloading": "Téléchargement...",
     "uploadWillReset": "Le téléversement d’un PDF différent effacera les réponses de l’évaluation en texte intégral et de l’extraction pour cette citation.",
-    "continue": "Continuer"
+    "continue": "Continuer",
+    "totalCost": "Coût total",
+    "totalCostUnavailable": "Le coût total est indisponible."
   },
   "login": {
     "formTitle": "Accédez au portail de l'assistant IA du gouvernement du Canada",
@@ -499,7 +501,8 @@
     "citation": "Citation",
     "done": "Terminé",
     "running": "Exécution en cours",
-    "ran": "Exécuté"
+    "ran": "Exécuté",
+    "costScreeningTooltip": "Coût total estimé à partir de toutes les exécutions de dépistage pour cette citation."
   },
   "extract": {
     "parameters": "Paramètres",
@@ -518,7 +521,8 @@
     "enterValue": "Entrez une valeur (texte libre)",
     "noParameters": "Aucun paramètre trouvé pour cette revue ou échec du chargement des critères.",
     "hideDescription": "Masquer la description",
-    "showDescription": "Afficher la description"
+    "showDescription": "Afficher la description",
+    "costExtractionTooltip": "Coût total estimé à partir de toutes les exécutions d'extraction de paramètres pour cette citation."
   },
   "pdf": {
     "fullText": "Texte intégral",

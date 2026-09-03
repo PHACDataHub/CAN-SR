@@ -1,8 +1,11 @@
 import { getAuthToken, getTokenType } from '@/lib/auth'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
+import { formatCurrency } from '@/components/can-sr/cost-meta'
+import { useExtractionCitationCosts } from '@/hooks/use-review-costs'
 import { Bot, Check } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
+import { SimpleTooltip} from '@/components/ui/tooltip'
 
 type CitationInfo = {
   citationIds: number[]
@@ -40,6 +43,15 @@ type LatestAgentRun = {
   confidence?: number | null
   created_at?: string
   guardrails?: any
+  cost_usd?: number | null
+  total_cost_usd?: number | null
+}
+
+function sumCitationCosts(runs: LatestAgentRun[]): number {
+  return runs.reduce(
+    (total, run) => total + (run.total_cost_usd ?? run.cost_usd ?? 0),
+    0,
+  )
 }
 
 function hasGuardrailIssue(g: any): boolean {
@@ -120,6 +132,8 @@ export default function PagedList({
   const filterMode = filterModeProp || filterModeLocal
 
   const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
+  const extractionCitationIds = screeningStep === 'extract' ? citationIds : []
+  const { costsByCitationId: extractionCostsByCitation } = useExtractionCitationCosts(srId, extractionCitationIds)
 
   // Request cancellation + dedupe (prevents slower responses from overwriting newer filter/page state)
   const batchAbortRef = useRef<AbortController | null>(null)
@@ -128,6 +142,15 @@ export default function PagedList({
   const runsKeyRef = useRef<string>('')
 
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+
+  const getCitationCost = (citationId: number): number => {
+    if (screeningStep === 'extract') {
+      return extractionCostsByCitation[citationId]?.total_cost_usd ?? 0
+    }
+    const runs = latestRunsByCitation[citationId] || []
+    return sumCitationCosts(runs)
+  }
+
 
   // --- paging ---
   useEffect(() => {
@@ -623,22 +646,39 @@ export default function PagedList({
               ) : null}
             </div>
 
-            <div className="flex flex-col items-center justify-center space-y-3">
-              <button
-                onClick={() =>
-                  router.push(
-                    `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}&filter=${encodeURIComponent(filterMode)}`,
-                  )
-                }
-                className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
-              >
-                {dict.common.view}
-              </button>
+            <div className="flex flex-col items-center self-start">
+              {(() => {
+                const citationCost = getCitationCost(Number(data.id))
+                const hasRuns = screeningStep === 'extract'
+                  ? extractionCostsByCitation[Number(data.id)] !== undefined
+                  : (latestRunsByCitation[Number(data.id)] || []).length >= 0
+
+                if (!hasRuns) return null
+
+                return (
+                  <SimpleTooltip content={screeningStep === 'extract' ? dict.extract.costExtractionTooltip : dict.screening.costScreeningTooltip}>
+                    <span className="inline-flex rounded border border-gray-200 bg-white px-2 text-xs font-medium text-gray-600 shadow-sm">
+                      {formatCurrency(citationCost, screeningStep === 'extract' ? extractionCostsByCitation[Number(data.id)]?.currency : 'USD')}
+                    </span>
+                  </SimpleTooltip>
+                )
+              })()}
+              <div className="mt-3 flex flex-col items-center space-y-3">
+                <button
+                  onClick={() =>
+                    router.push(
+                      `/${lang}/can-sr/${encodeURIComponent(pageview)}/view?sr_id=${encodeURIComponent(srId || '')}&citation_id=${data.id}&screening=${screeningStep}&filter=${encodeURIComponent(filterMode)}`,
+                    )
+                  }
+                  className="w-[90px] rounded-md bg-emerald-600 px-3 py-3 text-sm font-medium text-white hover:bg-emerald-700"
+                >
+                  {dict.common.view}
+                </button>
 
               {screeningStep !== 'l1' ? (
                 <>
                   <button
-                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                    className="w-[90px] rounded-md bg-emerald-600 px-3 py-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                     onClick={() => onChooseFile(data.id)}
                     disabled={pdfLinkageActive}
                     title={pdfLinkageActive ? 'Upload is disabled while PDF linkage is active' : undefined}
@@ -660,7 +700,7 @@ export default function PagedList({
               {screeningStep !== 'l2' || showClassify[data.id] ? (
                 <button
                   onClick={() => classifyCitationById(data.id)}
-                  className="w-[90px] rounded-md bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-700"
+                  className="w-[90px] rounded-md bg-emerald-600 px-3 py-3 text-sm font-medium text-white hover:bg-emerald-700"
                 >
                   {dict.common.classify}
                 </button>
@@ -673,7 +713,8 @@ export default function PagedList({
                 {humanVerified[data.id] ? (
                   <Check className="h-6 w-6 text-green-600" />
                 ) : null}
-              </div>
+               </div>
+             </div>
             </div>
           </li>
         ))}

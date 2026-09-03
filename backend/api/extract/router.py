@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -109,6 +111,70 @@ def _list_set(seq: list[str]) -> list[str]:
             seen.add(x)
             out.append(x)
     return out
+
+
+def _parameter_key_from_column(col_name: str) -> str:
+    col = str(col_name or '')
+    return col.removeprefix('llm_param_') if col.startswith('llm_param_') else col
+
+
+@router.get('/{sr_id}/citations/costs')
+async def get_extraction_costs(
+    sr_id: str,
+    ids: str,
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+):
+    """Summarize extraction costs for many citations in a single request."""
+
+    try:
+        _sr, screening = await load_sr_and_check(sr_id, current_user, srdb_service)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to load systematic review or screening: {e}',
+        )
+
+    table_name = (screening or {}).get('table_name') or 'citations'
+
+    raw_ids = [part.strip() for part in (ids or '').split(',') if part.strip()]
+    if not raw_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='ids is required',
+        )
+
+    parsed_ids: list[int] = []
+    for part in raw_ids:
+        try:
+            parsed_ids.append(int(part))
+        except Exception:
+            continue
+
+    if not parsed_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='ids must be a comma-separated list of integers',
+        )
+
+    try:
+        return await run_in_threadpool(
+            cits_dp_service.summarize_parameter_extraction_costs,
+            sr_id=sr_id,
+            table_name=table_name,
+            citation_ids=parsed_ids,
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(rexc),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to summarize extraction costs: {e}',
+        )
 
 
 @router.post('/{sr_id}/citations/{citation_id}/extract-parameter')
@@ -280,24 +346,42 @@ async def extract_parameter_endpoint(
             detail='Azure OpenAI client is not configured on the server',
         )
 
+    llm_usage: dict[str, Any] = {}
+    llm_latency_ms = 0
+    effective_model = payload.model or getattr(
+        azure_openai_client, 'default_model', None,
+    )
     try:
+        started_at = time.time()
         if images:
-            llm_response = await azure_openai_client.multimodal_chat(
-                user_text=prompt,
-                images=images,
-                system_prompt=None,
-                model=payload.model,
-                max_tokens=payload.max_tokens or 512,
-                temperature=payload.temperature or 0.0,
-            )
+            parts: list[dict[str, Any]] = [{'type': 'text', 'text': prompt}]
+            for image_bytes, mime_type in images or []:
+                if not image_bytes:
+                    continue
+                parts.append(
+                    {
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}",
+                        },
+                    },
+                )
+            messages = [{'role': 'user', 'content': parts}]
         else:
-            llm_response = await azure_openai_client.simple_chat(
-                user_message=prompt,
-                system_prompt=None,
-                model=payload.model,
-                max_tokens=payload.max_tokens or 512,
-                temperature=payload.temperature or 0.0,
-            )
+            messages = [{'role': 'user', 'content': prompt}]
+
+        llm_result = await azure_openai_client.chat_completion(
+            messages=messages,
+            model=payload.model,
+            max_tokens=payload.max_tokens or 512,
+            temperature=payload.temperature or 0.0,
+            stream=False,
+        )
+        llm_latency_ms = int((time.time() - started_at) * 1000)
+        llm_response = ((llm_result.get('choices') or [{}])[
+                        0
+                        ].get('message') or {}).get('content') or ''
+        llm_usage = dict(llm_result.get('usage') or {})
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"LLM call failed: {e}",
@@ -458,6 +542,40 @@ async def extract_parameter_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Citation not found to update',
+        )
+
+    try:
+        await run_in_threadpool(
+            cits_dp_service.insert_parameter_extraction_run,
+            {
+                'sr_id': sr_id,
+                'table_name': table_name,
+                'citation_id': int(citation_id),
+                'parameter_key': _parameter_key_from_column(col_name),
+                'parameter_name': payload.parameter_name,
+                'found': found_val,
+                'value': val,
+                'explanation': explanation,
+                'evidence_sentences': evidence,
+                'evidence_tables': evidence_tables,
+                'evidence_figures': evidence_figures,
+                'raw_response': llm_response[:4000],
+                'model': effective_model,
+                'prompt_version': 'extract_parameter_endpoint',
+                'temperature': payload.temperature,
+                'latency_ms': llm_latency_ms,
+                'input_tokens': llm_usage.get('prompt_tokens'),
+                'output_tokens': llm_usage.get('completion_tokens'),
+            },
+        )
+    except RuntimeError as rexc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(rexc),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist extraction run: {e}",
         )
 
     return {'status': 'success', 'sr_id': sr_id, 'citation_id': citation_id, 'column': col_name, 'extraction': stored}
