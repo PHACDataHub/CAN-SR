@@ -10,6 +10,8 @@ import { BACKEND_URL } from '@/lib/config'
  *
  * - POST /api/can-sr/extract?action=human-extract-parameter&sr_id=<sr_id>&citation_id=<id>
  *    -> forwards to: POST {BACKEND_URL}/api/extract/{sr_id}/citations/{citation_id}/human-extract-parameter
+ * - GET /api/can-sr/extract?action=costs&sr_id=<sr_id>&ids=<id,id,...>
+ *    -> forwards to: GET {BACKEND_URL}/api/extract/{sr_id}/citations/costs?ids=<id,id,...>
  *
  * Authentication: forwards Authorization header for backend calls.
  */
@@ -19,7 +21,7 @@ export async function OPTIONS() {
     status: 204,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     },
   })
@@ -92,6 +94,72 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(json, { status: res.status })
   } catch (err: any) {
     console.error('Parameter extract proxy POST error:', err)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 },
+    )
+  }
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const params = request.nextUrl.searchParams
+    const srId = params.get('sr_id')
+    const ids = params.get('ids')
+    const action = params.get('action')
+
+    if (!srId) {
+      return NextResponse.json(
+        { error: 'sr_id is required' },
+        { status: 400 },
+      )
+    }
+
+    const authHeader = request.headers.get('authorization')
+    if (!authHeader) {
+      return NextResponse.json(
+        { error: 'Authorization header is required' },
+        { status: 401 },
+      )
+    }
+
+    let backendUrl: string | null = null
+
+    if (action === 'costs') {
+      if (!ids) {
+        return NextResponse.json(
+          { error: 'ids is required' },
+          { status: 400 },
+        )
+      }
+
+      backendUrl = `${BACKEND_URL}/api/extract/${encodeURIComponent(
+        srId,
+      )}/citations/costs?ids=${encodeURIComponent(ids)}`
+    } else {
+      return NextResponse.json(
+        { error: "Unsupported or missing 'action' parameter" },
+        { status: 400 },
+      )
+    }
+
+    const res = await fetch(backendUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: authHeader,
+      },
+    })
+
+    const text = await res.text().catch(() => '')
+    let json: any = null
+    try {
+      json = text ? JSON.parse(text) : {}
+    } catch {
+      json = { detail: text || null }
+    }
+    return NextResponse.json(json, { status: res.status })
+  } catch (err: any) {
+    console.error('Parameter extract proxy GET error:', err)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 },

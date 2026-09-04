@@ -28,8 +28,8 @@ export function SimpleTooltip({
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
       setPosition({
-        x: rect.right + 8,
-        y: rect.top + rect.height / 2,
+        x: rect.left + rect.width / 2,
+        y: rect.top - 8,
       })
     }
     setIsVisible(true)
@@ -43,7 +43,7 @@ export function SimpleTooltip({
     isVisible && mounted ? (
       <div
         className={cn(
-          'fixed -translate-y-1/2 transform',
+          'fixed -translate-x-1/2 -translate-y-full transform',
           'z-[999999] w-72 rounded-md border bg-white px-3 py-2 text-sm shadow-xl',
           'pointer-events-none whitespace-normal',
           className,
