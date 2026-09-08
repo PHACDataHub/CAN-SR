@@ -6,6 +6,9 @@ import { Bot, Check } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { SimpleTooltip} from '@/components/ui/tooltip'
+import {
+  resolveScreeningAnswerValue,
+} from '@/components/can-sr/screening-citation-context'
 
 type CitationInfo = {
   citationIds: number[]
@@ -218,10 +221,19 @@ export default function PagedList({
         let classified = true
         let verified = true
         for (const question of questions) {
-          const llmQuestion = snakeCaseColumn(question, true)
-          const humanQuestion = snakeCaseColumn(question, false)
-          if (!row?.[llmQuestion]) classified = false
-          if (!row?.[humanQuestion]) verified = false
+          const stage = screeningStep === 'l2' ? 'l2' : screeningStep === 'l1' ? 'l1' : null
+          const llmValue = stage
+            ? resolveScreeningAnswerValue(row, question, stage, 'llm', [
+                snakeCaseColumn(question, true),
+              ])
+            : row?.[snakeCaseColumn(question, true)]
+          const humanValue = stage
+            ? resolveScreeningAnswerValue(row, question, stage, 'human', [
+                snakeCaseColumn(question, false),
+              ])
+            : row?.[snakeCaseColumn(question, false)]
+          if (!llmValue) classified = false
+          if (!humanValue) verified = false
         }
 
         if (classified) nextLlm[id] = true
@@ -333,8 +345,11 @@ export default function PagedList({
 
       for (const q of questions || []) {
         if (!q) continue
-        const llmCol = snakeCaseColumn(q, true)
-        const llmVal = row?.[llmCol]
+        const llmVal = screeningStep === 'l1' || screeningStep === 'l2'
+          ? resolveScreeningAnswerValue(row, q, screeningStep, 'llm', [
+              snakeCaseColumn(q, true),
+            ])
+          : row?.[snakeCaseColumn(q, true)]
         if (!llmVal) continue
         hasAnyLlm = true
         let conf: number | null = null
@@ -427,8 +442,14 @@ export default function PagedList({
     const needs = computeNeedsValidation(id, row)
     const runs = latestRunsByCitation[id] || []
     const notScreened = (!runs.length) && !questions.some((q) => {
-      const llmCol = snakeCaseColumn(q, true)
-      return Boolean(row?.[llmCol])
+      if (screeningStep === 'l1' || screeningStep === 'l2') {
+        return Boolean(
+          resolveScreeningAnswerValue(row, q, screeningStep, 'llm', [
+            snakeCaseColumn(q, true),
+          ]),
+        )
+      }
+      return Boolean(row?.[snakeCaseColumn(q, true)])
     })
     const unvalidated = !validated
     if (filterMode === 'all') return true

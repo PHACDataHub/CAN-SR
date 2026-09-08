@@ -28,6 +28,48 @@ export function resolveConfiguredValue(
   return matches.length === 1 ? row[matches[0]] : undefined
 }
 
+function normalizeScreeningKey(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+}
+
+export function screeningAnswerColumn(
+  question: string,
+  prefix: 'human' | 'llm',
+  stage: 'l1' | 'l2',
+) {
+  const core = normalizeScreeningKey(question).slice(0, 56)
+  if (!core) return `${prefix}_col`
+  return `${prefix}_${stage}_${core}`.slice(0, 64)
+}
+
+export function resolveScreeningAnswerValue(
+  row: Record<string, any> | null | undefined,
+  question: string,
+  stage: 'l1' | 'l2',
+  prefix: 'human' | 'llm',
+  fallbackHeaders: Array<string | null | undefined> = [],
+) {
+  const headers = [
+    screeningAnswerColumn(question, prefix, stage),
+    ...fallbackHeaders,
+  ].filter(
+    (header): header is string =>
+      typeof header === 'string' && header.trim().length > 0,
+  )
+
+  for (const header of headers) {
+    const value = resolveConfiguredValue(row, header)
+    if (value !== undefined) return value
+  }
+
+  return undefined
+}
+
 export function extractHumanAnswer(value: any): string {
   if (value === undefined || value === null) return ''
   if (typeof value === 'object')
@@ -57,8 +99,25 @@ export function humanAnswerStatus(
   answerColumn: string | null | undefined,
   options: string[],
 ): 'unconfigured' | 'missing' | 'blank' | 'matched' | 'unmatched' {
-  if (!answerColumn) return 'unconfigured'
-  const raw = resolveConfiguredValue(row, answerColumn)
+  return humanAnswerStatusForColumns(row, [answerColumn], options)
+}
+
+export function humanAnswerStatusForColumns(
+  row: Record<string, any> | null | undefined,
+  answerColumns: Array<string | null | undefined>,
+  options: string[],
+): 'unconfigured' | 'missing' | 'blank' | 'matched' | 'unmatched' {
+  const headers = answerColumns.filter(
+    (header): header is string =>
+      typeof header === 'string' && header.trim().length > 0,
+  )
+  if (!headers.length) return 'unconfigured'
+
+  let raw: any = undefined
+  for (const header of headers) {
+    raw = resolveConfiguredValue(row, header)
+    if (raw !== undefined) break
+  }
   if (raw === undefined) return 'missing'
   const answer = extractHumanAnswer(raw).trim()
   if (!answer) return 'blank'
@@ -69,6 +128,37 @@ export function humanAnswerStatus(
   )
     ? 'matched'
     : 'unmatched'
+}
+
+export function resolveConfiguredAnswerWarning(
+  row: Record<string, any> | null | undefined,
+  answerColumn: string | null | undefined,
+  configuredAnswerColumn: string | null | undefined,
+  options: string[],
+): {
+  column: string
+  status: 'missing' | 'blank' | 'unmatched'
+} | null {
+  if (
+    !configuredAnswerColumn ||
+    configuredAnswerColumn.trim().length === 0 ||
+    configuredAnswerColumn === answerColumn
+  ) {
+    return null
+  }
+
+  const status = humanAnswerStatus(row, configuredAnswerColumn, options)
+  if (
+    status === 'unconfigured' ||
+    status === 'matched'
+  ) {
+    return null
+  }
+
+  return {
+    column: configuredAnswerColumn,
+    status,
+  }
 }
 
 export function ScreeningCitationContext({

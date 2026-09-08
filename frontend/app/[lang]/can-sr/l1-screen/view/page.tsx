@@ -8,7 +8,13 @@ import { getAuthToken, getTokenType } from '@/lib/auth'
 import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
-import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue, resolveDisplayedAnswer } from '@/components/can-sr/screening-citation-context'
+import {
+  ScreeningCitationContext,
+  resolveConfiguredAnswerWarning,
+  resolveDisplayedAnswer,
+  resolveScreeningAnswerValue,
+  screeningAnswerColumn,
+} from '@/components/can-sr/screening-citation-context'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -45,15 +51,6 @@ function snakeCaseColumn(name: string) {
   s = s.replace(/[^\w]+/g, '_')
   s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
   return `llm_${s}`.slice(0, 60)
-}
-
-/**
- * Human classification column for screening.
- * Example: question -> human_question
- */
-function humanScreenColumn(name: string) {
-  const base = snakeCaseColumn(name)
-  return base.replace(/^llm_/, 'human_')
 }
 
 type ValidationEntry = { user: string; validated_at: string }
@@ -447,9 +444,15 @@ export default function CanSrL1ScreenPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const llmCol = snakeCaseColumn(q)
-      const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
+      const configuredAnswerColumn = criteriaData.items?.[idx]?.answer_column
 
-      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
+      const humanRaw = resolveScreeningAnswerValue(
+        citation as any,
+        q,
+        'l1',
+        'human',
+        [configuredAnswerColumn],
+      )
       const llmRaw =
         (citation as any)?.[`llm_l1_${llmCol.replace(/^llm_/, '')}`] ??
         (citation as any)?.[llmCol]
@@ -539,6 +542,25 @@ export default function CanSrL1ScreenPage() {
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
     const ok = await postHumanClassifyPayload(question, value)
+    if (ok) {
+      const configuredAnswerColumn =
+        criteriaData.items?.[questionIndex]?.answer_column
+      setCitation((prev) => {
+        if (!prev) return prev
+        const next = {
+          ...prev,
+          [screeningAnswerColumn(question, 'human', 'l1')]: value,
+        }
+        if (
+          configuredAnswerColumn &&
+          configuredAnswerColumn.trim().length > 0 &&
+          !(configuredAnswerColumn in next)
+        ) {
+          next[configuredAnswerColumn] = value
+        }
+        return next
+      })
+    }
     setSaveStatus((prev) => ({ ...prev, [questionIndex]: ok ? 'saved' : 'error' }))
   }
 
@@ -582,23 +604,80 @@ export default function CanSrL1ScreenPage() {
       ) throw new Error('AI response did not match the requested citation')
       if (currentCitationKeyRef.current !== requestKey) return false
 
+      const criteriaResult = Array.isArray(runData?.criteria)
+        ? runData.criteria.find(
+            (item: any) =>
+              String(item?.criterion_key || '') === ck
+              || String(item?.question || '') === q,
+          )
+        : null
+      const immediateAiPanel = criteriaResult?.screening
+        ? {
+            selected: criteriaResult.screening.answer ?? '',
+            confidence: criteriaResult.screening.confidence,
+            explanation: criteriaResult.screening.rationale ?? '',
+            evidence_sentences: [],
+            evidence_tables: [],
+            evidence_figures: [],
+            source: 'agentic',
+            pipeline: 'title_abstract',
+          }
+        : null
+      if (immediateAiPanel) {
+        const configuredAnswerColumn = criteriaData?.items?.[questionIndex]?.answer_column
+        const displayed = resolveDisplayedAnswer(
+          resolveScreeningAnswerValue(
+            citation as any,
+            q,
+            'l1',
+            'human',
+            [configuredAnswerColumn],
+          ),
+          immediateAiPanel,
+        )
+        setAiPanels((prev) => ({ ...prev, [questionIndex]: immediateAiPanel }))
+        if (displayed) {
+          setSelections((prev) => ({ ...prev, [questionIndex]: displayed }))
+        }
+      }
+
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — no full page re-render.
       try {
-        const llmColName = `llm_${ck}`
+        const llmColName = screeningAnswerColumn(q, 'llm', 'l1')
+        const configuredAnswerColumn = criteriaData?.items?.[questionIndex]?.answer_column
         const citRes = await fetch(
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(runContext.srId)}&citation_id=${encodeURIComponent(runContext.citationId)}`,
           { method: 'GET', headers: getAuthHeaders() },
         )
         const citData = await citRes.json().catch(() => ({}))
         if (currentCitationKeyRef.current === requestKey && citRes.ok && citData) {
-          const llmRaw = citData[llmColName]
+          const llmRaw =
+            resolveScreeningAnswerValue(citData, q, 'l1', 'llm', [`llm_${ck}`])
+            ?? citData[llmColName]
           let llmParsed = llmRaw
           if (typeof llmRaw === 'string') {
             try { llmParsed = JSON.parse(llmRaw) } catch { llmParsed = llmRaw }
           }
-          if (llmParsed && typeof llmParsed === 'object') {
-            setAiPanels((prev) => ({ ...prev, [questionIndex]: llmParsed }))
+          const refreshedAiPanel =
+            llmParsed && typeof llmParsed === 'object'
+              ? llmParsed
+              : typeof llmParsed === 'string' && llmParsed
+                ? { selected: llmParsed }
+                : null
+          if (refreshedAiPanel) {
+            setAiPanels((prev) => ({ ...prev, [questionIndex]: refreshedAiPanel }))
+            const humanRaw = resolveScreeningAnswerValue(
+              citData,
+              q,
+              'l1',
+              'human',
+              [configuredAnswerColumn],
+            )
+            const displayed = resolveDisplayedAnswer(humanRaw, refreshedAiPanel)
+            if (displayed) {
+              setSelections((prev) => ({ ...prev, [questionIndex]: displayed }))
+            }
           }
         }
       } catch { /* best-effort */ }
@@ -748,8 +827,16 @@ export default function CanSrL1ScreenPage() {
                 <div className="space-y-4">
                   {criteriaData.questions.map((q, idx) => {
                     const options = criteriaData.possible_answers[idx] || []
-                    const answerColumn = criteriaData.items?.[idx]?.answer_column || null
-                    const answerStatus = humanAnswerStatus(citation!, answerColumn, options)
+                    const answerColumn =
+                      screeningAnswerColumn(q, 'human', 'l1')
+                    const configuredAnswerColumn =
+                      criteriaData.items?.[idx]?.answer_column || null
+                    const answerWarning = resolveConfiguredAnswerWarning(
+                      citation!,
+                      answerColumn,
+                      configuredAnswerColumn,
+                      options,
+                    )
                     const current = selections[idx] ?? ''
                     const aiData = aiPanels[idx]
                     // Per-question highlight aligned with list/back-end logic.
@@ -816,9 +903,14 @@ export default function CanSrL1ScreenPage() {
                                 </option>
                               ))}
                             </select>
-                            {answerStatus !== 'unconfigured' && answerStatus !== 'matched' ? (
+                            {answerWarning ? (
                               <p className="mt-1 text-xs text-amber-700" role="status">
-                                Human answer column “{answerColumn}”: {answerStatus === 'missing' ? 'not found in this citation' : answerStatus === 'blank' ? 'blank for this citation' : 'value does not match an available answer'}.
+                                Fallback human answer source column “{answerWarning.column}”:{' '}
+                                {answerWarning.status === 'missing'
+                                  ? 'not found in this citation'
+                                  : answerWarning.status === 'blank'
+                                    ? 'blank for this citation'
+                                    : 'value does not match an available answer'}.
                               </p>
                             ) : null}
                           </div>

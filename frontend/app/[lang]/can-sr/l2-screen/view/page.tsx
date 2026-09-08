@@ -888,6 +888,25 @@ export default function CanSrL2ScreenViewPage() {
     if (!criteriaData) return
     const question = criteriaData.questions[questionIndex]
     const ok = await postHumanClassifyPayload(question, value)
+    if (ok) {
+      const configuredAnswerColumn =
+        criteriaData.items?.[questionIndex]?.answer_column
+      setCitation((prev) => {
+        if (!prev) return prev
+        const next = {
+          ...prev,
+          [stageColumn(question, 'human', 'l2')]: value,
+        }
+        if (
+          configuredAnswerColumn &&
+          configuredAnswerColumn.trim().length > 0 &&
+          !(configuredAnswerColumn in next)
+        ) {
+          next[configuredAnswerColumn] = value
+        }
+        return next
+      })
+    }
     setSaveStatus((prev) => ({
       ...prev,
       [questionIndex]: ok ? 'saved' : 'error',
@@ -964,7 +983,7 @@ export default function CanSrL2ScreenViewPage() {
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — avoids re-rendering the PDF viewer (no setCitation call).
       try {
-        const llmColName = `llm_${ck}`
+        const llmColName = stageColumn(q, 'llm', 'l2')
         const citRes = await fetch(
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(runContext.srId)}&citation_id=${encodeURIComponent(runContext.citationId)}`,
           { method: 'GET', headers: getAuthHeaders() },
