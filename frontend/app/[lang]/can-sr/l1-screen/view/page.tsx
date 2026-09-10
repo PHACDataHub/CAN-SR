@@ -292,8 +292,8 @@ export default function CanSrL1ScreenPage() {
       if (!res.ok) {
         setError(
           data?.error ||
-            data?.detail ||
-            `Failed to load citation (${res.status})`,
+          data?.detail ||
+          `Failed to load citation (${res.status})`,
         )
         setCitation(null)
       } else {
@@ -451,7 +451,6 @@ export default function CanSrL1ScreenPage() {
         q,
         'l1',
         'human',
-        [configuredAnswerColumn],
       )
       const llmRaw =
         (citation as any)?.[`llm_l1_${llmCol.replace(/^llm_/, '')}`] ??
@@ -606,22 +605,22 @@ export default function CanSrL1ScreenPage() {
 
       const criteriaResult = Array.isArray(runData?.criteria)
         ? runData.criteria.find(
-            (item: any) =>
-              String(item?.criterion_key || '') === ck
-              || String(item?.question || '') === q,
-          )
+          (item: any) =>
+            String(item?.criterion_key || '') === ck
+            || String(item?.question || '') === q,
+        )
         : null
       const immediateAiPanel = criteriaResult?.screening
         ? {
-            selected: criteriaResult.screening.answer ?? '',
-            confidence: criteriaResult.screening.confidence,
-            explanation: criteriaResult.screening.rationale ?? '',
-            evidence_sentences: [],
-            evidence_tables: [],
-            evidence_figures: [],
-            source: 'agentic',
-            pipeline: 'title_abstract',
-          }
+          selected: criteriaResult.screening.answer ?? '',
+          confidence: criteriaResult.screening.confidence,
+          explanation: criteriaResult.screening.rationale ?? '',
+          evidence_sentences: [],
+          evidence_tables: [],
+          evidence_figures: [],
+          source: 'agentic',
+          pipeline: 'title_abstract',
+        }
         : null
       if (immediateAiPanel) {
         const configuredAnswerColumn = criteriaData?.items?.[questionIndex]?.answer_column
@@ -631,7 +630,6 @@ export default function CanSrL1ScreenPage() {
             q,
             'l1',
             'human',
-            [configuredAnswerColumn],
           ),
           immediateAiPanel,
         )
@@ -879,8 +877,8 @@ export default function CanSrL1ScreenPage() {
                       <div
                         key={idx}
                         className={
-	                          'rounded-md border-2 p-3 ' +
-	                          (needsHuman ? 'border-amber-400' : 'border-gray-100')
+                          'rounded-md border-2 p-3 ' +
+                          (needsHuman ? 'border-amber-400' : 'border-gray-100')
                         }
                       >
                         <div className="flex items-start justify-between">
@@ -1000,20 +998,20 @@ export default function CanSrL1ScreenPage() {
                                   </div>
                                 </div>
 
-	                                {hasAgentic && crit ? (
-	                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
-	                                    <div className="mt-1 font-semibold text-gray-800">
-	                                      {critDisagrees ? (
-	                                        <span className="text-amber-700">
-	                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
-	                                        </span>
-	                                      ) : (
-	                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
-	                                      )}
-	                                    </div>
-	                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
-	                                  </div>
-	                                ) : null}
+                                {hasAgentic && crit ? (
+                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+                                    <div className="mt-1 font-semibold text-gray-800">
+                                      {critDisagrees ? (
+                                        <span className="text-amber-700">
+                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
+                                        </span>
+                                      ) : (
+                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
+                                      )}
+                                    </div>
+                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                                  </div>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
