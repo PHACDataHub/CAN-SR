@@ -66,7 +66,7 @@ export function screeningAnswerColumn(
 ) {
   const core = normalizeScreeningKey(question).slice(0, 56)
   if (!core) return `${prefix}_col`
-  return `${prefix}_${stage}_${core}`.slice(0, 64)
+  return `${prefix}_${stage}_${core}`.slice(0, 63)
 }
 
 export function resolveScreeningAnswerValue(

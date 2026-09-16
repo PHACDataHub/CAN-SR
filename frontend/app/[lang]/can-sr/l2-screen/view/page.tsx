@@ -18,6 +18,7 @@ import {
   resolveConfiguredValue,
   resolveScreeningAnswerValue,
   resolveDisplayedAnswer,
+  screeningAnswerColumn,
 } from '@/components/can-sr/screening-citation-context'
 
 type ValidationEntry = { user: string; validated_at: string }
@@ -101,11 +102,6 @@ function snakeCaseColumn(name: string) {
   s = s.replace(/[^\w]+/g, '_')
   s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
   return `llm_${s}`.slice(0, 60)
-}
-
-function stageColumn(name: string, prefix: 'llm' | 'human', stage: 'l1' | 'l2') {
-  const core = snakeCaseColumn(name).replace(/^llm_/, '')
-  return `${prefix}_${stage}_${core}`.slice(0, 64)
 }
 
 /* Types */
@@ -691,8 +687,8 @@ export default function CanSrL2ScreenViewPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const sourceStage = sourceFlags[idx] === 'l1' ? 'l1' : 'l2'
-      const llmCol = stageColumn(q, 'llm', 'l2')
-      const l1HumanCol = stageColumn(q, 'human', 'l1')
+      const llmCol = screeningAnswerColumn(q, 'llm', 'l2')
+      const l1HumanCol = screeningAnswerColumn(q, 'human', 'l1')
       const legacyLlmCol = snakeCaseColumn(q)
       const criterionKey = llmCol.replace(/^llm_l2_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
@@ -883,7 +879,7 @@ export default function CanSrL2ScreenViewPage() {
         if (!prev) return prev
         const next = {
           ...prev,
-          [stageColumn(question, 'human', 'l2')]: value,
+          [screeningAnswerColumn(question, 'human', 'l2')]: value,
         }
         if (
           configuredAnswerColumn &&
@@ -971,7 +967,7 @@ export default function CanSrL2ScreenViewPage() {
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — avoids re-rendering the PDF viewer (no setCitation call).
       try {
-        const llmColName = stageColumn(q, 'llm', 'l2')
+        const llmColName = screeningAnswerColumn(q, 'llm', 'l2')
         const citRes = await fetch(
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(runContext.srId)}&citation_id=${encodeURIComponent(runContext.citationId)}`,
           { method: 'GET', headers: getAuthHeaders() },
@@ -1311,7 +1307,7 @@ export default function CanSrL2ScreenViewPage() {
                     {criteriaData.questions.map((q, idx) => {
                       const options = criteriaData.possible_answers[idx] || []
                       const answerColumn =
-                        stageColumn(q, 'human', 'l2')
+                        screeningAnswerColumn(q, 'human', 'l2')
                       const configuredAnswerColumn =
                         criteriaData.items?.[idx]?.answer_column || null
                       const answerWarning = resolveConfiguredAnswerWarning(
