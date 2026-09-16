@@ -32,7 +32,8 @@ def test_schema_is_current_config_allowlist_and_excludes_sensitive_columns():
     schema = citation_export_service.build_schema(
         _sr(), 'unused', _columns(
             'id', 'title', 'fulltext_url', 'prompt',
-            'human_current_question', 'llm_current_question',
+            'human_l1_current_question', 'llm_l1_current_question',
+            'human_l2_current_full_text_question', 'llm_l2_current_full_text_question',
             'human_stale_old_question', 'human_param_attack_rate',
         ),
     )
@@ -158,8 +159,8 @@ def test_parameter_dimensions_expand_in_stable_order():
 def test_select_all_dimensions_uses_each_items_available_intersection():
     schema = citation_export_service.build_schema(
         _sr(), 'unused', _columns(
-            'id', 'human_current_question',
-            'llm_current_full_text_question',
+            'id', 'human_l1_current_question',
+            'llm_l2_current_full_text_question',
         ),
     )
     request = CitationExportRequest(
@@ -187,7 +188,7 @@ def test_select_all_dimensions_uses_each_items_available_intersection():
 
 
 def test_csv_is_ordered_normalized_and_formula_safe(monkeypatch):
-    columns = _columns('id', 'title', 'human_current_question')
+    columns = _columns('id', 'title', 'human_l1_current_question')
     monkeypatch.setattr(
         cits_dp_service, 'get_table_columns',
         lambda _table: columns,
@@ -196,7 +197,7 @@ def test_csv_is_ordered_normalized_and_formula_safe(monkeypatch):
         cits_dp_service, 'fetch_export_rows',
         lambda *_args, **_kwargs: [{
             'id': 1, 'title': '=HYPERLINK("bad")',
-            'human_current_question': {'selected': 'Include, yes'},
+            'human_l1_current_question': {'selected': 'Include, yes'},
         }],
     )
     request = CitationExportRequest(
@@ -215,6 +216,70 @@ def test_csv_is_ordered_normalized_and_formula_safe(monkeypatch):
     rows = list(csv.reader(io.StringIO(body)))
     assert rows[0] == ['Title', 'L1 | Current question? | Human answer']
     assert rows[1] == ['\'=HYPERLINK("bad")', 'Include, yes']
+
+
+def test_export_uses_stage_prefixed_screening_columns(monkeypatch):
+    columns = _columns(
+        'human_current_full_text_question',
+        'human_l1_current_question',
+        'llm_l1_current_question',
+        'human_l2_current_full_text_question',
+        'llm_l2_current_full_text_question',
+    )
+    requested_columns = []
+    monkeypatch.setattr(
+        cits_dp_service, 'get_table_columns',
+        lambda _table: columns,
+    )
+    monkeypatch.setattr(
+        cits_dp_service, 'fetch_export_rows',
+        lambda _table, export_columns, *_args, **_kwargs: requested_columns.extend(export_columns) or [{
+            'id': 1,
+            'human_l1_current_question': {'selected': 'Include'},
+            'llm_l1_current_question': {'selected': 'Include', 'confidence': 0.93},
+            'human_current_full_text_question': {'selected': 'Exclude'},
+            'human_l2_current_full_text_question': {'selected': 'Exclude'},
+            'llm_l2_current_full_text_question': {
+                'selected': 'Exclude',
+                'confidence': 0.81,
+                'explanation': 'Full-text rationale',
+                'evidence_sentences': ['Sentence 1'],
+            },
+        }],
+    )
+    request = CitationExportRequest(
+        selections=[
+            {
+                'group': 'l1',
+                'items': ['l1.current_question'],
+                'dimensions': ['human_answer', 'ai_answer'],
+            },
+            {
+                'group': 'l2',
+                'items': ['l2.current_full_text_question'],
+                'dimensions': ['human_answer', 'ai_answer', 'confidence'],
+            },
+        ],
+    )
+
+    body = citation_export_service.export_csv(
+        'citations', _sr(), request).decode('utf-8-sig')
+    rows = list(csv.reader(io.StringIO(body)))
+
+    assert requested_columns == [
+        'human_current_full_text_question',
+        'human_l2_current_full_text_question',
+        'llm_l1_current_question',
+        'llm_l2_current_full_text_question',
+    ]
+    assert rows[0] == [
+        'L1 | Current question? | Human answer',
+        'L1 | Current question? | AI answer',
+        'L2 | Current full text question? | Human answer',
+        'L2 | Current full text question? | AI answer',
+        'L2 | Current full text question? | Confidence',
+    ]
+    assert rows[1] == ['Include', 'Include', 'Exclude', 'Exclude', '0.81']
 
 
 def test_citation_id_scope_must_be_entirely_owned(monkeypatch):

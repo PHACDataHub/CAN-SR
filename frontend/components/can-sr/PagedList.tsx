@@ -93,6 +93,18 @@ function criterionKeyFromQuestion(question: string) {
   return s.slice(0, 56)
 }
 
+function screeningAnswerFallbackHeaders(
+  question: string,
+  step: 'l1' | 'l2',
+  prefix: 'human' | 'llm',
+) {
+  const headers: string[] = [snakeCaseColumn(question, prefix === 'llm')]
+  if (step === 'l2') {
+    headers.unshift(`${prefix}_l1_${criterionKeyFromQuestion(question)}`)
+  }
+  return headers
+}
+
 export default function PagedList({
   citationIds,
   srId,
@@ -224,12 +236,12 @@ export default function PagedList({
           const stage = screeningStep === 'l2' ? 'l2' : screeningStep === 'l1' ? 'l1' : null
           const llmValue = stage
             ? resolveScreeningAnswerValue(row, question, stage, 'llm', [
-                snakeCaseColumn(question, true),
+                ...screeningAnswerFallbackHeaders(question, stage, 'llm'),
               ])
             : row?.[snakeCaseColumn(question, true)]
           const humanValue = stage
             ? resolveScreeningAnswerValue(row, question, stage, 'human', [
-                snakeCaseColumn(question, false),
+                ...screeningAnswerFallbackHeaders(question, stage, 'human'),
               ])
             : row?.[snakeCaseColumn(question, false)]
           if (!llmValue) classified = false
@@ -347,7 +359,7 @@ export default function PagedList({
         if (!q) continue
         const llmVal = screeningStep === 'l1' || screeningStep === 'l2'
           ? resolveScreeningAnswerValue(row, q, screeningStep, 'llm', [
-              snakeCaseColumn(q, true),
+              ...screeningAnswerFallbackHeaders(q, screeningStep, 'llm'),
             ])
           : row?.[snakeCaseColumn(q, true)]
         if (!llmVal) continue
@@ -445,7 +457,7 @@ export default function PagedList({
       if (screeningStep === 'l1' || screeningStep === 'l2') {
         return Boolean(
           resolveScreeningAnswerValue(row, q, screeningStep, 'llm', [
-            snakeCaseColumn(q, true),
+            ...screeningAnswerFallbackHeaders(q, screeningStep, 'llm'),
           ]),
         )
       }

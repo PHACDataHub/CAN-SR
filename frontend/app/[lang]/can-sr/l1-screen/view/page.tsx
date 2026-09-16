@@ -670,7 +670,6 @@ export default function CanSrL1ScreenPage() {
               q,
               'l1',
               'human',
-              [configuredAnswerColumn],
             )
             const displayed = resolveDisplayedAnswer(humanRaw, refreshedAiPanel)
             if (displayed) {

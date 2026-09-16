@@ -14,8 +14,9 @@ import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanRevi
 import {
   ScreeningCitationContext,
   extractHumanAnswer,
-  humanAnswerStatus,
+  resolveConfiguredAnswerWarning,
   resolveConfiguredValue,
+  resolveScreeningAnswerValue,
   resolveDisplayedAnswer,
 } from '@/components/can-sr/screening-citation-context'
 
@@ -100,15 +101,6 @@ function snakeCaseColumn(name: string) {
   s = s.replace(/[^\w]+/g, '_')
   s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
   return `llm_${s}`.slice(0, 60)
-}
-
-/**
- * Human classification column for screening.
- * Example: question -> human_question
- */
-function humanScreenColumn(name: string) {
-  const base = snakeCaseColumn(name)
-  return base.replace(/^llm_/, 'human_')
 }
 
 function stageColumn(name: string, prefix: 'llm' | 'human', stage: 'l1' | 'l2') {
@@ -700,11 +692,8 @@ export default function CanSrL2ScreenViewPage() {
     criteriaData.questions.forEach((q: string, idx: number) => {
       const sourceStage = sourceFlags[idx] === 'l1' ? 'l1' : 'l2'
       const llmCol = stageColumn(q, 'llm', 'l2')
-      const humanCol = stageColumn(q, 'human', 'l2')
       const l1HumanCol = stageColumn(q, 'human', 'l1')
       const legacyLlmCol = snakeCaseColumn(q)
-      const legacyHumanCol =
-        criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
       const criterionKey = llmCol.replace(/^llm_l2_/, '')
       const fulltextRun = runsByCriterion[criterionKey]?.screening
       const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
@@ -717,17 +706,18 @@ export default function CanSrL2ScreenViewPage() {
         runFulltextMd5 === citationFulltextMd5,
       )
 
-      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
+      const humanRaw = resolveScreeningAnswerValue(
+        citation as any,
+        q,
+        'l2',
+        'human',
+      )
       // set-answer mirrors retrospective L1 answers into human_l2_*. The L1
       // fallback keeps older rows usable and lets this screen display the
       // copied answer before a reviewer changes it.
       const copiedL1HumanRaw =
         sourceStage === 'l1'
           ? resolveConfiguredValue(citation as any, l1HumanCol)
-          : undefined
-      const legacyHumanRaw =
-        sourceStage === 'l1'
-          ? resolveConfiguredValue(citation as any, legacyHumanCol)
           : undefined
       const llmRaw =
         (citation as any)?.[llmCol] ??
@@ -779,8 +769,6 @@ export default function CanSrL2ScreenViewPage() {
         newSelections[idx] = (humanParsed as any).selected
       } else if (extractHumanAnswer(parsedCopiedHuman)) {
         newSelections[idx] = extractHumanAnswer(parsedCopiedHuman)
-      } else if (extractHumanAnswer(legacyHumanRaw)) {
-        newSelections[idx] = extractHumanAnswer(legacyHumanRaw)
       } else if (sourceFlags[idx] === 'l2' && extractHumanAnswer(humanParsed)) {
         newSelections[idx] = extractHumanAnswer(humanParsed)
       }
@@ -821,7 +809,7 @@ export default function CanSrL2ScreenViewPage() {
       // The control is display-only AI fallback. A later user change still
       // goes through human_classify and therefore creates a human answer.
       const displayed = resolveDisplayedAnswer(
-        newSelections[idx] ?? parsedCopiedHuman ?? legacyHumanRaw,
+        newSelections[idx] ?? parsedCopiedHuman,
         newAiPanels[idx],
       )
       if (displayed) newSelections[idx] = displayed
@@ -1323,10 +1311,13 @@ export default function CanSrL2ScreenViewPage() {
                     {criteriaData.questions.map((q, idx) => {
                       const options = criteriaData.possible_answers[idx] || []
                       const answerColumn =
+                        stageColumn(q, 'human', 'l2')
+                      const configuredAnswerColumn =
                         criteriaData.items?.[idx]?.answer_column || null
-                      const answerStatus = humanAnswerStatus(
+                      const answerWarning = resolveConfiguredAnswerWarning(
                         citation!,
                         answerColumn,
+                        configuredAnswerColumn,
                         options,
                       )
                       const current = selections[idx] ?? ''
@@ -1468,16 +1459,16 @@ export default function CanSrL2ScreenViewPage() {
                                   </option>
                                 ))}
                               </select>
-                              {answerStatus !== 'unconfigured' &&
-                              answerStatus !== 'matched' ? (
+                              {answerWarning ? (
                                 <p
                                   className="mt-1 text-xs text-amber-700"
                                   role="status"
                                 >
-                                  Human answer column “{answerColumn}”:{' '}
-                                  {answerStatus === 'missing'
+                                  Fallback human answer source column “
+                                  {answerWarning.column}”:{' '}
+                                  {answerWarning.status === 'missing'
                                     ? 'not found in this citation'
-                                    : answerStatus === 'blank'
+                                    : answerWarning.status === 'blank'
                                       ? 'blank for this citation'
                                       : 'value does not match an available answer'}
                                   .

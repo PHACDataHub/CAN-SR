@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import {
   humanAnswerStatus,
+  resolveScreeningAnswerValue,
   resolveDisplayedAnswer,
   resolveConfiguredValue,
   ScreeningCitationContext,
@@ -27,6 +28,36 @@ describe('screening citation context helpers', () => {
     expect(resolveDisplayedAnswer(null, { selected: 'Exclude' })).toBe('Exclude')
     expect(resolveDisplayedAnswer('', JSON.stringify({ selected: 'Include' }))).toBe('Include')
     expect(resolveDisplayedAnswer(null, null)).toBe('')
+  })
+
+  it('falls back to legacy human screening columns', () => {
+    expect(
+      resolveScreeningAnswerValue(
+        { human_current_question: { selected: 'Include' } },
+        'Current question?',
+        'l1',
+        'human',
+      ),
+    ).toEqual({ selected: 'Include' })
+  })
+
+  it('allows l2 human answers to fall back to l1 and legacy human columns', () => {
+    expect(
+      resolveScreeningAnswerValue(
+        { human_l1_current_full_text_question: { selected: 'Exclude' } },
+        'Current full text question?',
+        'l2',
+        'human',
+      ),
+    ).toEqual({ selected: 'Exclude' })
+    expect(
+      resolveScreeningAnswerValue(
+        { human_current_full_text_question: { selected: 'Exclude' } },
+        'Current full text question?',
+        'l2',
+        'human',
+      ),
+    ).toEqual({ selected: 'Exclude' })
   })
 })
 

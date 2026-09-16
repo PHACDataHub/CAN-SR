@@ -37,6 +37,28 @@ function normalizeScreeningKey(value: string) {
     .replace(/_+/g, '_')
 }
 
+function legacyScreeningAnswerColumn(
+  question: string,
+  prefix: 'human' | 'llm',
+) {
+  const core = normalizeScreeningKey(question)
+  if (!core) return `${prefix}_col`
+  return `${prefix}_${core}`.slice(0, 60)
+}
+
+function screeningAnswerCandidateHeaders(
+  question: string,
+  stage: 'l1' | 'l2',
+  prefix: 'human' | 'llm',
+) {
+  const headers = [screeningAnswerColumn(question, prefix, stage)]
+  if (stage === 'l2') {
+    headers.push(screeningAnswerColumn(question, prefix, 'l1'))
+  }
+  headers.push(legacyScreeningAnswerColumn(question, prefix))
+  return headers
+}
+
 export function screeningAnswerColumn(
   question: string,
   prefix: 'human' | 'llm',
@@ -55,7 +77,7 @@ export function resolveScreeningAnswerValue(
   fallbackHeaders: Array<string | null | undefined> = [],
 ) {
   const headers = [
-    screeningAnswerColumn(question, prefix, stage),
+    ...screeningAnswerCandidateHeaders(question, stage, prefix),
     ...fallbackHeaders,
   ].filter(
     (header): header is string =>
