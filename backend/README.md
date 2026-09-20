@@ -282,9 +282,12 @@ docker compose restart api
 #   ENABLE_PROCRASTINATE_WORKER=false
 #   PROCRASTINATE_WORKER_CONCURRENCY=1
 #
-# Optional dev cleanup:
+# Optional dev cleanup (development only):
 #   PROCRASTINATE_CLEAR_ON_START=true
-# NOTE: if PROCRASTINATE_CLEAR_ON_START is *unset*, it defaults to true.
+# NOTE: if PROCRASTINATE_CLEAR_ON_START is *unset*, it defaults to FALSE.
+# Enabling it deletes queued and in-progress task rows on API startup,
+# including ones a separate worker process is currently running, so a
+# rolling restart or a second replica will strand in-flight run-all jobs.
 #
 # Run-All job chunking (citations per Procrastinate chunk task):
 #   RUN_ALL_CHUNK_SIZE=1

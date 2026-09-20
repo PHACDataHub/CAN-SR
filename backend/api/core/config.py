@@ -131,9 +131,12 @@ class Settings(BaseSettings):
     )
 
     # Optional dev cleanup: clear out leftover queued/doing tasks on API startup.
-    # IMPORTANT: default is true if the env var is absent.
+    # Defaults to false: this deletes 'todo' and 'doing' rows for jobs that are
+    # still in flight, including ones held by a separate worker process, so on
+    # a rolling restart or a second replica it silently strands live run-all
+    # jobs until the stale-chunk window expires.
     PROCRASTINATE_CLEAR_ON_START: bool = os.getenv(
-        'PROCRASTINATE_CLEAR_ON_START', 'true',
+        'PROCRASTINATE_CLEAR_ON_START', 'false',
     ).lower().strip() == 'true'
 
     # Run-All job chunk size: citations per Procrastinate chunk task.

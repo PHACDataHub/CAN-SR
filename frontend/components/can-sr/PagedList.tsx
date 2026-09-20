@@ -4,8 +4,9 @@ import { formatCurrency } from '@/components/can-sr/cost-meta'
 import { useExtractionCitationCosts } from '@/hooks/use-review-costs'
 import { Bot, Check } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
-import React, { ChangeEvent, useEffect, useRef, useState } from 'react'
+import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { SimpleTooltip} from '@/components/ui/tooltip'
+import { criterionKey as criterionKeyFromQuestion, readScreeningValue, type ScreeningStage } from '@/components/can-sr/screeningColumns'
 
 type CitationInfo = {
   citationIds: number[]
@@ -74,21 +75,6 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `${tokenType} ${token}` } : {}
 }
 
-function snakeCaseColumn(name: string, llm: boolean) {
-  if (!name) return llm ? 'llm_col' : 'human_col'
-  let s = name.trim().toLowerCase()
-  s = s.replace(/[^\w]+/g, '_')
-  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-  return llm ? `llm_${s}`.slice(0, 60) : `human_${s}`.slice(0, 60)
-}
-
-function criterionKeyFromQuestion(question: string) {
-  if (!question) return ''
-  let s = question.trim().toLowerCase()
-  s = s.replace(/[^\w]+/g, '_')
-  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-  return s.slice(0, 56)
-}
 
 export default function PagedList({
   citationIds,
@@ -132,6 +118,13 @@ export default function PagedList({
   const filterMode = filterModeProp || filterModeLocal
 
   const [latestRunsByCitation, setLatestRunsByCitation] = useState<Record<number, LatestAgentRun[]>>({})
+  // Screening answers live in stage-qualified columns. The extract step has no
+  // screening questions of its own, so it never reads them.
+  const stage: ScreeningStage = screeningStep === 'l2' ? 'l2' : 'l1'
+  const screeningQuestions: string[] = useMemo(
+    () => (screeningStep === 'l1' || screeningStep === 'l2' ? questions || [] : []),
+    [screeningStep, questions],
+  )
   const extractionCitationIds = screeningStep === 'extract' ? citationIds : []
   const { costsByCitationId: extractionCostsByCitation } = useExtractionCitationCosts(srId, extractionCitationIds)
 
@@ -215,23 +208,26 @@ export default function PagedList({
         const id = Number(row.id)
         if (!Number.isFinite(id)) continue
 
-        let classified = true
-        let verified = true
-        for (const question of questions) {
-          const llmQuestion = snakeCaseColumn(question, true)
-          const humanQuestion = snakeCaseColumn(question, false)
-          if (!row?.[llmQuestion]) classified = false
-          if (!row?.[humanQuestion]) verified = false
+        // With no questions there is nothing to be classified or verified
+        // against, so neither icon may claim the row is done.
+        let classified = screeningQuestions.length > 0
+        let verified = screeningQuestions.length > 0
+        for (const question of screeningQuestions) {
+          if (!readScreeningValue(row, stage, question, 'llm')) classified = false
+          if (!readScreeningValue(row, stage, question, 'human')) verified = false
         }
 
-        if (classified) nextLlm[id] = true
-        if (verified) nextHuman[id] = true
-        if (row?.fulltext_url) nextShow[id] = true
+        nextLlm[id] = classified
+        nextHuman[id] = verified
+        nextShow[id] = Boolean(row?.fulltext_url)
       }
 
-      setLlmClassified((prev: Record<number, boolean>) => ({ ...prev, ...nextLlm }))
-      setHumanVerified((prev: Record<number, boolean>) => ({ ...prev, ...nextHuman }))
-      setShowClassify((prev: Record<number, boolean>) => ({ ...prev, ...nextShow }))
+      // Replace, never merge: a merge can only ever add `true`, so a row that
+      // stops qualifying (or a page loaded before the criteria arrived) would
+      // keep a stale icon for the rest of the session.
+      setLlmClassified(nextLlm)
+      setHumanVerified(nextHuman)
+      setShowClassify(nextShow)
 
       // Fetch latest agent runs for this page (L1=title_abstract, L2=fulltext)
       try {
@@ -277,7 +273,7 @@ export default function PagedList({
       if (error instanceof DOMException && error.name === 'AbortError') return
       console.error('Failed to fetch citation page', error)
     })
-  }, [citationIds, page, pageSize, questions, srId, screeningStep, refreshKey])
+  }, [citationIds, page, pageSize, questions, screeningQuestions, stage, srId, screeningStep, refreshKey])
 
   // Cleanup any in-flight requests on unmount
   useEffect(() => {
@@ -333,8 +329,7 @@ export default function PagedList({
 
       for (const q of questions || []) {
         if (!q) continue
-        const llmCol = snakeCaseColumn(q, true)
-        const llmVal = row?.[llmCol]
+        const llmVal = readScreeningValue(row, stage, q, 'llm')
         if (!llmVal) continue
         hasAnyLlm = true
         let conf: number | null = null
@@ -426,10 +421,9 @@ export default function PagedList({
     const validated = isValidatedForStep(row)
     const needs = computeNeedsValidation(id, row)
     const runs = latestRunsByCitation[id] || []
-    const notScreened = (!runs.length) && !questions.some((q) => {
-      const llmCol = snakeCaseColumn(q, true)
-      return Boolean(row?.[llmCol])
-    })
+    const notScreened = (!runs.length) && !questions.some(
+      (q) => Boolean(readScreeningValue(row, stage, q, 'llm')),
+    )
     const unvalidated = !validated
     if (filterMode === 'all') return true
     if (filterMode === 'validated') return validated

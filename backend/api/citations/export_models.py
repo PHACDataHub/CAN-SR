@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import model_validator
 
 
 class ExportDimension(BaseModel):
@@ -18,6 +20,10 @@ class ExportItem(BaseModel):
     default_selected: bool = False
     category: str | None = None
     available_dimensions: list[str] | None = None
+    # Physical columns proven to exist when the schema was built, keyed by
+    # source ('human'/'llm'). Server-side only: the client selects semantic
+    # ids, never column names, so this stays out of the response.
+    source_columns: dict[str, str] = Field(default_factory=dict, exclude=True)
 
 
 class ExportGroup(BaseModel):
@@ -31,7 +37,10 @@ class CitationExportSchema(BaseModel):
     schema_version: Literal[1] = 1
     format: Literal['csv'] = 'csv'
     row_scopes: list[str] = Field(
-        default_factory=lambda: ['all', 'l1_included', 'l2_included', 'citation_ids'],
+        default_factory=lambda: [
+            'all', 'l1_included',
+            'l2_included', 'citation_ids',
+        ],
     )
     groups: list[ExportGroup]
 
@@ -45,9 +54,13 @@ class ExportRowScope(BaseModel):
         if self.kind == 'citation_ids' and not self.citation_ids:
             raise ValueError('citation_ids is required for citation_ids scope')
         if self.kind != 'citation_ids' and self.citation_ids is not None:
-            raise ValueError('citation_ids is only valid for citation_ids scope')
+            raise ValueError(
+                'citation_ids is only valid for citation_ids scope',
+            )
         if self.citation_ids and len(self.citation_ids) > 500:
-            raise ValueError('citation_ids cannot contain more than 500 entries')
+            raise ValueError(
+                'citation_ids cannot contain more than 500 entries',
+            )
         return self
 
 

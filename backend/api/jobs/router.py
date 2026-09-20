@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -31,6 +32,8 @@ from .scheduler_service import SchedulerService
 # Import task objects so we can enqueue via Task.defer_async (Procrastinate 3.2.x)
 # Import tasks so Procrastinate can discover them.
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -235,47 +238,71 @@ async def start_run_all(
                 }
         raise
 
+    # An explicit but empty id list has no work to do. Leaving it 'running'
+    # would hold this SR's single active-job slot with no chunk to ever
+    # complete it, until the stale-job reaper failed it half an hour later.
+    if sanitized_ids is not None and not sanitized_ids:
+        await run_in_threadpool(run_all_repo.update_phase, job_id, 'no citations selected')
+        await run_in_threadpool(run_all_repo.set_status, job_id, 'finished')
+        return {
+            'job_id': job_id, 'already_running': False, 'existing': False,
+            'total': 0,
+        }
+
     # Mode A (preferred): enqueue chunks immediately when ids provided.
     # Mode B (fallback): enqueue kickoff task that computes eligible ids.
-    if sanitized_ids is not None:
-        # Preserve paused status if user paused immediately after creating the job.
-        if run_all_repo.is_paused(job_id):
-            await run_in_threadpool(run_all_repo.set_status, job_id, 'paused')
+    try:
+        if sanitized_ids is not None:
+            # Preserve paused status if user paused immediately after creating the job.
+            if await run_in_threadpool(run_all_repo.is_paused, job_id):
+                await run_in_threadpool(run_all_repo.set_status, job_id, 'paused')
+            else:
+                await run_in_threadpool(run_all_repo.set_status, job_id, 'running')
+            await run_in_threadpool(run_all_repo.update_phase, job_id, f"enqueued {len(sanitized_ids)}")
+
+            # Fair scheduling: persist chunks and only enqueue the *next* chunk.
+            # This prevents one job from flooding the global queue.
+            # Force chunk_size=1 for maximum fairness/responsiveness.
+            chunk_size = 1
+            chunks = _build_chunks(sanitized_ids, chunk_size)
+            await run_in_threadpool(run_all_repo.insert_chunks, job_id, chunks)
+
+            if not await run_in_threadpool(run_all_repo.is_canceled, job_id):
+                prefetch = await run_in_threadpool(_compute_run_all_prefetch)
+                for _ in range(prefetch):
+                    next_chunk_id = await run_in_threadpool(
+                        run_all_repo.claim_next_todo_chunk,
+                        job_id,
+                        prefetch=prefetch,
+                    )
+                    if next_chunk_id is None:
+                        break
+                    await run_all_chunk.defer_async(job_id=job_id, chunk_id=int(next_chunk_id))
+
+            # Helpful operator logging
+            print(
+                f"[run-all] queued job_id={job_id} step={step} total={len(sanitized_ids)} chunk_size={chunk_size}",
+                flush=True,
+            )
         else:
-            await run_in_threadpool(run_all_repo.set_status, job_id, 'running')
-        await run_in_threadpool(run_all_repo.update_phase, job_id, f"enqueued {len(sanitized_ids)}")
-
-        # Fair scheduling: persist chunks and only enqueue the *next* chunk.
-        # This prevents one job from flooding the global queue.
-        # Force chunk_size=1 for maximum fairness/responsiveness.
-        chunk_size = 1
-        chunks = _build_chunks(sanitized_ids, chunk_size)
-        await run_in_threadpool(run_all_repo.insert_chunks, job_id, chunks)
-
-        if not await run_in_threadpool(run_all_repo.is_canceled, job_id):
-            prefetch = await run_in_threadpool(_compute_run_all_prefetch)
-            for _ in range(prefetch):
-                next_chunk_id = await run_in_threadpool(
-                    run_all_repo.claim_next_todo_chunk,
-                    job_id,
-                    prefetch=prefetch,
-                )
-                if next_chunk_id is None:
-                    break
-                await run_all_chunk.defer_async(job_id=job_id, chunk_id=int(next_chunk_id))
-
-        # Helpful operator logging
-        print(
-            f"[run-all] queued job_id={job_id} step={step} total={len(sanitized_ids)} chunk_size={chunk_size}",
-            flush=True,
-        )
-    else:
-        # Enqueue kickoff task
-        await run_all_start.defer_async(job_id=job_id)
-        print(
-            f"[run-all] queued job_id={job_id} step={step} (server will compute eligible ids)",
-            flush=True,
-        )
+            # Enqueue kickoff task
+            await run_all_start.defer_async(job_id=job_id)
+            print(
+                f"[run-all] queued job_id={job_id} step={step} (server will compute eligible ids)",
+                flush=True,
+            )
+    except Exception as exc:
+        # The job row already exists and already holds the active slot, so a
+        # failure to enqueue must fail the job rather than orphan it.
+        logger.exception('Failed to enqueue run-all job %s', job_id)
+        try:
+            await run_in_threadpool(
+                run_all_repo.set_status, job_id, 'failed',
+                error=f'Failed to enqueue work: {exc}',
+            )
+        except Exception:
+            logger.exception('Failed to mark job %s as failed', job_id)
+        raise
 
     return {'job_id': job_id, 'already_running': False, 'existing': False}
 

@@ -258,3 +258,159 @@ def test_included_scopes_backfill_and_forward_scope(monkeypatch, scope):
     citation_export_service.export_csv('citations', _sr(), request)
     assert calls[0][0] == 'backfill'
     assert calls[1] == ('fetch', 'citations', ['id'], scope, None)
+
+
+# Regression: screening answers moved to stage-qualified columns
+# (llm_l1_*/human_l1_*). Reviews created after that change exposed no
+# selectable questions at all, because the export still looked for the
+# unqualified legacy names.
+def test_stage_qualified_columns_are_offered_for_new_reviews():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns(
+            'id', 'title',
+            'human_l1_current_question', 'llm_l1_current_question',
+            'llm_l2_current_full_text_question',
+        ),
+    )
+    l1 = schema.groups[1].items[0]
+    assert l1.available_dimensions == [
+        'human_answer', 'ai_answer', 'ai_explanation', 'confidence', 'evidence',
+    ]
+    l2 = schema.groups[2].items[0]
+    assert l2.available_dimensions == [
+        'ai_answer', 'ai_explanation', 'confidence', 'evidence',
+    ]
+
+
+def test_stage_qualified_and_legacy_columns_resolve_to_their_own_review():
+    for columns, expected in (
+        (
+            ('human_l1_current_question', 'llm_l1_current_question'),
+            ('human_l1_current_question', 'llm_l1_current_question'),
+        ),
+        (
+            ('human_current_question', 'llm_current_question'),
+            ('human_current_question', 'llm_current_question'),
+        ),
+    ):
+        schema = citation_export_service.build_schema(
+            _sr(), 'unused', _columns('id', *columns),
+        )
+        request = CitationExportRequest(
+            selections=[{
+                'group': 'l1', 'items': ['l1.current_question'],
+                'dimensions': ['human_answer', 'ai_answer'],
+            }],
+        )
+        fields = citation_export_service.resolve(schema, request)
+        assert [field.column for field in fields] == list(expected)
+
+
+def test_stage_qualified_columns_win_over_legacy_when_both_exist():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns(
+            'id', 'human_current_question', 'llm_current_question',
+            'human_l1_current_question', 'llm_l1_current_question',
+        ),
+    )
+    assert schema.groups[1].items[0].source_columns == {
+        'human': 'human_l1_current_question',
+        'llm': 'llm_l1_current_question',
+    }
+
+
+def test_same_question_in_both_stages_is_not_ambiguous():
+    sr = {
+        'criteria_parsed': {
+            'l1': {'questions': ['Shared question?']},
+            'l2': {'questions': ['Shared question?']},
+        },
+    }
+    schema = citation_export_service.build_schema(
+        sr, 'unused', _columns(
+            'id', 'llm_l1_shared_question', 'llm_l2_shared_question',
+        ),
+    )
+    request = CitationExportRequest(
+        selections=[
+            {
+                'group': 'l1', 'items': [
+                    'l1.shared_question',
+                ], 'dimensions': ['ai_answer'],
+            },
+            {
+                'group': 'l2', 'items': [
+                    'l2.shared_question',
+                ], 'dimensions': ['ai_answer'],
+            },
+        ],
+    )
+    fields = citation_export_service.resolve(schema, request)
+    assert [field.column for field in fields] == [
+        'llm_l1_shared_question', 'llm_l2_shared_question',
+    ]
+
+
+def test_ai_dimension_is_default_when_no_human_answers_exist_yet():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns('id', 'llm_l1_current_question'),
+    )
+    l1 = schema.groups[1]
+    assert [d.id for d in l1.dimensions if d.default_selected] == ['ai_answer']
+    assert l1.items[0].default_selected is True
+
+
+def test_human_dimension_stays_default_when_human_answers_exist():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns(
+            'id', 'human_l1_current_question', 'llm_l1_current_question',
+        ),
+    )
+    l1 = schema.groups[1]
+    assert [d.id for d in l1.dimensions if d.default_selected] == ['human_answer']
+
+
+def test_resolved_source_columns_are_not_sent_to_the_client():
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns('id', 'llm_l1_current_question'),
+    )
+    assert 'source_columns' not in schema.model_dump_json()
+
+
+def test_export_csv_reads_stage_qualified_values(monkeypatch):
+    columns = _columns('id', 'title', 'llm_l1_current_question')
+    monkeypatch.setattr(
+        cits_dp_service, 'get_table_columns', lambda table: columns,
+    )
+    monkeypatch.setattr(
+        cits_dp_service, 'fetch_export_rows',
+        lambda table, cols, kind, ids: [{
+            'id': 1,
+            'llm_l1_current_question': {'selected': 'Include, yes'},
+        }],
+    )
+    payload = citation_export_service.export_csv(
+        'unused', _sr(), CitationExportRequest(
+            selections=[{
+                'group': 'l1', 'items': ['l1.current_question'],
+                'dimensions': ['ai_answer'],
+            }],
+        ),
+    )
+    rows = list(csv.reader(io.StringIO(payload.decode('utf-8-sig'))))
+    assert rows[0] == ['L1 | Current question? | AI answer']
+    assert rows[1] == ['Include, yes']
+
+
+def test_parameter_group_is_not_newly_preselected():
+    # Parameters default to nothing; the "no available default" repair applies
+    # only to groups that declare a default in the first place.
+    schema = citation_export_service.build_schema(
+        _sr(), 'unused', _columns('id', 'llm_param_attack_rate'),
+    )
+    parameters = schema.groups[3]
+    assert [d.id for d in parameters.dimensions if d.default_selected] == []
+    assert parameters.items[0].default_selected is False
+    assert parameters.items[0].available_dimensions == [
+        'ai_value', 'ai_explanation', 'evidence',
+    ]

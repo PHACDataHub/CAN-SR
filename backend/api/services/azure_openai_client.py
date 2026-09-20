@@ -868,8 +868,15 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.7,
+        raise_on_error: bool = False,
     ) -> str:
-        """Simple chat interface that returns just the response text"""
+        """Simple chat interface that returns just the response text.
+
+        Callers that parse structured output should pass raise_on_error=True.
+        The apology string below is indistinguishable from model output to a
+        parser, so an outage or a 429 is reported as a malformed answer and
+        drives the repair loop instead of surfacing the real failure.
+        """
         try:
             messages = self._build_messages(user_message, system_prompt)
             response = await self.chat_completion(
@@ -881,6 +888,8 @@ class AzureOpenAIClient:
             return response['choices'][0]['message']['content']
         except Exception as e:
             print(f"Error in simple chat: {e}")
+            if raise_on_error:
+                raise
             return f"I apologize, but I encountered an error while processing your request. Please try again later. (Error: {str(e)})"
 
     async def multimodal_chat(
@@ -891,6 +900,7 @@ class AzureOpenAIClient:
         model: str | None = None,
         max_tokens: int = 1000,
         temperature: float = 0.0,
+        raise_on_error: bool = False,
     ) -> str:
         """Send a single user message with multiple attached images.
 
@@ -923,6 +933,8 @@ class AzureOpenAIClient:
             return response['choices'][0]['message']['content']
         except Exception as e:
             print(f"Error in multimodal_chat: {e}")
+            if raise_on_error:
+                raise
             return (
                 'I apologize, but I encountered an error while processing your request. '
                 f"Please try again later. (Error: {str(e)})"

@@ -65,7 +65,10 @@ class ScreeningPipeline:
             'skip_existing_human': bool(context.config.get('skip_existing_human')),
         }
         if context.step in {'l2', 'extract'}:
+            # These steps may trigger fulltext extraction, which authorizes
+            # against the user who started the job.
             common['sr_id'] = context.sr_id
+            common['created_by'] = context.created_by
         done, skipped, failed = await executor(**common)
         if failed:
             return PipelineOutcome('failed')

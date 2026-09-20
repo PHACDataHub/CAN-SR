@@ -76,6 +76,23 @@ class RunAllRepo:
                 """,
             )
 
+            # Heartbeat for the stale-job reaper. started_at is written once, so
+            # reaping on it fails long but healthy jobs; progress_at is touched
+            # whenever a job actually advances.
+            cur.execute(
+                """
+                ALTER TABLE run_all_jobs
+                ADD COLUMN IF NOT EXISTS progress_at TIMESTAMP WITH TIME ZONE
+                """,
+            )
+            cur.execute(
+                """
+                UPDATE run_all_jobs
+                SET progress_at = COALESCE(started_at, created_at)
+                WHERE progress_at IS NULL
+                """,
+            )
+
             # Migration safety: older deployments may have allowed multiple active
             # jobs per SR. Creating the partial unique index would fail if such
             # duplicates exist. Before creating the index, we dedupe by keeping
@@ -324,6 +341,48 @@ class RunAllRepo:
             _safe_rollback(conn)
             raise
 
+    def release_chunk_for_pause(
+        self, chunk_id: int, remaining_ids: list[int],
+    ) -> None:
+        """Return a paused chunk's outstanding citations to 'todo'.
+
+        The chunk is rewritten to only the citations that were never counted,
+        so resuming neither re-runs nor re-bills the ones already processed.
+        An empty remainder means the chunk finished just as the pause landed.
+        """
+        conn = None
+        try:
+            conn = postgres_server.conn
+            cur = conn.cursor()
+            if not remaining_ids:
+                cur.execute(
+                    """
+                    UPDATE run_all_job_chunks
+                    SET status = 'done', finished_at = now()
+                    WHERE id = %s AND status = 'doing'
+                    """,
+                    (int(chunk_id),),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE run_all_job_chunks
+                    SET status = 'todo',
+                        started_at = NULL,
+                        citation_ids = %s::jsonb,
+                        error = 'Released while job was paused'
+                    WHERE id = %s AND status = 'doing'
+                    """,
+                    (
+                        json.dumps([int(value) for value in remaining_ids]),
+                        int(chunk_id),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            _safe_rollback(conn)
+            raise
+
     def mark_chunk_failed(self, chunk_id: int, *, error: str) -> None:
         conn = None
         try:
@@ -420,7 +479,8 @@ class RunAllRepo:
                 """,
                 (max(1, int(timeout_minutes)),),
             )
-            rows = [(str(row[0]), int(row[1])) for row in (cur.fetchall() or [])]
+            rows = [(str(row[0]), int(row[1]))
+                    for row in (cur.fetchall() or [])]
             conn.commit()
             return rows
         except Exception:
@@ -658,28 +718,39 @@ class RunAllRepo:
         try:
             conn = postgres_server.conn
             cur = conn.cursor()
-            now = datetime.utcnow().isoformat()
+            # now() is evaluated by Postgres: a naive client-side timestamp is
+            # compared against now() by the reaper and skews if the two clocks
+            # or timezones differ.
             if status == 'running':
                 cur.execute(
                     """
                     UPDATE run_all_jobs
-                    SET status = %s, started_at = COALESCE(started_at, %s), error = %s
+                    SET status = %s,
+                        started_at = COALESCE(started_at, now()),
+                        progress_at = now(),
+                        error = %s
                     WHERE id = %s AND status = ANY(%s)
                     """,
-                    (status, now, error, job_id, list(allowed_from[status])),
+                    (status, error, job_id, list(allowed_from[status])),
                 )
             elif status in ('done', 'finished', 'failed', 'canceled'):
                 cur.execute(
                     """
                     UPDATE run_all_jobs
-                    SET status = %s, finished_at = COALESCE(finished_at, %s), error = %s
+                    SET status = %s,
+                        finished_at = COALESCE(finished_at, now()),
+                        error = %s
                     WHERE id = %s AND status = ANY(%s)
                     """,
-                    (status, now, error, job_id, list(allowed_from[status])),
+                    (status, error, job_id, list(allowed_from[status])),
                 )
             else:
                 cur.execute(
-                    'UPDATE run_all_jobs SET status = %s, error = %s WHERE id = %s AND status = ANY(%s)',
+                    """
+                    UPDATE run_all_jobs
+                    SET status = %s, progress_at = now(), error = %s
+                    WHERE id = %s AND status = ANY(%s)
+                    """,
                     (status, error, job_id, list(allowed_from[status])),
                 )
             conn.commit()
@@ -693,7 +764,7 @@ class RunAllRepo:
             conn = postgres_server.conn
             cur = conn.cursor()
             cur.execute(
-                'UPDATE run_all_jobs SET phase = %s WHERE id = %s',
+                'UPDATE run_all_jobs SET phase = %s, progress_at = now() WHERE id = %s',
                 (phase, job_id),
             )
             conn.commit()
@@ -725,7 +796,8 @@ class RunAllRepo:
                 UPDATE run_all_jobs
                 SET done = done + %s,
                     skipped = skipped + %s,
-                    failed = failed + %s
+                    failed = failed + %s,
+                    progress_at = now()
                 WHERE id = %s
                 """,
                 (int(done), int(skipped), int(failed), job_id),
@@ -755,10 +827,19 @@ class RunAllRepo:
             raise
 
     def fail_stale_jobs(self, timeout_minutes: int = 30) -> int:
-        """Mark running/paused jobs as failed if they haven't been updated recently.
+        """Mark queued/running jobs as failed if they have stopped progressing.
 
         This prevents jobs that got stuck (e.g., worker crash) from blocking new jobs
         forever due to the partial unique index.
+
+        Staleness is measured from progress_at, which every counted citation and
+        phase change touches. Measuring from started_at instead would fail any
+        run that simply takes longer than the timeout, and because
+        claim_next_todo_chunk only claims for queued/running jobs, the remaining
+        citations would then never be processed.
+
+        Paused jobs are excluded: a pause is a deliberate act by a reviewer and
+        makes no progress by definition, so it is not evidence of a stuck job.
 
         Returns count of jobs marked as failed.
         """
@@ -772,8 +853,8 @@ class RunAllRepo:
                 SET status = 'failed',
                     finished_at = COALESCE(finished_at, now()),
                     error = COALESCE(error, 'Marked as failed by stale job reaper (no progress for ' || %s || ' minutes)')
-                WHERE status IN ('running', 'paused', 'queued')
-                  AND COALESCE(started_at, created_at) < (now() - make_interval(mins := %s))
+                WHERE status IN ('running', 'queued')
+                  AND COALESCE(progress_at, started_at, created_at) < (now() - make_interval(mins := %s))
                 """,
                 (str(timeout_minutes), int(timeout_minutes)),
             )

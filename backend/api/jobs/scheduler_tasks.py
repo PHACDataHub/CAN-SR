@@ -1,15 +1,24 @@
 from __future__ import annotations
+
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
+from collections.abc import Callable
 from typing import Any
+
 from fastapi.concurrency import run_in_threadpool
+
 from ..core.config import settings
 from ..services.sr_db_service import srdb_service
 from .pipelines.base import JobContext
-from .pipelines.control import PipelineCanceled, wait_if_paused
+from .pipelines.control import check_paused
+from .pipelines.control import PipelineCanceled
+from .pipelines.control import PipelinePaused
 from .pipelines.pdf_linkage_pipeline import PdfLinkagePipeline
 from .pipelines.registry import PipelineRegistry
-from .pipelines.screening_executor import _eligible_ids, _run_extract_for_citation, _run_l1_for_citation, _run_l2_for_citation
+from .pipelines.screening_executor import _eligible_ids
+from .pipelines.screening_executor import _run_extract_for_citation
+from .pipelines.screening_executor import _run_l1_for_citation
+from .pipelines.screening_executor import _run_l2_for_citation
 from .pipelines.screening_pipeline import ScreeningPipeline
 from .procrastinate_app import worker_concurrency
 from .run_all_repo import run_all_repo
@@ -85,7 +94,7 @@ async def scheduler_start(
         ids = await pipeline.compute_work_items(context)
         await run_in_threadpool(run_all_repo.set_total, job_id, len(ids))
         logger.info(
-            "Scheduler kickoff job_id=%s pipeline=%s step=%s eligible=%d",
+            'Scheduler kickoff job_id=%s pipeline=%s step=%s eligible=%d',
             job_id, pipeline_key, step, len(ids),
         )
 
@@ -122,6 +131,23 @@ async def scheduler_start(
         await run_in_threadpool(run_all_repo.set_status, job_id, 'failed', error=str(e))
 
 
+async def _release_for_pause(chunk_id: int, remaining_ids: list[int]) -> None:
+    """Return a paused chunk's outstanding citations to the scheduler.
+
+    Only the citations that were never counted are rescheduled, so resuming
+    does not re-run (or re-bill) the ones this task already completed.
+    """
+    try:
+        await run_in_threadpool(
+            run_all_repo.release_chunk_for_pause,
+            int(chunk_id),
+            [int(value) for value in remaining_ids],
+        )
+    except Exception:
+        # The stale-chunk reaper releases paused claims as a backstop.
+        logger.exception('Failed to release chunk %s on pause', chunk_id)
+
+
 async def scheduler_chunk(
     job_id: str, chunk_id: int, *, enqueue_chunk: EnqueueChunk,
 ) -> None:
@@ -138,7 +164,7 @@ async def scheduler_chunk(
     if not isinstance(citation_ids, list):
         citation_ids = []
     logger.info(
-        "Scheduler chunk started job_id=%s chunk_id=%s size=%d",
+        'Scheduler chunk started job_id=%s chunk_id=%s size=%d',
         job_id, chunk_id, len(citation_ids),
     )
     job = await run_in_threadpool(run_all_repo.get_job, job_id)
@@ -158,20 +184,30 @@ async def scheduler_chunk(
     chunk_failed = False
     chunk_error: str | None = None
 
-    for cid in citation_ids:
+    for index, cid in enumerate(citation_ids):
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             return
-        await wait_if_paused(job_id)
+        try:
+            await check_paused(job_id)
+        except PipelinePaused:
+            # Hand the citations we have not started back to the scheduler and
+            # free this worker for the duration of the pause.
+            await _release_for_pause(chunk_id, citation_ids[index:])
+            return
         await run_in_threadpool(
             run_all_repo.update_phase, job_id, pipeline.format_phase(int(cid)),
         )
 
         try:
-            await wait_if_paused(job_id)
             outcome = await pipeline.execute_item(context, int(cid))
             d, s, f = outcome.counts
             await run_in_threadpool(run_all_repo.inc_counts, job_id, done=d, skipped=s, failed=f)
         except PipelineCanceled:
+            return
+        except PipelinePaused:
+            # Paused part-way through this citation: it has not been counted,
+            # so it is still outstanding work.
+            await _release_for_pause(chunk_id, citation_ids[index:])
             return
         except Exception as e:
             await run_in_threadpool(
@@ -186,7 +222,7 @@ async def scheduler_chunk(
             chunk_error = str(e)
 
     logger.info(
-        "Scheduler chunk finished job_id=%s chunk_id=%s size=%d",
+        'Scheduler chunk finished job_id=%s chunk_id=%s size=%d',
         job_id, chunk_id, len(citation_ids),
     )
 
@@ -200,10 +236,14 @@ async def scheduler_chunk(
         # non-fatal
         pass
 
-    # If the job is paused/canceled, do not enqueue next chunk yet.
+    # If the job is paused/canceled, do not enqueue next chunk yet. Resuming
+    # enqueues the remaining chunks, so there is nothing to wait for here.
     if await run_in_threadpool(run_all_repo.is_canceled, job_id):
         return
-    await wait_if_paused(job_id)
+    try:
+        await check_paused(job_id)
+    except PipelinePaused:
+        return
 
     try:
         prefetch = await run_in_threadpool(compute_scheduler_prefetch)

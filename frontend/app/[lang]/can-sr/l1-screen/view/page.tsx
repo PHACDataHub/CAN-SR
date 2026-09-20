@@ -9,6 +9,7 @@ import { Wand2 } from 'lucide-react'
 import { useDictionary } from '@/app/[lang]/DictionaryProvider'
 import { needsHumanReviewForCriterion } from '@/components/can-sr/needsHumanReview'
 import { ScreeningCitationContext, extractHumanAnswer, humanAnswerStatus, resolveConfiguredValue, resolveDisplayedAnswer } from '@/components/can-sr/screening-citation-context'
+import { readScreeningValue } from '@/components/can-sr/screeningColumns'
 
 /*
   Title & Abstract single-citation viewer for L1 screening.
@@ -32,28 +33,6 @@ function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken()
   const tokenType = getTokenType()
   return token ? { Authorization: `${tokenType} ${token}` } : {}
-}
-
-/**
- * Frontend approximation of backend snake_case_column.
- * - Lowercase, non-word -> underscore, collapse underscores
- * - Prefix with "llm_"
- */
-function snakeCaseColumn(name: string) {
-  if (!name) return 'llm_col'
-  let s = name.trim().toLowerCase()
-  s = s.replace(/[^\w]+/g, '_')
-  s = s.replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-  return `llm_${s}`.slice(0, 60)
-}
-
-/**
- * Human classification column for screening.
- * Example: question -> human_question
- */
-function humanScreenColumn(name: string) {
-  const base = snakeCaseColumn(name)
-  return base.replace(/^llm_/, 'human_')
 }
 
 type ValidationEntry = { user: string; validated_at: string }
@@ -446,13 +425,13 @@ export default function CanSrL1ScreenPage() {
     const newPanelOpen: Record<number, boolean> = {}
 
     criteriaData.questions.forEach((q: string, idx: number) => {
-      const llmCol = snakeCaseColumn(q)
-      const humanCol = criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
-
-      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
-      const llmRaw =
-        (citation as any)?.[`llm_l1_${llmCol.replace(/^llm_/, '')}`] ??
-        (citation as any)?.[llmCol]
+      // An explicitly mapped answer_column wins; otherwise read the
+      // stage-qualified column, falling back to the legacy unqualified one.
+      const mappedHumanCol = criteriaData.items?.[idx]?.answer_column
+      const humanRaw = mappedHumanCol
+        ? resolveConfiguredValue(citation as any, mappedHumanCol)
+        : readScreeningValue(citation as any, 'l1', q, 'human')
+      const llmRaw = readScreeningValue(citation as any, 'l1', q, 'llm')
 
       const parseMaybeJson = (v: any) => {
         if (v === undefined || v === null) return null

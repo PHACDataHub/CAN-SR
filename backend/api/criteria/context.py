@@ -59,6 +59,53 @@ def resolve_existing_human_value(
     return {'status': 'matched', 'raw': str(raw), 'value': raw}
 
 
+DEFAULT_TITLE_HEADER = 'Title'
+DEFAULT_ABSTRACT_HEADER = 'Abstract'
+
+
+def resolve_citation_fields(criteria: Any) -> dict[str, Any]:
+    """Return the effective citation_fields mapping for any criteria vintage.
+
+    v2 criteria keep the title and abstract sources separate from the additional
+    ``l1_include`` headers, so the include list alone is never the whole prompt
+    context. Legacy criteria carry only an include list, and criteria stored
+    before citation_fields existed carry neither; both fall back to the
+    canonical Title/Abstract headers, which resolve_source_value matches
+    case-insensitively against the physical columns.
+    """
+    criteria = criteria if isinstance(criteria, dict) else {}
+    configured = criteria.get('citation_fields')
+    configured = configured if isinstance(configured, dict) else {}
+
+    include = configured.get('l1_include')
+    if not isinstance(include, list) or not include:
+        stage = criteria.get('l1')
+        include = stage.get('include') if isinstance(stage, dict) else None
+    if not isinstance(include, list) or not include:
+        include = criteria.get('include')
+    if not isinstance(include, list):
+        include = []
+
+    return {
+        'title': configured.get('title') or DEFAULT_TITLE_HEADER,
+        'abstract': configured.get('abstract') or DEFAULT_ABSTRACT_HEADER,
+        'l1_include': [
+            value for value in include
+            if isinstance(value, str) and value.strip()
+        ],
+        'doi': configured.get('doi'),
+    }
+
+
+def format_citation_context(row: dict[str, Any], criteria: Any) -> str:
+    """Format the screening prompt's citation block from parsed criteria.
+
+    Every screening entry point must go through this so that a citation reads
+    the same whether it was screened by a bulk run or re-run individually.
+    """
+    return format_title_abstract_context(row, resolve_citation_fields(criteria))
+
+
 def format_title_abstract_context(
     row: dict[str, Any], citation_fields: dict[str, Any],
 ) -> str:

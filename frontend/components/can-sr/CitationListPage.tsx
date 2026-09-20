@@ -542,7 +542,15 @@ export default function CitationsListPage({
     if (!runAllJobId) return
     let alive = true
     let processedCount = 0
+    let interval = 0
     const headers = getAuthHeaders()
+
+    const stopPolling = () => {
+      if (interval) {
+        window.clearInterval(interval)
+        interval = 0
+      }
+    }
 
     const fetchStatus = async () => {
       const res = await fetch(
@@ -551,9 +559,11 @@ export default function CitationsListPage({
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(
+        const error: any = new Error(
           data?.detail || data?.error || `Status failed (${res.status})`,
         )
+        error.status = res.status
+        throw error
       }
       return data
     }
@@ -572,22 +582,34 @@ export default function CitationsListPage({
           setMetricsRefreshKey((value) => value + 1)
         }
         const st = String(latest?.status || '').toLowerCase()
-        if (['done', 'failed', 'canceled'].includes(st)) {
-          clearRunAll()
+        // The backend marks a completed job 'finished'; it only becomes 'done'
+        // once the user dismisses it. Treating only 'done' as terminal meant
+        // polling a completed job every 5s until then.
+        if (['done', 'finished', 'failed', 'canceled'].includes(st)) {
+          stopPolling()
+          // 'finished' and 'failed' stay on screen until dismissed.
+          if (st === 'done' || st === 'canceled') clearRunAll()
         }
       } catch (e: any) {
-        // Surface errors but keep polling
         if (!alive) return
+        // A job the server no longer knows about (or that we may not read) is
+        // never coming back: a stale id restored from localStorage would
+        // otherwise poll forever.
+        if (e?.status === 404 || e?.status === 401 || e?.status === 403) {
+          stopPolling()
+          clearRunAll()
+          return
+        }
         console.warn('Run-all polling error', e)
       }
     }
 
     // immediate tick + interval
     tick()
-    const interval = window.setInterval(tick, 5000)
+    interval = window.setInterval(tick, 5000)
     return () => {
       alive = false
-      window.clearInterval(interval)
+      stopPolling()
     }
   }, [runAllJobId, runAllStorageKey, clearRunAll])
 

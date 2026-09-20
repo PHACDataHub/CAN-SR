@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, it, vi } from 'vitest'
@@ -567,6 +569,76 @@ it('shares selected imported columns with visible columns and duplicate matching
       body: JSON.stringify({ fields: ['Title', 'Abstract'], threshold: 0.7 }),
     }),
   )
+})
+
+it('uploads the RIS and CSV sample files sequentially with explicit field mappings', async () => {
+  const user = userEvent.setup()
+  const imports: Array<{ filename: string; title: string; abstract: string }> = []
+  authenticatedFetch.mockImplementation(
+    async (url: string, options?: RequestInit) => {
+      if (url.includes('/citations/import?')) {
+        const form = options?.body as FormData
+        imports.push({
+          filename: (form.get('file') as File).name,
+          title: String(form.get('title_header')),
+          abstract: String(form.get('abstract_header')),
+        })
+        return { ok: true, json: async () => ({ rows_inserted: 1, duplicates_skipped: 0 }) }
+      }
+      if (url.includes('/duplicates/check?')) {
+        return { ok: true, json: async () => ({ duplicates_count: 0 }) }
+      }
+      return {
+        ok: true,
+        json: async () => ({ citations: [], total_count: 0, columns: ['id'] }),
+      }
+    },
+  )
+
+  render(<ReferencesWorkspace srId="review-1" hasDataset copy={copy} />)
+  await user.click(screen.getByRole('button', { name: 'Add references' }))
+  const fileInput = screen.getByLabelText('Reference file')
+
+  const risPath = resolve(
+    '/home/bhux/workplace/grep-exp/resources/sample_files/Measles_L2_final_additional.txt',
+  )
+  await user.upload(
+    fileInput,
+    new File([readFileSync(risPath)], 'Measles_L2_final_additional.txt', {
+      type: 'text/plain',
+    }),
+  )
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Title source field' }), 'Title')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Abstract source field' }), 'Abstract')
+  await user.click(screen.getByRole('button', { name: 'Import references' }))
+  await waitFor(() => expect(imports).toHaveLength(1))
+
+  const csvPath = resolve(
+    '/home/bhux/workplace/grep-exp/resources/sample_files/L1 Screening 2025_03_18 - fulltext - 100.csv',
+  )
+  await user.upload(
+    fileInput,
+    new File([readFileSync(csvPath)], 'L1 Screening 2025_03_18 - fulltext - 100.csv', {
+      type: 'text/csv',
+    }),
+  )
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Title source field' }), 'Title')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Abstract source field' }), 'Abstract')
+  await user.click(screen.getByRole('button', { name: 'Import references' }))
+  await waitFor(() => expect(imports).toHaveLength(2))
+
+  expect(imports).toEqual([
+    {
+      filename: 'Measles_L2_final_additional.txt',
+      title: 'Title',
+      abstract: 'Abstract',
+    },
+    {
+      filename: 'L1 Screening 2025_03_18 - fulltext - 100.csv',
+      title: 'Title',
+      abstract: 'Abstract',
+    },
+  ])
 })
 
 it('toggles all imported deduplication columns on and off', async () => {

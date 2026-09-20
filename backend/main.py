@@ -98,8 +98,9 @@ async def startup_event():
             await run_in_threadpool(run_all_repo.ensure_tables)
 
             # Optional dev cleanup: clear out leftover queued/doing tasks from previous runs.
-            # Controlled by PROCRASTINATE_CLEAR_ON_START (defaults to true if unset).
-            if getattr(settings, 'PROCRASTINATE_CLEAR_ON_START', True):
+            # Controlled by PROCRASTINATE_CLEAR_ON_START (defaults to false: it
+            # would otherwise strand in-flight jobs on every restart).
+            if getattr(settings, 'PROCRASTINATE_CLEAR_ON_START', False):
                 try:
                     cleared = await clear_pending_jobs(queues=['default'])
                     print(

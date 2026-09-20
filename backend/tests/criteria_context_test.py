@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+from api.criteria.context import format_citation_context
 from api.criteria.context import format_item_context
 from api.criteria.context import format_title_abstract_context
 from api.criteria.context import match_answer_label
+from api.criteria.context import resolve_citation_fields
 from api.criteria.context import resolve_existing_human_value
 from api.screen.router import _parse_selected_from_human_payload
 
@@ -103,3 +105,58 @@ def test_only_configured_additional_citation_fields_are_included_in_screening_co
     assert 'publication_type: Retrospective study' in result
     assert 'journal:' not in result
     assert 'year:' not in result
+
+
+# Regression: configuring an additional citation field (e.g. "type") must not
+# drop the title and abstract from the screening prompt. The individual re-run
+# endpoints used to rebuild the context from citation_fields.l1_include alone,
+# which silently screened the citation on that one field.
+CONFERENCE_ROW = {
+    'id': 7,
+    'title': 'Measles outbreak in Ontario',
+    'abstract': 'We studied 1200 cases of measles.',
+    'type': 'Conference Proceedings',
+}
+
+
+def test_additional_citation_field_does_not_replace_title_and_abstract():
+    result = format_citation_context(
+        CONFERENCE_ROW, {
+            'citation_fields': {
+                'title': 'Title', 'abstract': 'Abstract',
+                'l1_include': ['type'],
+            },
+        },
+    )
+    assert 'Title: Measles outbreak in Ontario' in result
+    assert 'Abstract: We studied 1200 cases of measles.' in result
+    assert 'type: Conference Proceedings' in result
+
+
+def test_legacy_include_list_still_gets_title_and_abstract():
+    result = format_citation_context(
+        CONFERENCE_ROW, {'l1': {'include': ['type']}},
+    )
+    assert 'Title: Measles outbreak in Ontario' in result
+    assert 'Abstract: We studied 1200 cases of measles.' in result
+    assert 'type: Conference Proceedings' in result
+
+
+def test_criteria_without_citation_fields_fall_back_to_canonical_headers():
+    result = format_citation_context(CONFERENCE_ROW, {})
+    assert 'Title: Measles outbreak in Ontario' in result
+    assert 'Abstract: We studied 1200 cases of measles.' in result
+    assert 'Other fields: (none configured)' in result
+
+
+def test_resolve_citation_fields_keeps_explicitly_configured_sources():
+    fields = resolve_citation_fields({
+        'citation_fields': {
+            'title': 'Article Title', 'abstract': 'Summary',
+            'l1_include': ['type', ''], 'doi': 'DOI',
+        },
+    })
+    assert fields['title'] == 'Article Title'
+    assert fields['abstract'] == 'Summary'
+    assert fields['l1_include'] == ['type']
+    assert fields['doi'] == 'DOI'

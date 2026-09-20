@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException
+from fastapi import status
 from fastapi.concurrency import run_in_threadpool
 
 from ...citations import router as citations_router
+from ...core.security import get_user_by_id
+from ...criteria.context import format_citation_context
 from ...criteria.context import format_item_context
-from ...criteria.context import format_title_abstract_context
 from ...criteria.context import resolve_existing_human_value
 from ...extract.prompts import PARAMETER_PROMPT_JSON
 from ...extract.router import extract_fulltext_from_storage
@@ -26,8 +29,8 @@ from ...services.cit_db_service import snake_case_column
 from ...services.cit_db_service import snake_case_param
 from ...services.storage import storage_service
 from ..run_all_repo import run_all_repo
+from .control import check_paused
 from .control import PipelineCanceled
-from .control import wait_if_paused
 
 
 def _should_skip_ai_output(
@@ -49,6 +52,25 @@ def _should_skip_human_answer(
 ) -> bool:
     """Return True only when the explicit human-answer skip option is enabled."""
     return not force and skip_existing_human and human_status == 'matched'
+
+
+def _format_parameter_options(item: dict[str, Any]) -> str:
+    """Render a parameter's allowed selection options for the prompt.
+
+    Mirrors the single-citation extract endpoint so a bulk run and an
+    individual run put the same allowed options in front of the model. A
+    free-text parameter has none, and the template tolerates an empty block.
+    """
+    options = item.get('options') or item.get('answers') or []
+    lines = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        label = str(option.get('label') or '').strip()
+        if not label:
+            continue
+        lines.append(f"- {label}: {option.get('context') or ''}")
+    return '\n'.join(lines)
 
 
 def _eligible_ids(*, sr_id: str, table_name: str, step: str) -> list[int]:
@@ -109,12 +131,7 @@ async def _run_l1_for_citation(
         return (0, 0, 1)
 
     cp = sr.get('criteria_parsed') or sr.get('criteria') or {}
-    citation_fields = cp.get(
-        'citation_fields',
-    ) if isinstance(cp, dict) else None
-    citation_text = format_title_abstract_context(
-        row, citation_fields if isinstance(citation_fields, dict) else {},
-    )
+    citation_text = format_citation_context(row, cp)
     l1 = cp.get('l1') if isinstance(cp, dict) else None
     questions = (l1 or {}).get('questions') if isinstance(l1, dict) else []
     possible = (l1 or {}).get(
@@ -137,7 +154,7 @@ async def _run_l1_for_citation(
         # More responsive pause/cancel: check between questions
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise PipelineCanceled()
-        await wait_if_paused(job_id)
+        await check_paused(job_id)
         opts = possible[i] if i < len(
             possible,
         ) and isinstance(possible[i], list) else []
@@ -185,6 +202,7 @@ async def _run_l1_for_citation(
                 model=model,
                 max_tokens=2000,
                 temperature=0.0,
+                raise_on_error=True,
             )
             return str(raw), None
 
@@ -286,6 +304,30 @@ async def _run_l1_for_citation(
     return (0, 1, 0)
 
 
+class JobUserUnavailable(RuntimeError):
+    """The job's creator could not be resolved into an authorized user."""
+
+
+async def resolve_job_user(created_by: str) -> dict[str, Any]:
+    """Resolve the job creator into the user dict the extract endpoint expects.
+
+    Extraction runs through the same authorization as the interactive endpoint,
+    which keys membership off the caller's email. A placeholder such as
+    {'id': 'system'} therefore fails every permission check, and because the
+    caller treated any exception as "no fulltext", bulk L2 and extract runs
+    silently skipped every citation whose PDF had not already been extracted
+    through the UI. Failing loudly here surfaces that as a job error instead.
+    """
+    if not created_by:
+        raise JobUserUnavailable('Job has no creator recorded')
+    user = await get_user_by_id(created_by)
+    if not user or not user.get('email'):
+        raise JobUserUnavailable(
+            f'Job creator {created_by!r} could not be resolved to a user',
+        )
+    return user
+
+
 async def _ensure_fulltext_if_needed(
     *,
     sr_id: str,
@@ -307,6 +349,17 @@ async def _ensure_fulltext_if_needed(
     try:
         # type: ignore
         await extract_fulltext_from_storage(sr_id, citation_id, current_user=current_user)
+    except HTTPException as exc:
+        # An authorization or configuration failure applies to every citation in
+        # the job, so it must not be reported as a per-citation "skipped".
+        if exc.status_code in (
+            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ):
+            raise
+        row2 = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
+        return bool(row2 and row2.get('fulltext'))
     except Exception:
         # It's okay if DI/grobid fails; L2/extract depends on fulltext text though.
         row2 = await run_in_threadpool(cits_dp_service.get_citation_by_id, citation_id, table_name)
@@ -321,6 +374,7 @@ async def _run_l2_for_citation(
     sr: dict[str, Any],
     table_name: str,
     sr_id: str,
+    created_by: str,
     citation_id: int,
     model: str | None,
     force: bool,
@@ -331,9 +385,10 @@ async def _run_l2_for_citation(
     if not row or not row.get('fulltext_url'):
         return (0, 1, 0)
 
-    # fake current_user for storage service paths (it only uses id in upload; extract reads by path)
-    current_user = {'id': 'system', 'email': 'system'}
-    await wait_if_paused(job_id)
+    # Fulltext extraction runs as the user who started the job, so the same
+    # membership check that guards the interactive endpoint still applies.
+    current_user = await resolve_job_user(created_by)
+    await check_paused(job_id)
     ok = await _ensure_fulltext_if_needed(sr_id=sr_id, citation_id=citation_id, current_user=current_user, table_name=table_name, force=force)
     if not ok:
         return (0, 1, 0)
@@ -389,12 +444,7 @@ async def _run_l2_for_citation(
     if not merged:
         return (0, 1, 0)
 
-    citation_fields = cp.get(
-        'citation_fields',
-    ) if isinstance(cp, dict) else None
-    citation_text = format_title_abstract_context(
-        row, citation_fields if isinstance(citation_fields, dict) else {},
-    )
+    citation_text = format_citation_context(row, cp)
     fulltext = row.get('fulltext') or citation_text
 
     # Tables/Figures context from row
@@ -458,7 +508,7 @@ async def _run_l2_for_citation(
         # More responsive pause/cancel: check between questions
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise PipelineCanceled()
-        await wait_if_paused(job_id)
+        await check_paused(job_id)
         if source_step == 'l1':
             opts = l1_possible[idx] if idx < len(
                 l1_possible,
@@ -516,6 +566,7 @@ async def _run_l2_for_citation(
                     model=model,
                     max_tokens=2000,
                     temperature=0.0,
+                    raise_on_error=True,
                 )
             else:
                 raw = await azure_openai_client.simple_chat(
@@ -524,6 +575,7 @@ async def _run_l2_for_citation(
                     model=model,
                     max_tokens=2000,
                     temperature=0.0,
+                    raise_on_error=True,
                 )
             return str(raw), None
 
@@ -631,6 +683,7 @@ async def _run_extract_for_citation(
     sr: dict[str, Any],
     table_name: str,
     sr_id: str,
+    created_by: str,
     citation_id: int,
     model: str | None,
     force: bool,
@@ -641,8 +694,10 @@ async def _run_extract_for_citation(
     if not row or not row.get('fulltext_url'):
         return (0, 1, 0)
 
-    current_user = {'id': 'system', 'email': 'system'}
-    await wait_if_paused(job_id)
+    # Fulltext extraction runs as the user who started the job, so the same
+    # membership check that guards the interactive endpoint still applies.
+    current_user = await resolve_job_user(created_by)
+    await check_paused(job_id)
     ok = await _ensure_fulltext_if_needed(sr_id=sr_id, citation_id=citation_id, current_user=current_user, table_name=table_name, force=force)
     if not ok:
         return (0, 1, 0)
@@ -791,7 +846,7 @@ async def _run_extract_for_citation(
         # More responsive pause/cancel: check between parameters
         if await run_in_threadpool(run_all_repo.is_canceled, job_id):
             raise PipelineCanceled()
-        await wait_if_paused(job_id)
+        await check_paused(job_id)
         col = snake_case_param(name)
         existing = row.get(col)
         if _should_skip_ai_output(
@@ -809,6 +864,9 @@ async def _run_extract_for_citation(
         prompt = PARAMETER_PROMPT_JSON.format(
             parameter_name=name,
             parameter_description=format_item_context(item) or desc,
+            unit_instructions=str(item.get('unit_instructions') or ''),
+            calculation=str(item.get('calculation') or ''),
+            options=_format_parameter_options(item),
             fulltext=fulltext,
             tables=tables_text,
             figures=figures_text,
@@ -822,6 +880,7 @@ async def _run_extract_for_citation(
                 model=model,
                 max_tokens=512,
                 temperature=0.0,
+                raise_on_error=True,
             )
         else:
             llm_response = await azure_openai_client.simple_chat(
@@ -830,13 +889,16 @@ async def _run_extract_for_citation(
                 model=model,
                 max_tokens=512,
                 temperature=0.0,
+                raise_on_error=True,
             )
 
         parsed = None
         try:
-            parsed = _json.loads(llm_response)
+            # A reasoning model can exhaust max_completion_tokens before
+            # emitting content, which returns None rather than text.
+            parsed = _json.loads(llm_response or '')
         except Exception:
-            maybe = _extract_json_object(llm_response)
+            maybe = _extract_json_object(llm_response or '')
             if maybe:
                 parsed = _json.loads(maybe)
 

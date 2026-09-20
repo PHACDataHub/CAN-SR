@@ -24,8 +24,8 @@ from ..citations import router as citations_router
 from ..core.cit_utils import load_sr_and_check
 from ..core.config import settings
 from ..core.security import get_current_active_user
+from ..criteria.context import format_citation_context
 from ..criteria.context import format_item_context
-from ..criteria.context import format_title_abstract_context
 from ..criteria.runtime import item_is_visible
 from ..services.azure_openai_client import azure_openai_client
 from ..services.cit_db_service import cits_dp_service
@@ -987,14 +987,13 @@ async def classify_citation(
         )
 
     # Build or use provided citation text (fall back to combined title/abstract when not provided)
-    citation_fields = canonical.get('citation_fields') or {}
     if payload.citation_text:
         citation_text = payload.citation_text
-    elif citation_fields or row:
-        citation_text = format_title_abstract_context(row, citation_fields)
+    elif row:
+        citation_text = format_citation_context(row, canonical)
     else:
         citation_text = citations_router._build_combined_citation_from_row(
-            row, payload.include_columns,
+            row, payload.include_columns or [],
         )
 
     item_context = format_item_context(
@@ -1376,22 +1375,12 @@ async def run_title_abstract_agentic(
             status_code=status.HTTP_404_NOT_FOUND, detail='Citation not found',
         )
 
-    # Build combined citation text (use SR include columns or fallback to title+abstract)
-    include_cols = []
-    try:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
-        ]
-    except Exception:
-        include_cols = []
-    if not include_cols:
-        include_cols = ['title', 'abstract']
-
-    citation_text = citations_router._build_combined_citation_from_row(
-        row, include_cols,
-    )
-
     # Load L1 criteria
     cp = sr.get('criteria_parsed') or sr.get('criteria') or {}
+
+    # Title and abstract are configured separately from the additional
+    # citation_fields, so they must not be rebuilt from the include list alone.
+    citation_text = format_citation_context(row, cp)
     l1 = cp.get('l1') if isinstance(cp, dict) else None
     questions = (l1 or {}).get('questions') if isinstance(l1, dict) else []
     possible = (l1 or {}).get(
@@ -1912,17 +1901,10 @@ async def run_fulltext_agentic(
             detail='A processed full-text PDF is required before running Full Text AI',
         )
 
-    include_cols = []
-    try:
-        include_cols = cits_dp_service.load_include_columns_from_criteria(sr) or [
-        ]
-    except Exception:
-        include_cols = []
-    if not include_cols:
-        include_cols = ['title', 'abstract']
-
-    citation_text = citations_router._build_combined_citation_from_row(
-        row or {}, include_cols,
+    # The citation header of the Full Text prompt uses the same configured
+    # title/abstract sources as Title/Abstract screening.
+    citation_text = format_citation_context(
+        row or {}, sr.get('criteria_parsed') or sr.get('criteria') or {},
     )
     fulltext = str((row or {}).get('fulltext') or '')
     fulltext_md5 = str((row or {}).get('fulltext_md5') or '')
