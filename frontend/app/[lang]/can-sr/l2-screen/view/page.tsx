@@ -18,6 +18,7 @@ import {
   resolveConfiguredValue,
   resolveDisplayedAnswer,
 } from '@/components/can-sr/screening-citation-context'
+import { criterionKey, readScreeningValue } from '@/components/can-sr/screeningColumns'
 
 type ValidationEntry = { user: string; validated_at: string }
 
@@ -109,11 +110,6 @@ function snakeCaseColumn(name: string) {
 function humanScreenColumn(name: string) {
   const base = snakeCaseColumn(name)
   return base.replace(/^llm_/, 'human_')
-}
-
-function stageColumn(name: string, prefix: 'llm' | 'human', stage: 'l1' | 'l2') {
-  const core = snakeCaseColumn(name).replace(/^llm_/, '')
-  return `${prefix}_${stage}_${core}`.slice(0, 64)
 }
 
 /* Types */
@@ -350,8 +346,8 @@ export default function CanSrL2ScreenViewPage() {
         if (!res.ok) {
           setError(
             data?.error ||
-              data?.detail ||
-              `Failed to load citation (${res.status})`,
+            data?.detail ||
+            `Failed to load citation (${res.status})`,
           )
           setCitation(null)
         } else {
@@ -699,15 +695,11 @@ export default function CanSrL2ScreenViewPage() {
 
     criteriaData.questions.forEach((q: string, idx: number) => {
       const sourceStage = sourceFlags[idx] === 'l1' ? 'l1' : 'l2'
-      const llmCol = stageColumn(q, 'llm', 'l2')
-      const humanCol = stageColumn(q, 'human', 'l2')
-      const l1HumanCol = stageColumn(q, 'human', 'l1')
-      const legacyLlmCol = snakeCaseColumn(q)
       const legacyHumanCol =
         criteriaData.items?.[idx]?.answer_column || humanScreenColumn(q)
-      const criterionKey = llmCol.replace(/^llm_l2_/, '')
-      const fulltextRun = runsByCriterion[criterionKey]?.screening
-      const titleAbstractRun = titleAbstractRunsByCriterion[criterionKey]
+      const criterion = criterionKey(q)
+      const fulltextRun = runsByCriterion[criterion]?.screening
+      const titleAbstractRun = titleAbstractRunsByCriterion[criterion]
       const citationFulltextMd5 = String((citation as any)?.fulltext_md5 || '')
       const runGuardrails = parseObject(fulltextRun?.guardrails)
       const runFulltextMd5 = String(runGuardrails?.fulltext_md5 || '')
@@ -717,21 +709,19 @@ export default function CanSrL2ScreenViewPage() {
         runFulltextMd5 === citationFulltextMd5,
       )
 
-      const humanRaw = resolveConfiguredValue(citation as any, humanCol)
+      const humanRaw = readScreeningValue(citation as any, 'l2', q, 'human')
       // set-answer mirrors retrospective L1 answers into human_l2_*. The L1
       // fallback keeps older rows usable and lets this screen display the
       // copied answer before a reviewer changes it.
       const copiedL1HumanRaw =
         sourceStage === 'l1'
-          ? resolveConfiguredValue(citation as any, l1HumanCol)
+          ? readScreeningValue(citation as any, 'l1', q, 'human')
           : undefined
       const legacyHumanRaw =
         sourceStage === 'l1'
           ? resolveConfiguredValue(citation as any, legacyHumanCol)
           : undefined
-      const llmRaw =
-        (citation as any)?.[llmCol] ??
-        (citation as any)?.[legacyLlmCol]
+      const llmRaw = readScreeningValue(citation as any, 'l2', q, 'llm')
 
       // Parse possible JSON payloads from DB
       let humanParsed = humanRaw
@@ -759,18 +749,18 @@ export default function CanSrL2ScreenViewPage() {
         typeof humanParsed === 'object' &&
         ((humanParsed as any).pipeline === 'fulltext' ||
           String((humanParsed as any).screening_step || '').toLowerCase() ===
-            'l2')
+          'l2')
       const copiedHumanParsed =
         humanRaw === undefined ? copiedL1HumanRaw : humanRaw
       const parsedCopiedHuman =
         typeof copiedHumanParsed === 'string'
           ? (() => {
-              try {
-                return JSON.parse(copiedHumanParsed)
-              } catch {
-                return copiedHumanParsed
-              }
-            })()
+            try {
+              return JSON.parse(copiedHumanParsed)
+            } catch {
+              return copiedHumanParsed
+            }
+          })()
           : copiedHumanParsed
       if (
         isFulltextHuman &&
@@ -908,11 +898,11 @@ export default function CanSrL2ScreenViewPage() {
       context ||
       (srId && citationId && criteriaData
         ? {
-            srId,
-            citationId,
-            questions: criteriaData.questions,
-            model: selectedModel,
-          }
+          srId,
+          citationId,
+          questions: criteriaData.questions,
+          model: selectedModel,
+        }
         : null)
     if (!runContext) return false
     const requestKey = `${runContext.srId}:${runContext.citationId}`
@@ -920,13 +910,7 @@ export default function CanSrL2ScreenViewPage() {
     const q = runContext.questions[questionIndex]
     if (!q) return false
     setRunAllError(null)
-    const ck = q
-      .trim()
-      .toLowerCase()
-      .replace(/[^\w]+/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 56)
+    const ck = criterionKey(q)
     setCriterionStatus((prev) => ({ ...prev, [questionIndex]: 'running' }))
     try {
       const headers = {
@@ -950,8 +934,8 @@ export default function CanSrL2ScreenViewPage() {
       if (!res.ok)
         throw new Error(
           runData?.detail ||
-            runData?.error ||
-            `AI request failed (${res.status})`,
+          runData?.error ||
+          `AI request failed (${res.status})`,
         )
       if (
         String(runData?.citation_id ?? runContext.citationId) !==
@@ -961,10 +945,15 @@ export default function CanSrL2ScreenViewPage() {
       }
       if (currentCitationKeyRef.current !== requestKey) return false
 
+      // The run persists both the AI suggestion and the citation-backed display
+      // values. Reload the citation so the question area and selection control
+      // receive the same fresh state without requiring a browser refresh
+      await fetchCitationById(runContext.citationId)
+      if (currentCitationKeyRef.current !== requestKey) return false
+
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — avoids re-rendering the PDF viewer (no setCitation call).
       try {
-        const llmColName = `llm_${ck}`
         const citRes = await fetch(
           `/api/can-sr/citations/get?sr_id=${encodeURIComponent(runContext.srId)}&citation_id=${encodeURIComponent(runContext.citationId)}`,
           { method: 'GET', headers: getAuthHeaders() },
@@ -975,7 +964,7 @@ export default function CanSrL2ScreenViewPage() {
           citRes.ok &&
           citData
         ) {
-          const llmRaw = citData[llmColName]
+          const llmRaw = readScreeningValue(citData, 'l2', q, 'llm')
           let llmParsed = llmRaw
           if (typeof llmRaw === 'string') {
             try {
@@ -1109,13 +1098,13 @@ export default function CanSrL2ScreenViewPage() {
     // We store normalized boxes as an array of {page,x,y,width,height}
     const first = Array.isArray(bbox)
       ? bbox.find(
-          (box: any) =>
-            box &&
-            typeof box === 'object' &&
-            Number.isFinite(
-              Number(box?.page ?? box?.page_number ?? box?.pageNum),
-            ),
-        )
+        (box: any) =>
+          box &&
+          typeof box === 'object' &&
+          Number.isFinite(
+            Number(box?.page ?? box?.page_number ?? box?.pageNum),
+          ),
+      )
       : null
     if (!first) return
     viewerRef.current.scrollToCoord(first)
@@ -1149,9 +1138,9 @@ export default function CanSrL2ScreenViewPage() {
           conversionId={null}
           fileName={String(
             citation?.title ||
-              citation?.citation ||
-              citation?.article_title ||
-              'Full text',
+            citation?.citation ||
+            citation?.article_title ||
+            'Full text',
           )}
           coords={fulltextCoords || []}
           pages={fulltextPages || []}
@@ -1317,12 +1306,12 @@ export default function CanSrL2ScreenViewPage() {
                       // - BUT do not highlight if this criterion is a confident-exclude (exclude + conf>=thr + critical agrees)
                       const criterionKey = q
                         ? q
-                            .trim()
-                            .toLowerCase()
-                            .replace(/[^\w]+/g, '_')
-                            .replace(/_+/g, '_')
-                            .replace(/^_+|_+$/g, '')
-                            .slice(0, 56)
+                          .trim()
+                          .toLowerCase()
+                          .replace(/[^\w]+/g, '_')
+                          .replace(/_+/g, '_')
+                          .replace(/^_+|_+$/g, '')
+                          .slice(0, 56)
                         : ''
 
                       const r = (runsByCriterion as any)?.[criterionKey] || {}
@@ -1335,7 +1324,7 @@ export default function CanSrL2ScreenViewPage() {
                           run &&
                           currentPdfMd5 &&
                           String(guardrails?.fulltext_md5 || '') ===
-                            currentPdfMd5,
+                          currentPdfMd5,
                         )
                       }
                       const scr = runMatchesCurrentPdf(r.screening)
@@ -1396,12 +1385,12 @@ export default function CanSrL2ScreenViewPage() {
                         aiData?.missing_fields,
                       )
                         ? aiData.missing_fields.map((field: unknown) =>
-                            String(field),
-                          )
+                          String(field),
+                        )
                         : Array.isArray(screeningGuardrails?.missing_fields)
                           ? screeningGuardrails.missing_fields.map(
-                              (field: unknown) => String(field),
-                            )
+                            (field: unknown) => String(field),
+                          )
                           : []
                       const missingLabels = missingFields.map(
                         (field: string) => {
@@ -1450,7 +1439,7 @@ export default function CanSrL2ScreenViewPage() {
                                 ))}
                               </select>
                               {answerStatus !== 'unconfigured' &&
-                              answerStatus !== 'matched' ? (
+                                answerStatus !== 'matched' ? (
                                 <p
                                   className="mt-1 text-xs text-amber-700"
                                   role="status"
@@ -1604,7 +1593,7 @@ export default function CanSrL2ScreenViewPage() {
                                       {missingFields.includes('rationale')
                                         ? 'Rationale was not returned by the AI after repair.'
                                         : displayExplanation ||
-                                          dict.screening.noExplanation}
+                                        dict.screening.noExplanation}
                                     </div>
                                   </div>
 
@@ -1635,7 +1624,7 @@ export default function CanSrL2ScreenViewPage() {
                                     </div>
                                   ) : null}
                                   {Array.isArray(aiData?.evidence_sentences) &&
-                                  aiData.evidence_sentences.length > 0 ? (
+                                    aiData.evidence_sentences.length > 0 ? (
                                     <div className="mt-2">
                                       <strong>{dict.screening.evidence}</strong>
                                       <div className="mt-1 flex flex-wrap gap-1">
@@ -1679,7 +1668,7 @@ export default function CanSrL2ScreenViewPage() {
                                   ) : null}
 
                                   {Array.isArray(aiData?.evidence_tables) &&
-                                  aiData.evidence_tables.length > 0 ? (
+                                    aiData.evidence_tables.length > 0 ? (
                                     <div className="mt-2">
                                       <strong>Evidence tables:</strong>
                                       <div className="mt-1 flex flex-wrap gap-1">
@@ -1709,7 +1698,7 @@ export default function CanSrL2ScreenViewPage() {
                                   ) : null}
 
                                   {Array.isArray(aiData?.evidence_figures) &&
-                                  aiData.evidence_figures.length > 0 ? (
+                                    aiData.evidence_figures.length > 0 ? (
                                     <div className="mt-2">
                                       <strong>Evidence figures:</strong>
                                       <div className="mt-1 flex flex-wrap gap-1">

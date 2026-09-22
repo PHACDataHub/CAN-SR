@@ -274,8 +274,8 @@ export default function CanSrL1ScreenPage() {
       if (!res.ok) {
         setError(
           data?.error ||
-            data?.detail ||
-            `Failed to load citation (${res.status})`,
+          data?.detail ||
+          `Failed to load citation (${res.status})`,
         )
         setCitation(null)
       } else {
@@ -561,6 +561,12 @@ export default function CanSrL1ScreenPage() {
       ) throw new Error('AI response did not match the requested citation')
       if (currentCitationKeyRef.current !== requestKey) return false
 
+      // The run persists both the AI suggestion and the citation-backed display
+      // values. Reload the citation so the question area and selection control
+      // receive the same fresh state without requiring a browser refresh
+      await fetchCitationById(runContext.citationId)
+      if (currentCitationKeyRef.current !== requestKey) return false
+
       // Targeted update: fetch only the llm_* column for this criterion and update
       // aiPanels directly — no full page re-render.
       try {
@@ -771,8 +777,8 @@ export default function CanSrL1ScreenPage() {
                       <div
                         key={idx}
                         className={
-	                          'rounded-md border-2 p-3 ' +
-	                          (needsHuman ? 'border-amber-400' : 'border-gray-100')
+                          'rounded-md border-2 p-3 ' +
+                          (needsHuman ? 'border-amber-400' : 'border-gray-100')
                         }
                       >
                         <div className="flex items-start justify-between">
@@ -887,20 +893,20 @@ export default function CanSrL1ScreenPage() {
                                   </div>
                                 </div>
 
-	                                {hasAgentic && crit ? (
-	                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
-	                                    <div className="mt-1 font-semibold text-gray-800">
-	                                      {critDisagrees ? (
-	                                        <span className="text-amber-700">
-	                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
-	                                        </span>
-	                                      ) : (
-	                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
-	                                      )}
-	                                    </div>
-	                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
-	                                  </div>
-	                                ) : null}
+                                {hasAgentic && crit ? (
+                                  <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+                                    <div className="mt-1 font-semibold text-gray-800">
+                                      {critDisagrees ? (
+                                        <span className="text-amber-700">
+                                          Critical review recommends a different answer: {String((crit as any)?.answer ?? '—')}
+                                        </span>
+                                      ) : (
+                                        <span className="text-emerald-700">Critical review supports the screening answer</span>
+                                      )}
+                                    </div>
+                                    <div>Judgment confidence: {String((crit as any)?.confidence ?? '—')}</div>
+                                  </div>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
