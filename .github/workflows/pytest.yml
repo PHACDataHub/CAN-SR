@@ -1,0 +1,124 @@
+name: backend
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  tests:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_MODE: local
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: postgres
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_CONNECT_TIMEOUT: 10
+      STORAGE_MODE: local
+      LOCAL_STORAGE_BASE_PATH: /tmp/can-sr-uploads
+      AZURE_OPENAI_MODE: key
+      AZURE_DOC_INT_MODE: key
+      PYTHONUNBUFFERED: 1
+      AZURE_DOC_INT_ENDPOINT: fake
+      ENTREZ_EMAIL: fake
+      ENTREZ_API_KEY: fake
+      AZURE_STORAGE_CONNECTION_STRING: fake
+      SCOPUS_API_URL: fake
+
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements_dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements_dev.txt
+
+      - name: Run pytest with coverage
+        run: |
+          mkdir -p /tmp/can-sr-uploads
+          python -m coverage run -m pytest tests/
+          python -m coverage xml -o coverage.xml
+          python -m coverage report
+
+      - name: Generate diff coverage
+        if: github.event.pull_request.base.sha != ''
+        continue-on-error: true
+        run: |
+          diff-cover coverage.xml \
+            --compare-branch=${{ github.event.pull_request.base.sha }} \
+            --markdown-report diff-cover.md \
+            --html-report diff-cover.html
+
+      - name: Build diff coverage comment body
+        if: github.event.pull_request.base.sha != ''
+        run: |
+          {
+            echo "<!-- can-sr-diff-coverage -->"
+            echo "## Diff coverage"
+            if [ -f diff-cover.md ]; then
+              cat diff-cover.md
+            else
+              echo "_Diff coverage report could not be generated for this run._"
+            fi
+            echo
+            echo "Coverage XML and HTML reports are attached to this workflow run as artifacts."
+          } > diff-coverage-comment.md
+
+      - name: Publish diff coverage comment
+        if: github.event.pull_request.base.sha != ''
+        continue-on-error: true
+        uses: edumserrano/find-create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: '<!-- can-sr-diff-coverage -->'
+          comment-author: 'github-actions[bot]'
+          body-path: backend/diff-coverage-comment.md
+          edit-mode: replace
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          if-no-files-found: ignore
+          path: |
+            backend/coverage.xml
+            backend/diff-cover.html
